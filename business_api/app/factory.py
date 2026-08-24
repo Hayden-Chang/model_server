@@ -1,4 +1,3 @@
-import json
 import re
 import secrets
 import uuid
@@ -6,16 +5,14 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
-
 from .contracts import (
     ModelMetadata,
     RunRequest,
     RunResponse,
     TimeFragmentGuestRequest,
     TimeFragmentGuestResponse,
-    TimeFragmentPlanRequest,
-    TimeFragmentPlanResponse,
+    TimeFragmentPlanRequestV2,
+    TimeFragmentPlanResponseV2,
 )
 from .guest_auth import GuestTokenCodec, GuestTokenError
 from .model_client import (
@@ -27,7 +24,7 @@ from .model_client import (
 from .pipelines import get_pipeline
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .settings import Settings
-from .time_fragment import validate_plan_for_request
+from .time_fragment_service import execute_time_fragment_plan
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -125,27 +122,24 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
 
     @app.post(
         "/api/plan/parse",
-        response_model=TimeFragmentPlanResponse,
+        response_model=TimeFragmentPlanResponseV2,
         dependencies=[Depends(require_time_fragment_guest)],
     )
     async def time_fragment_plan_parse(
-        payload: TimeFragmentPlanRequest,
-    ) -> TimeFragmentPlanResponse:
-        user_input = json.dumps(
-            payload.model_dump(mode="json", by_alias=True),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        result, _ = await complete_pipeline("time-fragment-plan-v1", user_input)
+        payload: TimeFragmentPlanRequestV2,
+    ) -> TimeFragmentPlanResponseV2:
         try:
-            plan = TimeFragmentPlanResponse.model_validate(result)
-            validate_plan_for_request(plan, payload.now)
-        except (ValidationError, ModelOutputInvalid) as error:
+            return await execute_time_fragment_plan(client, payload)
+        except ModelGatewayUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "MODEL_GATEWAY_UNAVAILABLE", "message": str(error)},
+            ) from error
+        except ModelGatewayResponseError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "MODEL_OUTPUT_INVALID", "message": str(error)},
+                detail={"code": "MODEL_GATEWAY_ERROR", "message": str(error)},
             ) from error
-        return plan
 
     @app.post(
         "/v1/pipelines/{pipeline_id}:run",
