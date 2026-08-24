@@ -297,7 +297,12 @@ class _TimeFragmentExistingModelOperation(_TimeFragmentV2Model):
     object_type: TimeFragmentObjectType | None = Field(default=None, alias="objectType")
     priority: int | None = Field(default=None, strict=True)
     input_order: int = Field(alias="inputOrder", ge=0, strict=True)
-    is_explicit: bool = Field(default=False, alias="isExplicit", strict=True)
+    authorization_text: str | None = Field(
+        default=None,
+        alias="authorizationText",
+        min_length=1,
+        max_length=1_000,
+    )
 
 
 class TimeFragmentModelAddOperation(_TimeFragmentV2Model):
@@ -385,16 +390,56 @@ class TimeFragmentAddOperation(TimeFragmentModelAddOperation):
     temporary_id: UUID = Field(alias="temporaryId")
 
 
-class TimeFragmentMoveOperation(TimeFragmentModelMoveOperation):
-    pass
+class _TimeFragmentExistingOperation(_TimeFragmentV2Model):
+    target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
+    object_type: TimeFragmentObjectType | None = Field(default=None, alias="objectType")
+    priority: int | None = Field(default=None, strict=True)
+    input_order: int = Field(alias="inputOrder", ge=0, strict=True)
 
 
-class TimeFragmentChangeDurationOperation(TimeFragmentModelChangeDurationOperation):
-    pass
+class TimeFragmentMoveOperation(_TimeFragmentExistingOperation):
+    type: Literal["move"]
+    allowed_changes: list[Literal["segments"]] = Field(
+        alias="allowedChanges",
+        min_length=1,
+        max_length=1,
+    )
+    placement: TimeFragmentPlacement | None = None
+
+    @field_validator("allowed_changes")
+    @classmethod
+    def only_segments_may_change(cls, value: list[str]) -> list[str]:
+        if value != ["segments"]:
+            raise ValueError("move allowedChanges must be exactly ['segments']")
+        return value
 
 
-class TimeFragmentDeleteOperation(TimeFragmentModelDeleteOperation):
-    pass
+class TimeFragmentChangeDurationOperation(_TimeFragmentExistingOperation):
+    type: Literal["changeDuration"]
+    allowed_changes: list[Literal["durationSlots", "segments"]] = Field(
+        alias="allowedChanges",
+        min_length=2,
+        max_length=2,
+    )
+    duration_slots: int = Field(alias="durationSlots", ge=1, le=96, strict=True)
+
+    @field_validator("allowed_changes")
+    @classmethod
+    def duration_and_segments_may_change(cls, value: list[str]) -> list[str]:
+        if len(value) != 2 or set(value) != {"durationSlots", "segments"}:
+            raise ValueError(
+                "changeDuration allowedChanges must contain durationSlots and segments exactly once"
+            )
+        return value
+
+
+class TimeFragmentDeleteOperation(_TimeFragmentExistingOperation):
+    type: Literal["delete"]
+    allowed_changes: list[Literal["item"]] = Field(
+        default_factory=list,
+        alias="allowedChanges",
+        max_length=0,
+    )
 
 
 TimeFragmentOperation = Annotated[

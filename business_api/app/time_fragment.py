@@ -11,9 +11,7 @@ from .contracts import (
     TimeFragmentExternalEventItem,
     TimeFragmentInternalTaskItem,
     TimeFragmentModelAddOperation,
-    TimeFragmentModelChangeDurationOperation,
-    TimeFragmentModelDeleteOperation,
-    TimeFragmentModelMoveOperation,
+    TimeFragmentModelOperation,
     TimeFragmentModelOperations,
     TimeFragmentModelPlanRequest,
     TimeFragmentModelVisibleExternalEvent,
@@ -169,14 +167,21 @@ def plan_time_fragment(
             field="currentPlan.items",
         )
 
-    operations_by_target: dict[str, list[tuple[int, TimeFragmentOperation]]] = {}
-    for index, operation in enumerate(normalized_operations):
+    operations_by_target: dict[
+        str,
+        list[tuple[int, TimeFragmentOperation, TimeFragmentModelOperation]],
+    ] = {}
+    for index, (operation, model_operation) in enumerate(
+        zip(normalized_operations, model_output.operations, strict=True)
+    ):
         if not isinstance(operation, TimeFragmentAddOperation):
-            operations_by_target.setdefault(operation.target_item_id, []).append((index, operation))
+            operations_by_target.setdefault(operation.target_item_id, []).append(
+                (index, operation, model_operation)
+            )
 
     invalid_targets: set[str] = set()
     for item_id, indexed_operations in operations_by_target.items():
-        operation_types = [operation.type for _, operation in indexed_operations]
+        operation_types = [operation.type for _, operation, _ in indexed_operations]
         if len(operation_types) != len(set(operation_types)) or (
             "delete" in operation_types and len(operation_types) > 1
         ):
@@ -191,6 +196,7 @@ def plan_time_fragment(
 
     candidate_items = [item.model_copy(deep=True) for item in base_items]
     candidate_by_id = {item.item_id: item for item in candidate_items if base_counts[item.item_id] == 1}
+    candidate_deleted_ids: set[str] = set()
     deleted_occurrence_ids: list[str] = []
     deleted_external_event_ids: list[str] = []
     schedule_targets: list[_ScheduleTarget] = []
@@ -210,7 +216,7 @@ def plan_time_fragment(
             continue
         if any(
             operation.object_type is not None and operation.object_type != target.object_type
-            for _, operation in indexed_operations
+            for _, operation, _ in indexed_operations
         ):
             _add_issue(
                 issues,
@@ -221,8 +227,16 @@ def plan_time_fragment(
             )
             continue
 
-        operations = [operation for _, operation in indexed_operations]
-        if _is_protected(target) and any(not operation.is_explicit for operation in operations):
+        operations = [operation for _, operation, _ in indexed_operations]
+        if _is_protected(target) and any(
+            not _protected_operation_is_authorized(
+                request.text,
+                target,
+                operation,
+                getattr(model_operation, "authorization_text", None),
+            )
+            for _, operation, model_operation in indexed_operations
+        ):
             _add_issue(
                 issues,
                 code="PROTECTED_OBJECT",
@@ -232,9 +246,10 @@ def plan_time_fragment(
             )
 
         if isinstance(operations[0], TimeFragmentDeleteOperation):
-            if isinstance(target, TimeFragmentInternalTaskItem):
+            candidate_deleted_ids.add(item_id)
+            if isinstance(target, TimeFragmentInternalTaskItem) and target.domain_ref is not None:
                 deleted_occurrence_ids.append(item_id)
-            else:
+            elif isinstance(target, TimeFragmentExternalEventItem):
                 deleted_external_event_ids.append(item_id)
             continue
 
@@ -262,11 +277,10 @@ def plan_time_fragment(
         if placement is None and not any(
             isinstance(operation, TimeFragmentMoveOperation) for operation in operations
         ):
-            now_slot = _first_available_slot(request.now)
-            if original_segments and original_segments[0].start_slot >= now_slot:
+            if original_segments:
                 placement = TimeFragmentPlacement(
                     anchor="start",
-                    slot=original_segments[0].start_slot,
+                    slot=min(segment.start_slot for segment in original_segments),
                 )
         candidate = candidate.model_copy(update={"segments": []}, deep=True)
         _replace_item(candidate_items, candidate)
@@ -282,12 +296,11 @@ def plan_time_fragment(
                 ),
                 priority=next(iter(priorities), None),
                 input_order=min(operation.input_order for operation in operations),
-                operation_index=min(index for index, _ in indexed_operations),
+                operation_index=min(index for index, _, _ in indexed_operations),
             )
         )
 
-    deleted_ids = set(deleted_occurrence_ids) | set(deleted_external_event_ids)
-    candidate_items = [item for item in candidate_items if item.item_id not in deleted_ids]
+    candidate_items = [item for item in candidate_items if item.item_id not in candidate_deleted_ids]
     candidate_by_id = {item.item_id: item for item in candidate_items}
 
     for operation_index, operation in enumerate(normalized_operations):
@@ -439,6 +452,7 @@ def validate_time_fragment_proposal(
     ]
     valid_deleted_occurrences: set[str] = set()
     valid_deleted_external_events: set[str] = set()
+    valid_deleted_target_ids: set[str] = set()
     for operation in delete_operations:
         target = base_index.get(operation.target_item_id)
         if (
@@ -447,9 +461,10 @@ def validate_time_fragment_proposal(
             and operation.object_type != target.object_type
         ):
             continue
-        if isinstance(target, TimeFragmentInternalTaskItem):
+        valid_deleted_target_ids.add(target.item_id)
+        if isinstance(target, TimeFragmentInternalTaskItem) and target.domain_ref is not None:
             valid_deleted_occurrences.add(target.item_id)
-        else:
+        elif isinstance(target, TimeFragmentExternalEventItem):
             valid_deleted_external_events.add(target.item_id)
     if (
         len(proposal.deleted_occurrence_ids) != len(set(proposal.deleted_occurrence_ids))
@@ -467,8 +482,7 @@ def validate_time_fragment_proposal(
 
     expected_ids = (
         set(base_counts)
-        - set(proposal.deleted_occurrence_ids)
-        - set(proposal.deleted_external_event_ids)
+        - valid_deleted_target_ids
     ) | {str(operation.temporary_id) for operation in add_operations}
     if set(candidate_counts) != expected_ids:
         _add_issue(
@@ -504,14 +518,6 @@ def validate_time_fragment_proposal(
                 field="objectType",
             )
             continue
-        if _is_protected(target) and not operation.is_explicit:
-            _add_issue(
-                issues,
-                code="PROTECTED_OBJECT",
-                message=f"用户没有明确授权修改受保护对象「{target.title}」",
-                item_id=target.item_id,
-                field="operations",
-            )
         allowed_by_target.setdefault(target.item_id, set()).update(operation.allowed_changes)
         if isinstance(operation, TimeFragmentChangeDurationOperation):
             expected_duration_by_target[target.item_id] = operation.duration_slots
@@ -530,7 +536,7 @@ def validate_time_fragment_proposal(
             )
 
     for item_id, base_item in base_index.items():
-        if item_id in proposal.deleted_occurrence_ids or item_id in proposal.deleted_external_event_ids:
+        if item_id in valid_deleted_target_ids:
             continue
         candidate_item = candidate_index.get(item_id)
         if candidate_item is None:
@@ -678,6 +684,7 @@ def _normalize_operations(
         target = base_index.get(operation.target_item_id)
         if operation.object_type is None and target is not None:
             operation_data["objectType"] = target.object_type
+        operation_data.pop("authorizationText", None)
         operation_type = {
             "move": TimeFragmentMoveOperation,
             "changeDuration": TimeFragmentChangeDurationOperation,
@@ -691,6 +698,67 @@ def _is_protected(item: TimeFragmentPlanItem) -> bool:
     if isinstance(item, TimeFragmentExternalEventItem):
         return True
     return item.is_pinned or item.is_completed
+
+
+def _protected_operation_is_authorized(
+    request_text: str,
+    item: TimeFragmentPlanItem,
+    operation: TimeFragmentOperation,
+    authorization_text: str | None,
+) -> bool:
+    if authorization_text is None:
+        return False
+    evidence = authorization_text.strip()
+    if not evidence or evidence not in request_text:
+        return False
+    clause = _clause_containing(request_text, evidence)
+    if any(marker in clause for marker in ("不要", "别", "无需", "不许", "不能", "禁止", "保持不变", "保持原样")):
+        return False
+    intent_terms = {
+        "move": ("移动", "移到", "挪到", "改到", "调到", "重排", "安排", "调整"),
+        "changeDuration": ("时长", "延长", "缩短", "改成", "调整时长", "修改时长"),
+        "delete": ("删除", "删掉", "移除", "取消", "不要了"),
+    }[operation.type]
+    if not any(term in evidence for term in intent_terms):
+        return False
+    if item.title in evidence or item.item_id in evidence:
+        return True
+    return _evidence_scope_contains_item(evidence, item)
+
+
+def _clause_containing(text: str, evidence: str) -> str:
+    evidence_start = text.find(evidence)
+    delimiters = "，,。；;！!？?\n"
+    clause_start = max((text.rfind(delimiter, 0, evidence_start) for delimiter in delimiters), default=-1)
+    clause_ends = [
+        index
+        for delimiter in delimiters
+        if (index := text.find(delimiter, evidence_start + len(evidence))) != -1
+    ]
+    clause_end = min(clause_ends, default=len(text))
+    return text[clause_start + 1 : clause_end]
+
+
+def _evidence_scope_contains_item(evidence: str, item: TimeFragmentPlanItem) -> bool:
+    if any(scope in evidence for scope in ("今天", "全天", "整天", "全部", "所有")):
+        return True
+    slot_ranges = {
+        "上午": (0, 48),
+        "中午": (44, 56),
+        "下午": (48, 72),
+        "傍晚": (68, 80),
+        "晚上": (72, 96),
+    }
+    matching_ranges = [bounds for scope, bounds in slot_ranges.items() if scope in evidence]
+    if not matching_ranges or not item.segments:
+        return False
+    return any(
+        all(
+            start_slot <= segment.start_slot and segment.end_slot <= end_slot
+            for segment in item.segments
+        )
+        for start_slot, end_slot in matching_ranges
+    )
 
 
 def _first_available_slot(now: str) -> int:

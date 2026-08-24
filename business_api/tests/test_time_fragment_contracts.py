@@ -178,6 +178,45 @@ def test_v2_model_schema_and_pipeline_expose_only_structured_operations() -> Non
     assert get_pipeline("time-fragment-plan-v1") is not None
 
 
+def test_protected_authorization_uses_internal_evidence_not_a_model_asserted_boolean() -> None:
+    model_property_names = _property_names(TIME_FRAGMENT_OPERATIONS_SCHEMA)
+    public_property_names = _property_names(TimeFragmentPlanProposal.model_json_schema(by_alias=True))
+
+    assert "authorizationText" in model_property_names
+    assert "isExplicit" not in model_property_names
+    assert "authorizationText" not in public_property_names
+    assert "isExplicit" not in public_property_names
+    operation = TimeFragmentModelOperations.model_validate(
+        {
+            "operations": [
+                {
+                    "type": "move",
+                    "targetItemId": "occurrence-1",
+                    "allowedChanges": ["segments"],
+                    "authorizationText": "移动写方案",
+                    "inputOrder": 0,
+                }
+            ]
+        }
+    ).operations[0]
+    assert operation.authorization_text == "移动写方案"
+
+    with pytest.raises(ValidationError):
+        TimeFragmentModelOperations.model_validate(
+            {
+                "operations": [
+                    {
+                        "type": "move",
+                        "targetItemId": "occurrence-1",
+                        "allowedChanges": ["segments"],
+                        "isExplicit": True,
+                        "inputOrder": 0,
+                    }
+                ]
+            }
+        )
+
+
 def test_model_operation_defaults_add_duration_to_two_slots_without_inventing_an_id() -> None:
     output = TimeFragmentModelOperations.model_validate(
         {"operations": [{"type": "add", "title": "新任务", "inputOrder": 0}]}

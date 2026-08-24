@@ -66,10 +66,15 @@ def external_item(
     }
 
 
-def request_with_items(items: list[dict[str, Any]], *, now: str = "2026-08-24T08:00:00+08:00") -> TimeFragmentPlanRequestV2:
+def request_with_items(
+    items: list[dict[str, Any]],
+    *,
+    now: str = "2026-08-24T08:00:00+08:00",
+    text: str = "调整今天的计划",
+) -> TimeFragmentPlanRequestV2:
     return TimeFragmentPlanRequestV2.model_validate(
         {
-            "text": "调整今天的计划",
+            "text": text,
             "requestID": "request-planner-test",
             "baseFingerprint": "sha256:planner-base",
             "currentPlan": {"date": "2026-08-24", "items": items},
@@ -170,7 +175,6 @@ def test_object_type_mismatch_is_rejected_without_mutating_target() -> None:
                     "allowedChanges": ["segments"],
                     "placement": {"anchor": "start", "slot": 44},
                     "inputOrder": 0,
-                    "isExplicit": True,
                 }
             ]
         ),
@@ -181,11 +185,11 @@ def test_object_type_mismatch_is_rejected_without_mutating_target() -> None:
     assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(40, 42)]
 
 
-@pytest.mark.parametrize("is_explicit", [False, True])
-def test_pinned_task_requires_explicit_authorization_but_keeps_semantic_candidate(
-    is_explicit: bool,
-) -> None:
-    request = request_with_items([internal_item("pinned-a", "A", 1, [(36, 37)], pinned=True)])
+def test_named_pinned_task_accepts_verbatim_affirmative_authorization() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 1, [(36, 37)], pinned=True)],
+        text="移动 A 到 10:00",
+    )
 
     response = plan_time_fragment(
         request,
@@ -197,18 +201,152 @@ def test_pinned_task_requires_explicit_authorization_but_keeps_semantic_candidat
                     "allowedChanges": ["segments"],
                     "placement": {"anchor": "start", "slot": 40},
                     "inputOrder": 0,
-                    "isExplicit": is_explicit,
+                    "authorizationText": "移动 A 到 10:00",
                 }
             ]
         ),
-        attempts=2,
     )
 
     moved = item_by_id(response, "pinned-a")
     assert [(segment.start_slot, segment.end_slot) for segment in moved.segments] == [(40, 41)]
-    assert ("PROTECTED_OBJECT" in issue_codes(response)) is (not is_explicit)
-    assert response.validation.valid is is_explicit
-    assert response.validation.attempts == 2
+    assert response.validation.valid is True
+    assert response.proposal is not None
+    assert "authorizationText" not in response.proposal.model_dump(mode="json", by_alias=True)[
+        "operations"
+    ][0]
+
+
+def test_afternoon_scope_authorizes_pinned_target_inside_the_scope() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 1, [(56, 57)], pinned=True)],
+        text="重排整个下午",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 60},
+                    "inputOrder": 0,
+                    "authorizationText": "重排整个下午",
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned-a").segments] == [
+        (60, 61)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "authorization_text"),
+    [
+        ("把客户会议移到 15:00", "把客户会议移到 15:00"),
+        ("重排整个下午", "重排整个下午"),
+    ],
+)
+def test_exact_name_or_afternoon_scope_authorizes_external_event_move(
+    text: str,
+    authorization_text: str,
+) -> None:
+    request = request_with_items(
+        [external_item("external-1", "客户会议", 2, [(56, 58)])],
+        text=text,
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "external-1",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 60},
+                    "inputOrder": 0,
+                    "authorizationText": authorization_text,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "external-1").segments] == [
+        (60, 62)
+    ]
+
+
+def test_negative_request_cannot_be_forged_into_protected_authorization() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 1, [(36, 37)], pinned=True)],
+        text="保留 A，不要移动",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 40},
+                    "inputOrder": 0,
+                    "authorizationText": "移动",
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is False
+    assert "PROTECTED_OBJECT" in issue_codes(response)
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned-a").segments] == [
+        (40, 41)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "authorization_text", "start_slot"),
+    [
+        ("移动 A 到 10:00", "请移动 A", 36),
+        ("重排整个下午", "重排整个下午", 36),
+    ],
+)
+def test_protected_authorization_rejects_non_verbatim_or_out_of_scope_evidence(
+    text: str,
+    authorization_text: str,
+    start_slot: int,
+) -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 1, [(start_slot, start_slot + 1)], pinned=True)],
+        text=text,
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 60},
+                    "inputOrder": 0,
+                    "authorizationText": authorization_text,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is False
+    assert "PROTECTED_OBJECT" in issue_codes(response)
 
 
 def test_non_target_is_locked_while_target_moves_to_requested_start() -> None:
@@ -249,7 +387,8 @@ def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set(
             internal_item("occurrence-delete", "删除内部", 2, [(36, 38)]),
             external_item("external-delete", "删除外部", 2, [(40, 42)]),
             internal_item("occurrence-keep", "保留", 2, [(44, 46)]),
-        ]
+        ],
+        text="删除内部和删除外部",
     )
 
     response = plan_time_fragment(
@@ -265,7 +404,7 @@ def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set(
                     "type": "delete",
                     "targetItemId": "external-delete",
                     "inputOrder": 1,
-                    "isExplicit": True,
+                    "authorizationText": "删除外部",
                 },
             ]
         ),
@@ -276,6 +415,132 @@ def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set(
     assert response.proposal.deleted_occurrence_ids == ["occurrence-delete"]
     assert response.proposal.deleted_external_event_ids == ["external-delete"]
     assert [item.item_id for item in response.proposal.candidate_plan.items] == ["occurrence-keep"]
+
+
+def test_next_revision_delete_of_temporary_task_has_no_real_domain_deletion_id() -> None:
+    temporary_id = UUID("99999999-9999-4999-8999-999999999999")
+    first_response = plan_time_fragment(
+        request_with_items([], text="新增临时任务"),
+        model_output([{"type": "add", "title": "临时任务", "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+    assert first_response.proposal is not None
+    next_request = TimeFragmentPlanRequestV2.model_validate(
+        {
+            "text": "删除临时任务",
+            "requestID": "request-delete-temporary",
+            "baseFingerprint": "sha256:planner-base",
+            "currentPlan": first_response.proposal.candidate_plan.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "now": "2026-08-24T08:00:00+08:00",
+        }
+    )
+
+    second_response = plan_time_fragment(
+        next_request,
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": str(temporary_id),
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert second_response.validation.valid is True
+    assert second_response.proposal is not None
+    assert second_response.proposal.candidate_plan.items == []
+    assert second_response.proposal.deleted_occurrence_ids == []
+    assert second_response.proposal.deleted_external_event_ids == []
+
+
+def test_change_duration_preserves_past_start_without_a_move_operation() -> None:
+    request = request_with_items(
+        [internal_item("past", "晨间任务", 2, [(32, 34)])],
+        now="2026-08-24T12:00:00+08:00",
+        text="把晨间任务改成一小时",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "changeDuration",
+                    "targetItemId": "past",
+                    "allowedChanges": ["durationSlots", "segments"],
+                    "durationSlots": 4,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "past").segments] == [
+        (32, 36)
+    ]
+
+
+def test_change_duration_at_past_anchor_does_not_fall_forward_when_capacity_is_insufficient() -> None:
+    request = request_with_items(
+        [
+            internal_item("past", "晨间任务", 2, [(32, 34)]),
+            external_item("fixed", "后续固定", 62, [(34, 96)]),
+        ],
+        now="2026-08-24T12:00:00+08:00",
+        text="把晨间任务改成一小时",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "changeDuration",
+                    "targetItemId": "past",
+                    "allowedChanges": ["durationSlots", "segments"],
+                    "durationSlots": 4,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert item_by_id(response, "past").segments == []
+    assert "UNPLACED" in issue_codes(response)
+
+
+def test_past_task_moves_after_now_only_when_a_move_operation_targets_it() -> None:
+    request = request_with_items(
+        [internal_item("past", "晨间任务", 2, [(32, 34)])],
+        now="2026-08-24T12:00:00+08:00",
+        text="把晨间任务移到现在之后",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "past",
+                    "allowedChanges": ["segments"],
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "past").segments] == [
+        (48, 50)
+    ]
 
 
 @pytest.mark.parametrize(

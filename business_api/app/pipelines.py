@@ -119,10 +119,13 @@ PIPELINES: dict[str, Pipeline] = {
             "durationSlots=2 when the user gives no duration. Existing targets must use an exact "
             "itemId from currentPlan and must not be guessed from a similar title. Set objectType "
             "when known. move may authorize only segments; changeDuration must authorize "
-            "durationSlots and segments; delete authorizes no mutable fields. Set isExplicit=true "
-            "only when the user explicitly names or scopes a pinned, completed, or external-event "
-            "target. placement slots are 15-minute grid indices from 0 through 96. Preserve user "
-            "ordering in inputOrder and include priority only when the user specified one."
+            "durationSlots and segments; delete authorizes no mutable fields. For a pinned, "
+            "completed, or external-event target, include authorizationText as the shortest exact "
+            "quote from the user's text that affirmatively requests the change and names the exact "
+            "target or an explicit time range. Never paraphrase authorizationText and never use a "
+            "negative or keep-unchanged phrase as authorization. placement slots are 15-minute "
+            "grid indices from 0 through 96. Preserve user ordering in inputOrder and include "
+            "priority only when the user specified one."
         ),
         temperature=0.0,
         max_tokens=2_000,
