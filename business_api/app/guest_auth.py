@@ -3,20 +3,10 @@ import hashlib
 import hmac
 import json
 import time
-from collections import defaultdict, deque
-from math import ceil
-from threading import Lock
-from typing import Callable
 
 
 class GuestTokenError(Exception):
     pass
-
-
-class RateLimitExceeded(Exception):
-    def __init__(self, retry_after: int) -> None:
-        super().__init__("guest request limit exceeded")
-        self.retry_after = retry_after
 
 
 class GuestTokenCodec:
@@ -71,26 +61,3 @@ class GuestTokenCodec:
     def _decode(value: str) -> bytes:
         padding = "=" * (-len(value) % 4)
         return base64.urlsafe_b64decode(value + padding)
-
-
-class GuestRateLimiter:
-    def __init__(
-        self,
-        requests_per_minute: int,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._limit = requests_per_minute
-        self._clock = clock
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = Lock()
-
-    def check(self, subject: str) -> None:
-        now = self._clock()
-        cutoff = now - 60
-        with self._lock:
-            requests = self._requests[subject]
-            while requests and requests[0] <= cutoff:
-                requests.popleft()
-            if len(requests) >= self._limit:
-                raise RateLimitExceeded(max(1, ceil(requests[0] + 60 - now)))
-            requests.append(now)

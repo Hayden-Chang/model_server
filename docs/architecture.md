@@ -180,9 +180,6 @@ POST /api/plan/parse
 排序和重叠。任何不适合 Time Fragment 原子应用的模型输出都会以
 `502 MODEL_OUTPUT_INVALID` 结束，不会下发给客户端。
 
-游客调用按令牌主体做进程内分钟限流。它保护单个安装的正常误触或重试风暴，但服务
-重启会清空计数，且攻击者仍可申请新设备令牌，因此不能替代网关级配额或正式账号权限。
-
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
 
 ## 6. Pipeline 是业务层的版本化配置
@@ -231,7 +228,6 @@ deepseek-v4-flash
 | `STRUCTURED_OUTPUT_MODE` | Business API | `json_schema` 或 `json_object` |
 | `TIME_FRAGMENT_TOKEN_SECRET` | Business API | 签发 Time Fragment 游客令牌，至少 32 字符 |
 | `TIME_FRAGMENT_TOKEN_TTL_SECONDS` | Business API | 游客令牌有效期，默认 30 天 |
-| `TIME_FRAGMENT_REQUESTS_PER_MINUTE` | Business API | 每个游客主体每分钟 AI 请求数，默认 10 |
 
 `Settings` 还定义了当前默认值：
 
@@ -254,7 +250,6 @@ deepseek-v4-flash
 | `502` | `MODEL_GATEWAY_ERROR` | LiteLLM 拒绝请求或返回格式错误 |
 | `502` | `MODEL_OUTPUT_INVALID` | 模型结果无法通过后处理和 Schema 校验 |
 | `503` | `MODEL_GATEWAY_UNAVAILABLE` | 无法连接 LiteLLM，或 LiteLLM 返回 5xx |
-| `429` | `RATE_LIMITED` | Time Fragment 游客超过进程内分钟限额 |
 
 所有 HTTP 响应都会带 `X-Request-ID`，可用于串联客户端错误与服务日志。
 
@@ -320,8 +315,8 @@ LLM_API_KEY
 - 多模型负载均衡、回退和自动重试策略。
 - 流式响应、异步任务和批处理接口。
 - 数据库、对话历史、缓存和持久化费用记录。
-- 按调用方的限流、配额、租户和权限模型。
-- 可持久化、可撤销的 Time Fragment 游客令牌和跨实例共享限流。
+- 按调用方的配额、租户和权限模型。
+- 可持久化、可撤销的 Time Fragment 游客令牌。
 - 完整的指标、分布式追踪和集中日志平台。
 - 后处理层的独立容器部署。
 

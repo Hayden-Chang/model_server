@@ -17,7 +17,7 @@ from .contracts import (
     TimeFragmentPlanRequest,
     TimeFragmentPlanResponse,
 )
-from .guest_auth import GuestRateLimiter, GuestTokenCodec, GuestTokenError, RateLimitExceeded
+from .guest_auth import GuestTokenCodec, GuestTokenError
 from .model_client import (
     LiteLLMClient,
     ModelGatewayResponseError,
@@ -40,7 +40,6 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
         settings.time_fragment_token_secret.get_secret_value(),
         settings.time_fragment_token_ttl_seconds,
     )
-    guest_rate_limiter = GuestRateLimiter(settings.time_fragment_requests_per_minute)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
@@ -124,20 +123,14 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
             expires_in=settings.time_fragment_token_ttl_seconds,
         )
 
-    @app.post("/api/plan/parse", response_model=TimeFragmentPlanResponse)
+    @app.post(
+        "/api/plan/parse",
+        response_model=TimeFragmentPlanResponse,
+        dependencies=[Depends(require_time_fragment_guest)],
+    )
     async def time_fragment_plan_parse(
         payload: TimeFragmentPlanRequest,
-        guest_subject: str = Depends(require_time_fragment_guest),
     ) -> TimeFragmentPlanResponse:
-        try:
-            guest_rate_limiter.check(guest_subject)
-        except RateLimitExceeded as error:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={"code": "RATE_LIMITED", "message": "too many AI planning requests"},
-                headers={"Retry-After": str(error.retry_after)},
-            ) from error
-
         user_input = json.dumps(
             payload.model_dump(mode="json", by_alias=True),
             ensure_ascii=False,

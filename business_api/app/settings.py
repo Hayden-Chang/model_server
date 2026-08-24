@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     max_input_chars: int = Field(default=20_000, ge=1, le=200_000)
     time_fragment_token_secret: SecretStr = Field(min_length=32)
     time_fragment_token_ttl_seconds: int = Field(default=2_592_000, ge=300, le=31_536_000)
-    time_fragment_requests_per_minute: int = Field(default=10, ge=1, le=120)
 
 
 @lru_cache

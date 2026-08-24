@@ -35,7 +35,6 @@ def settings() -> Settings:
         litellm_master_key="litellm-test-key-with-32-characters",
         litellm_base_url="http://litellm:4000",
         time_fragment_token_secret=TOKEN_SECRET,
-        time_fragment_requests_per_minute=10,
     )
 
 
@@ -161,26 +160,25 @@ def test_plan_parse_rejects_output_that_time_fragment_cannot_apply(
     assert response.json()["detail"]["code"] == "MODEL_OUTPUT_INVALID"
 
 
-def test_plan_parse_rate_limits_each_guest_before_calling_model(settings: Settings) -> None:
-    limited = settings.model_copy(update={"time_fragment_requests_per_minute": 1})
+def test_plan_parse_does_not_rate_limit_guest_requests(settings: Settings) -> None:
     fake = FakeModelClient(valid_output())
-    with TestClient(create_app(limited, fake)) as client:
+    with TestClient(create_app(settings, fake)) as client:
         headers = guest_headers(client)
-        first = client.post(
-            "/api/plan/parse",
-            headers=headers,
-            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
-        )
-        second = client.post(
-            "/api/plan/parse",
-            headers=headers,
-            json={"text": "再排一次", "currentPlan": None, "now": "2026-08-24T08:01:00+08:00"},
-        )
+        responses = [
+            client.post(
+                "/api/plan/parse",
+                headers=headers,
+                json={
+                    "text": f"第 {index + 1} 次列计划",
+                    "currentPlan": None,
+                    "now": "2026-08-24T08:00:00+08:00",
+                },
+            )
+            for index in range(11)
+        ]
 
-    assert first.status_code == 200
-    assert second.status_code == 429
-    assert second.headers["retry-after"]
-    assert len(fake.calls) == 1
+    assert [response.status_code for response in responses] == [200] * 11
+    assert len(fake.calls) == 11
 
 
 @pytest.mark.parametrize(
