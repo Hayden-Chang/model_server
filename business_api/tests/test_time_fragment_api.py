@@ -156,6 +156,53 @@ def test_plan_parse_rejects_invalid_v2_input_without_calling_model(
     assert fake.calls == []
 
 
+def test_plan_parse_rejects_oversized_initial_model_input_before_calling_model(
+    settings: Settings,
+) -> None:
+    limited_settings = settings.model_copy(update={"max_input_chars": 200})
+    fake = FakeModelClient([operations_output([])])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(items=[internal_item()]),
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == {
+        "code": "INPUT_TOO_LARGE",
+        "message": "input exceeds the configured limit",
+    }
+    assert fake.calls == []
+
+
+def test_plan_parse_rejects_oversized_correction_input_before_second_model_call(
+    settings: Settings,
+) -> None:
+    limited_settings = settings.model_copy(update={"max_input_chars": 300})
+    unknown_move = {
+        "type": "move",
+        "targetItemId": "missing-item",
+        "allowedChanges": ["segments"],
+        "inputOrder": 0,
+    }
+    fake = FakeModelClient([operations_output([unknown_move]), operations_output([])])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(items=[internal_item()]),
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == {
+        "code": "INPUT_TOO_LARGE",
+        "message": "input exceeds the configured limit",
+    }
+    assert len(fake.calls) == 1
+    assert len(fake.calls[0][1]) <= limited_settings.max_input_chars
+
+
 def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings: Settings) -> None:
     fake = FakeModelClient(
         [

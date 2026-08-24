@@ -15,9 +15,15 @@ from .time_fragment_postprocessor import (
 )
 
 
+class TimeFragmentInputTooLarge(Exception):
+    pass
+
+
 async def execute_time_fragment_plan(
     model_client: Any,
     request: TimeFragmentPlanRequestV2,
+    *,
+    max_input_chars: int,
 ) -> TimeFragmentPlanResponseV2:
     pipeline = get_pipeline("time-fragment-plan-v2")
     assert pipeline is not None
@@ -27,6 +33,7 @@ async def execute_time_fragment_plan(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+    _ensure_input_within_limit(initial_input, max_input_chars)
 
     first_output = await model_client.complete(pipeline, initial_input)
     try:
@@ -47,6 +54,7 @@ async def execute_time_fragment_plan(
             first_response,
         )
 
+    _ensure_input_within_limit(correction_input, max_input_chars)
     second_output = await model_client.complete(pipeline, correction_input)
     try:
         second_operations = parse_time_fragment_model_operations(second_output.content)
@@ -56,3 +64,8 @@ async def execute_time_fragment_plan(
             attempts=2,
         )
     return plan_time_fragment(request, second_operations, attempts=2)
+
+
+def _ensure_input_within_limit(user_input: str, max_input_chars: int) -> None:
+    if len(user_input) > max_input_chars:
+        raise TimeFragmentInputTooLarge

@@ -24,7 +24,7 @@ from .model_client import (
 from .pipelines import get_pipeline
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .settings import Settings
-from .time_fragment_service import execute_time_fragment_plan
+from .time_fragment_service import TimeFragmentInputTooLarge, execute_time_fragment_plan
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -129,7 +129,16 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
         payload: TimeFragmentPlanRequestV2,
     ) -> TimeFragmentPlanResponseV2:
         try:
-            return await execute_time_fragment_plan(client, payload)
+            return await execute_time_fragment_plan(
+                client,
+                payload,
+                max_input_chars=settings.max_input_chars,
+            )
+        except TimeFragmentInputTooLarge as error:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "INPUT_TOO_LARGE", "message": "input exceeds the configured limit"},
+            ) from error
         except ModelGatewayUnavailable as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
