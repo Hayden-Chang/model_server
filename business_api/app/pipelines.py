@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .contracts import TimeFragmentModelOperations
+
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -44,6 +46,11 @@ TIME_FRAGMENT_PLAN_SCHEMA: dict[str, Any] = {
             },
         }
     },
+}
+
+TIME_FRAGMENT_OPERATIONS_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    **TimeFragmentModelOperations.model_json_schema(by_alias=True),
 }
 
 
@@ -100,6 +107,26 @@ PIPELINES: dict[str, Pipeline] = {
         temperature=0.1,
         max_tokens=4_000,
         response_schema=TIME_FRAGMENT_PLAN_SCHEMA,
+    ),
+    "time-fragment-plan-v2": Pipeline(
+        pipeline_id="time-fragment-plan-v2",
+        system_prompt=(
+            "You convert a Time Fragment planning request into structured operations only. "
+            "Return add, move, changeDuration, or delete operations; never return a candidate "
+            "task list, time fragments, domain references, lifecycle fields, or any real domain "
+            "ID for a new task. "
+            "For add, omit temporaryId because the service injects a UUID after parsing, and use "
+            "durationSlots=2 when the user gives no duration. Existing targets must use an exact "
+            "itemId from currentPlan and must not be guessed from a similar title. Set objectType "
+            "when known. move may authorize only segments; changeDuration must authorize "
+            "durationSlots and segments; delete authorizes no mutable fields. Set isExplicit=true "
+            "only when the user explicitly names or scopes a pinned, completed, or external-event "
+            "target. placement slots are 15-minute grid indices from 0 through 96. Preserve user "
+            "ordering in inputOrder and include priority only when the user specified one."
+        ),
+        temperature=0.0,
+        max_tokens=2_000,
+        response_schema=TIME_FRAGMENT_OPERATIONS_SCHEMA,
     ),
 }
 

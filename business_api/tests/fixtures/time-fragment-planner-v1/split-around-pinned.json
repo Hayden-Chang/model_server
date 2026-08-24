@@ -1,0 +1,111 @@
+{
+  "request": {
+    "text": "在 A 周围安排三格 B",
+    "requestID": "request-golden-split",
+    "baseFingerprint": "sha256:golden-split-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "occurrence-a",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-a",
+            "occurrenceId": "occurrence-a",
+            "scheduledTaskId": "scheduled-a"
+          },
+          "title": "A",
+          "durationSlots": 1,
+          "segments": [
+            {
+              "startSlot": 41,
+              "endSlot": 42
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T10:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "add",
+        "title": "B",
+        "durationSlots": 3,
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedTemporaryId": "11111111-1111-4111-8111-111111111111",
+  "expectedResponse": {
+    "requestID": "request-golden-split",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-split-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "add",
+          "title": "B",
+          "durationSlots": 3,
+          "placement": null,
+          "priority": null,
+          "inputOrder": 0,
+          "temporaryId": "11111111-1111-4111-8111-111111111111"
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "occurrence-a",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-a",
+              "occurrenceId": "occurrence-a",
+              "scheduledTaskId": "scheduled-a"
+            },
+            "title": "A",
+            "durationSlots": 1,
+            "segments": [
+              {
+                "startSlot": 41,
+                "endSlot": 42
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          },
+          {
+            "itemId": "11111111-1111-4111-8111-111111111111",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "B",
+            "durationSlots": 3,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 41
+              },
+              {
+                "startSlot": 42,
+                "endSlot": 44
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}
