@@ -1,3 +1,7 @@
+{
+	default_sni {$PUBLIC_IP}
+}
+
 https://{$PUBLIC_IP} {
 	tls /etc/letsencrypt/live/{$PUBLIC_IP}/fullchain.pem /etc/letsencrypt/live/{$PUBLIC_IP}/privkey.pem
 
