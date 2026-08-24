@@ -33,9 +33,10 @@ flowchart LR
 | 层 | 当前实现 | 主要职责 | 不负责 |
 | --- | --- | --- | --- |
 | HTTPS 接入层 | `caddy` 容器 | TLS 终止、压缩、安全响应头、反向代理 | 业务鉴权、提示词、模型路由 |
-| 业务层 | `business-api` 容器中的 `factory.py`、`contracts.py`、`pipelines.py` | Bearer 鉴权、请求校验、Pipeline 选择、提示词和模型参数、响应编排 | 供应商协议适配 |
+| 业务层 | `business-api` 容器中的 `factory.py`、`contracts.py`、`pipelines.py`、`time_fragment_service.py` | Bearer 鉴权、请求校验、Pipeline 选择、提示词和模型参数、最多一次内容纠错、响应编排 | 供应商协议适配 |
 | 大模型层 | `model_client.py` 与 `litellm` 容器 | 形成 OpenAI 兼容请求、内部鉴权、模型别名解析、供应商适配、响应归一化 | 公开业务 API、最终业务结果校验 |
-| 后处理层 | `business-api` 容器中的 `postprocessors.py` | 文本清理、JSON 解析、JSON Schema 本地校验 | 模型选择、外部网络调用 |
+| 确定性规划层 | `business-api` 容器中的 `time_fragment.py` | 把 V2 operations 应用于完整基线，生成时间片、显式删除集合和完整 PlanProposal，并执行领域无关的确定性校验 | App 本地领域写入、状态或 EventKit 回写 |
+| 后处理层 | `business-api` 容器中的 `postprocessors.py`、`time_fragment_postprocessor.py` | 文本清理、JSON 解析、Schema 校验、Time Fragment operations 解析和纠错输入构造 | 模型选择、外部网络调用 |
 | 部署运维 | Compose、部署脚本和证书配置 | 容器编排、健康检查、证书续期、生产验证 | 业务逻辑 |
 
 这里的“分层”首先是代码职责边界，不完全等同于容器边界。当前业务层和后处理层可以独立修改代码，但发布时会一起重建 `business-api` 镜像。
@@ -62,10 +63,16 @@ model_server/
 │   │   ├── factory.py                # 路由、中间件、鉴权和总流程编排
 │   │   ├── pipelines.py              # Pipeline、提示词、参数和 Schema
 │   │   ├── model_client.py            # business-api 到 LiteLLM 的适配器
-│   │   └── postprocessors.py          # 普通文本和结构化结果后处理
+│   │   ├── postprocessors.py          # 普通文本和结构化结果后处理
+│   │   ├── time_fragment.py           # V2 确定性排程、Proposal 生成和校验
+│   │   ├── time_fragment_service.py   # Time Fragment 最多两次模型调用编排
+│   │   └── time_fragment_postprocessor.py # operations 解析和纠错输入
 │   └── tests/
-│       ├── test_api.py               # API、鉴权、Pipeline、错误映射测试
-│       └── test_model_client.py       # 结构化输出参数测试
+│       ├── fixtures/time-fragment-planner-v1/ # 确定性排程 golden fixtures
+│       ├── test_api.py               # 通用 API、鉴权和错误映射测试
+│       ├── test_model_client.py       # 结构化输出参数测试
+│       ├── test_time_fragment_api.py # V2 调用次数、投影和 HTTP 边界
+│       └── test_time_fragment_planner.py # 确定性排程与 golden fixtures
 ├── litellm/
 │   └── config.yaml                   # primary-model 别名和 LiteLLM 设置
 ├── docs/
@@ -76,7 +83,8 @@ model_server/
 │   ├── nginx-monitor-acme.patch       # 复用 80 端口完成 ACME challenge
 │   └── model-server-caddy-renew-hook.sh # 证书续期后重启 Caddy
 └── scripts/
-    └── verify-production.sh           # 生产存活、文本和结构化冒烟验证
+    ├── validate-time-fragment-smoke.py # 无密钥的 V2 响应断言 helper
+    └── verify-production.sh           # 生产存活、通用 Pipeline 和 V2 冒烟验证
 ```
 
 `caddy/caddy` 是部署时下载的静态二进制，已被 `.gitignore` 排除，不属于源码。
@@ -163,7 +171,7 @@ POST /v1/pipelines/{pipeline_id}:run
 | `GET /health/live` | Business API 进程可以响应 | 否 |
 | `GET /health/ready` | Business API 能访问 LiteLLM 的存活接口 | 否 |
 
-### 5.3 Time Fragment 客户端兼容接口
+### 5.3 Time Fragment V2 规划接口
 
 ```text
 POST /api/auth/guest
@@ -172,13 +180,53 @@ POST /api/plan/parse
 
 `/api/auth/guest` 接收当前 iOS 已有的 `{device_id}` 请求。服务只把完整设备标识
 用于计算 SHA-256 摘要，签发带过期时间的 HMAC 令牌；令牌载荷不包含原始设备标识。
-`/api/plan/parse` 只接受这种游客 Bearer 令牌，继续沿用项目既有的
-`{text,currentPlan,now} -> {tasks}` 契约，因此 App 不需要持有 `BUSINESS_API_KEY`。
+`/api/plan/parse` 只接受这种游客 Bearer 令牌，因此 App 不需要持有
+`BUSINESS_API_KEY`。规划请求采用 V2 契约，必需字段为：
 
-该接口内部固定选择 `time-fragment-plan-v1`。Pipeline 拥有系统提示词、模型参数和
-输出 Schema；路由在 Schema 校验之后继续确定性检查当天边界、15 分钟网格、任务
-排序和重叠。任何不适合 Time Fragment 原子应用的模型输出都会以
-`502 MODEL_OUTPUT_INVALID` 结束，不会下发给客户端。
+```json
+{
+  "text": "新增一个任务，使用默认时长",
+  "requestID": "app-request-uuid",
+  "baseFingerprint": "sha256:client-baseline",
+  "currentPlan": {
+    "date": "2026-08-25",
+    "items": []
+  },
+  "now": "2026-08-25T00:00:00+08:00"
+}
+```
+
+`currentPlan` 始终是非空对象；当天没有活动对象时使用空 `items`。`requestID` 是
+App 规划会话的请求标识，与 HTTP `X-Request-ID` 的日志链路标识相互独立。
+`baseFingerprint` 由 App 计算，服务在 proposal 中原样回显。
+
+该接口内部固定选择 `time-fragment-plan-v2`。公开请求先投影成只包含 `text`、`now`
+和规划字段的模型输入；每个 item 的 `domainRef` 会被删除，App `requestID` 和
+`baseFingerprint` 也不会进入模型输入。模型只能返回结构化 operations，不返回
+完整任务列表或时间片。服务为新增项生成临时 UUID，再由确定性排程器生成完整
+`candidatePlan`、显式删除集合和算法版本。
+
+公开响应的 `proposal` 是 App 预览和应用的权威候选，包含：
+
+- 原样回显的 `baseFingerprint`；
+- 当前确定性算法版本 `time-fragment-planner-v1`；
+- 已去除内部授权证据的标准化 `operations`；
+- `deletedOccurrenceIDs` 和 `deletedExternalEventIDs`；
+- 当天完整 `candidatePlan` 及每个已排期对象的完整 `segments`。
+
+模型输出第一次无法解析或语义校验失败时，服务把具体问题放入一次纠错请求；单次
+API 调用最多调用模型两次。第二次可解析但仍有语义错误时，接口仍以 HTTP 200 返回
+完整第二版 proposal、`attempts: 2` 和结构化 issues，便于 App 展示和继续调整。第二
+次完全无法解析时，以 HTTP 200 返回 `proposal: null`、`attempts: 2` 和
+`PARSE_FAILED`。内容错误不会被伪装成基础设施错误，也不会触发第三次模型调用。
+
+游客 Bearer Token 缺失、无效或过期返回 401；序列化后的首轮或纠错模型输入超过
+配置上限返回 413；V2 请求结构错误返回 422；LiteLLM 拒绝或返回错误响应返回 502；
+LiteLLM 不可达或返回 5xx 返回 503。这些错误发生时不返回伪造的 PlanProposal。
+
+Time Fragment 路由没有应用层请求频率限制、限流状态或限流缓存，也不生成应用层
+429。当前 guest 只是无数据库的设备级身份；注册登录、正式用户 Session、游客升级、
+持久配额、调用审计、成本记账以及上线阶段的地区/合规路由均未实现。
 
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
 
@@ -190,6 +238,7 @@ POST /api/plan/parse
 | --- | --- | ---: | ---: | --- |
 | `general-text-v1` | 准确、简洁地回答 | `0.2` | `2000` | 字符串 |
 | `general-analysis-v1` | 为下游业务系统分析输入 | `0.1` | `2000` | 符合 `ANALYSIS_SCHEMA` 的对象 |
+| `time-fragment-plan-v2` | 把 V2 规划请求转换为受限 operations | `0.0` | `2000` | 符合 operations Schema 的对象 |
 
 Pipeline ID 是公网业务契约，模型别名是内部实现。调用方选择：
 
@@ -203,7 +252,9 @@ general-text-v1
 deepseek-v4-flash
 ```
 
-如果提示词、输入语义或输出 Schema 有不兼容变化，应新增 `*-v2`，保留旧版本，而不是静默改变 `*-v1` 的契约。
+如果提示词、输入语义或输出 Schema 有不兼容变化，应增加新的 Pipeline 版本，而不是
+静默改变正在使用的公开契约。Time Fragment 的 Pipeline 版本与 proposal 中的
+`algorithmVersion` 是两个独立版本轴：前者约束模型 operations，后者约束确定性排程。
 
 ## 7. 结构化输出的三道约束
 
@@ -214,6 +265,18 @@ deepseek-v4-flash
 3. 本地确定性校验：`postprocessors.py` 解析 JSON，并始终使用同一份 Schema 校验字段、类型、必填项和额外字段。
 
 生产环境即使使用能力较弱的 `json_object` 模式，本地 Schema 校验也不会关闭。模型输出不合法时，服务返回 `502 MODEL_OUTPUT_INVALID`，不会把不符合业务契约的数据直接交给客户端。
+
+Time Fragment V2 复用模型协议层的 JSON Schema 约束，但采用独立的内容错误边界：
+
+1. `time_fragment_postprocessor.py` 只接受允许的 operations 结构，并拒绝额外字段。
+2. `time_fragment.py` 根据完整 `currentPlan` 精确校验目标 ID、授权字段、显式删除集合、
+   candidate ID 等式、15 分钟边界、完整时长和冲突，再生成完整 PlanProposal。
+3. 首次结构或语义失败会形成一次带稳定错误码和具体 message 的纠错输入。
+4. 第二次可解析的结果无论是否通过语义校验都以 HTTP 200 返回；只有第二次完全无法
+   解析时才返回 `proposal: null / PARSE_FAILED`。
+
+因此上段的 `502 MODEL_OUTPUT_INVALID` 只描述通用结构化 Pipeline；Time Fragment
+规划内容失败不会走该通用错误映射。
 
 ## 8. 配置边界
 
@@ -237,19 +300,26 @@ deepseek-v4-flash
 
 当前 Compose 固定传入 `primary-model`，没有把后两个值从宿主机传入容器，因此它们在当前部署中使用代码默认值。若要在部署时调整，应先在 `docker-compose.yml` 中显式增加对应环境变量。
 
+Time Fragment V2 没有请求频率、每设备配额或限流缓存配置。`MAX_INPUT_CHARS` 是首轮
+与唯一一次纠错模型输入的大小保护，不是频率限制。
+
 真实 `.env` 不得提交到 Git。`.env.example` 只保存变量名称和占位值。
 
 ## 9. 错误边界
 
-| HTTP 状态 | 错误码或场景 | 产生位置 |
+| HTTP 状态 | 错误码或场景 | 适用范围与产生位置 |
 | ---: | --- | --- |
-| `401` | `UNAUTHORIZED` | Business API 业务密钥缺失或错误 |
-| `404` | `PIPELINE_NOT_FOUND` | Pipeline ID 不存在，且不会调用模型 |
-| `413` | `INPUT_TOO_LARGE` | 输入超过服务器限制 |
-| `422` | 请求体格式、空字符串或额外字段不合法 | Pydantic 请求校验 |
-| `502` | `MODEL_GATEWAY_ERROR` | LiteLLM 拒绝请求或返回格式错误 |
-| `502` | `MODEL_OUTPUT_INVALID` | 模型结果无法通过后处理和 Schema 校验 |
+| `401` | `UNAUTHORIZED` | 通用 Pipeline 的业务密钥，或 Time Fragment guest Bearer Token 缺失/无效/过期 |
+| `404` | `PIPELINE_NOT_FOUND` | 通用 Pipeline ID 不存在，且不会调用模型 |
+| `413` | `INPUT_TOO_LARGE` | 通用输入，或 Time Fragment 首轮/纠错模型输入超过服务器限制 |
+| `422` | 请求体格式、空字符串、缺字段或额外字段不合法 | FastAPI/Pydantic 请求校验；Time Fragment 此时不调用模型 |
+| `502` | `MODEL_GATEWAY_ERROR` | LiteLLM 拒绝请求或返回错误响应 |
+| `502` | `MODEL_OUTPUT_INVALID` | 仅通用结构化 Pipeline 的模型结果无法通过后处理和 Schema 校验 |
 | `503` | `MODEL_GATEWAY_UNAVAILABLE` | 无法连接 LiteLLM，或 LiteLLM 返回 5xx |
+
+Time Fragment 可安全解析的规划内容错误不是 HTTP 错误：第二次候选仍有语义问题时
+返回 HTTP 200 和完整 proposal；第二次完全解析失败时返回 HTTP 200、
+`proposal: null` 和 `PARSE_FAILED`。该路由没有应用层 429。
 
 所有 HTTP 响应都会带 `X-Request-ID`，可用于串联客户端错误与服务日志。
 
@@ -271,7 +341,8 @@ Caddy 等待 `business-api` 健康后启动反向代理。Business API 的 Compo
 
 1. 在 `pipelines.py` 增加新的版本化 Pipeline、提示词、参数和可选 Schema。
 2. 如果公开请求或响应结构改变，在 `contracts.py` 增加相应契约，而不是复用不兼容的旧契约。
-3. 在 `test_api.py` 覆盖鉴权、参数组装、正常结果和错误结果。
+3. 在最接近该边界的测试模块覆盖鉴权、参数组装、正常结果和错误结果；Time Fragment
+   使用独立的 API、契约、排程器和 golden-fixture 测试。
 4. 在 README 和本文档登记新的公开接口或 Pipeline。
 
 ### 更换同一个内部别名对应的模型
@@ -312,11 +383,13 @@ LLM_API_KEY
 以下能力当前没有实现，不能把它们当成已具备的系统能力：
 
 - 每个 Pipeline 独立选择模型别名。
-- 多模型负载均衡、回退和自动重试策略。
+- 多模型负载均衡、供应商回退和基础设施自动重试策略；Time Fragment 仅有一次内容纠错调用。
 - 流式响应、异步任务和批处理接口。
 - 数据库、对话历史、缓存和持久化费用记录。
-- 按调用方的配额、租户和权限模型。
-- 可持久化、可撤销的 Time Fragment 游客令牌。
+- 注册、登录、正式用户 JWT/Session、游客升级和多设备账号绑定。
+- 按调用方持久化的配额、租户、权限、成本记账和调用审计。
+- 可持久化或服务端可撤销的 Time Fragment 游客令牌。
+- 上线阶段的地区路由、合规展示和额外网关防滥用策略。
 - 完整的指标、分布式追踪和集中日志平台。
 - 后处理层的独立容器部署。
 
