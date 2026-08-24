@@ -2,5 +2,4 @@
 set -eu
 
 cd /opt/model_server
-/usr/bin/docker compose restart caddy
-
+/usr/bin/docker compose --progress quiet restart caddy
