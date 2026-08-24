@@ -3,6 +3,10 @@
   "scope": "Exact UTF-8 bytes of every listed fixture JSON file. manifest.json is excluded to avoid a self-referential hash cycle.",
   "fixtures": [
     {
+      "file": "add-uuid-collision-retry.json",
+      "sha256": "f06dccc66fd0280f07edc7e8c51a6c08322c91035e8a6df5a72b9660677f57ef"
+    },
+    {
       "file": "cross-day-boundary-todo.json",
       "sha256": "f8374c2bc4077e930e0e9cd9750454d2ae5b636be2d4cfcabe3ee87611ee8375"
     },
@@ -35,20 +39,36 @@
       "sha256": "0259d13c6bf16ff6b5dfe558255b555e39e2241f64f15b08041446ceecf8d7b7"
     },
     {
+      "file": "protected-external-change-duration-authorized.json",
+      "sha256": "8063ccddac35ea1810dc2adfe2916acfe253bbb1c81074e0b1c25f0417ad4c0f"
+    },
+    {
+      "file": "protected-external-delete-authorized.json",
+      "sha256": "f3f2174dcd73f6862ebe1a21794b31d07c035189475255f2bb424f6b7547af25"
+    },
+    {
       "file": "protected-external-unauthorized.json",
-      "sha256": "286d8ce95d8b9385099f85fe9506374601e460f42cfdd0d1ee8616d542de6631"
+      "sha256": "4a66447e6e0632bed4b17a1e02749e14c936cd326952270eb012f7295d163afb"
     },
     {
       "file": "protected-pinned-authorized.json",
       "sha256": "0be88b905daa35ffd48b1d9ad79eee9c486fd2e3b18181ab9a5da09ddabf553b"
     },
     {
+      "file": "protected-pinned-change-duration-authorized.json",
+      "sha256": "db03266879e56a7cbbbf284f6b4a17101e354b05b941cc49e5dfd11f5505321c"
+    },
+    {
       "file": "protected-pinned-unauthorized.json",
-      "sha256": "26744b0fe5de9752a6b23b6d2c957807e034276c1cea44ffa9453f676eb9d8cc"
+      "sha256": "170f06235e81908ee0a4705e8489a7a0bfcfd38c79c312f7b7464fa985ceac25"
     },
     {
       "file": "split-around-pinned.json",
       "sha256": "77b7ba2824309d29d613dee7409fdb1709c066f3b0b2627d40ce7864aa8ab4f2"
+    },
+    {
+      "file": "temporary-item-stable-id.json",
+      "sha256": "85c96963a4889a8a22db157342d298f7b2587cfbab2c83a81ac383c782137b7d"
     },
     {
       "file": "unknown-target-failed-candidate.json",

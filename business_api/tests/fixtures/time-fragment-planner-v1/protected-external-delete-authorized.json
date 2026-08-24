@@ -1,0 +1,111 @@
+{
+  "case": "protected-external-delete-authorized",
+  "request": {
+    "text": "删除客户会议",
+    "requestID": "request-golden-protected-external-delete-authorized",
+    "baseFingerprint": "sha256:golden-protected-external-delete-authorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-delete-authorized",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-delete-authorized"
+          },
+          "title": "客户会议",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 40,
+              "endSlot": 42
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        },
+        {
+          "itemId": "occurrence-keep",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-occurrence-keep",
+            "occurrenceId": "occurrence-keep",
+            "scheduledTaskId": "scheduled-occurrence-keep"
+          },
+          "title": "保留任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 44,
+              "endSlot": 46
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "delete",
+        "targetItemId": "external-delete-authorized",
+        "authorizationText": "删除客户会议",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-external-delete-authorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-external-delete-authorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [
+        "external-delete-authorized"
+      ],
+      "operations": [
+        {
+          "targetItemId": "external-delete-authorized",
+          "objectType": "externalEvent",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "delete",
+          "allowedChanges": []
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "occurrence-keep",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-occurrence-keep",
+              "occurrenceId": "occurrence-keep",
+              "scheduledTaskId": "scheduled-occurrence-keep"
+            },
+            "title": "保留任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 44,
+                "endSlot": 46
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

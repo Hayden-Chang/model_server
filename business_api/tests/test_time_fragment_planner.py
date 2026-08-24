@@ -18,6 +18,7 @@ from app.time_fragment import plan_time_fragment, validate_time_fragment_proposa
 FIXTURES = Path(__file__).parent / "fixtures" / "time-fragment-planner-v1"
 MANIFEST = FIXTURES / "manifest.json"
 EXPECTED_GOLDEN_CASES = {
+    "add-uuid-collision-retry",
     "cross-day-boundary-todo",
     "delete-existing-internal",
     "delete-temporary",
@@ -26,10 +27,14 @@ EXPECTED_GOLDEN_CASES = {
     "past-history-unchanged",
     "priority-input-order",
     "protected-external-authorized",
+    "protected-external-change-duration-authorized",
+    "protected-external-delete-authorized",
     "protected-external-unauthorized",
     "protected-pinned-authorized",
+    "protected-pinned-change-duration-authorized",
     "protected-pinned-unauthorized",
     "split-around-pinned",
+    "temporary-item-stable-id",
     "unknown-target-failed-candidate",
     "unplaced-external-todo",
     "unplaced-internal-todo",
@@ -155,8 +160,11 @@ def contains_key(value: Any, key: str) -> bool:
 
 
 def golden_response(case_name: str) -> dict[str, Any]:
-    fixture = json.loads((FIXTURES / f"{case_name}.json").read_bytes())
-    return fixture["expectedResponse"]
+    return golden_fixture(case_name)["expectedResponse"]
+
+
+def golden_fixture(case_name: str) -> dict[str, Any]:
+    return json.loads((FIXTURES / f"{case_name}.json").read_bytes())
 
 
 def golden_segments(response: dict[str, Any], item_id: str) -> list[tuple[int, int]]:
@@ -232,12 +240,18 @@ def test_golden_fixtures_cover_required_planner_semantics() -> None:
     assert golden_segments(past, "past-history") == [(20, 22)]
     assert golden_segments(moved_past, "past-move") == [(48, 50)]
 
-    pinned_unauthorized = golden_response("protected-pinned-unauthorized")
-    external_unauthorized = golden_response("protected-external-unauthorized")
-    assert golden_issue_codes(pinned_unauthorized) == ["PROTECTED_OBJECT"]
-    assert golden_segments(pinned_unauthorized, "pinned-a") == [(36, 38)]
-    assert golden_issue_codes(external_unauthorized) == ["PROTECTED_OBJECT"]
-    assert golden_segments(external_unauthorized, "external-protected") == [(40, 42)]
+    for case_name in (
+        "protected-pinned-unauthorized",
+        "protected-external-unauthorized",
+    ):
+        fixture = golden_fixture(case_name)
+        response = fixture["expectedResponse"]
+        baseline_item = fixture["request"]["currentPlan"]["items"][0]
+        requested_slot = fixture["modelOutput"]["operations"][0]["placement"]["slot"]
+        assert requested_slot != baseline_item["segments"][0]["startSlot"]
+        assert golden_issue_codes(response) == ["PROTECTED_OBJECT"]
+        assert response["proposal"]["operations"] == []
+        assert response["proposal"]["candidatePlan"]["items"] == [baseline_item]
 
     pinned_authorized = golden_response("protected-pinned-authorized")
     external_authorized = golden_response("protected-external-authorized")
@@ -245,6 +259,78 @@ def test_golden_fixtures_cover_required_planner_semantics() -> None:
     assert golden_segments(pinned_authorized, "pinned-authorized") == [(40, 41)]
     assert external_authorized["validation"]["valid"] is True
     assert golden_segments(external_authorized, "external-authorized") == [(60, 62)]
+
+    external_delete_fixture = golden_fixture("protected-external-delete-authorized")
+    external_delete = external_delete_fixture["expectedResponse"]
+    assert external_delete["validation"]["valid"] is True
+    assert [operation["type"] for operation in external_delete["proposal"]["operations"]] == [
+        "delete"
+    ]
+    assert external_delete["proposal"]["deletedExternalEventIDs"] == [
+        "external-delete-authorized"
+    ]
+    base_ids = {
+        item["itemId"]
+        for item in external_delete_fixture["request"]["currentPlan"]["items"]
+    }
+    deleted_ids = {
+        operation["targetItemId"]
+        for operation in external_delete["proposal"]["operations"]
+        if operation["type"] == "delete"
+    }
+    added_ids = {
+        operation["temporaryId"]
+        for operation in external_delete["proposal"]["operations"]
+        if operation["type"] == "add"
+    }
+    candidate_ids = {
+        item["itemId"] for item in external_delete["proposal"]["candidatePlan"]["items"]
+    }
+    assert candidate_ids == (base_ids - deleted_ids) | added_ids
+
+    collision_fixture = golden_fixture("add-uuid-collision-retry")
+    collision = collision_fixture["expectedResponse"]
+    collision_id, unique_id = collision_fixture["injectedUUIDs"]
+    assert collision_id in {
+        item["itemId"] for item in collision_fixture["request"]["currentPlan"]["items"]
+    }
+    assert collision["proposal"]["operations"][0]["temporaryId"] == unique_id
+    assert {
+        item["itemId"] for item in collision["proposal"]["candidatePlan"]["items"]
+    } == {collision_id, unique_id}
+
+    temporary_fixture = golden_fixture("temporary-item-stable-id")
+    temporary = temporary_fixture["expectedResponse"]
+    temporary_id = temporary_fixture["request"]["currentPlan"]["items"][0]["itemId"]
+    assert temporary_fixture["request"]["currentPlan"]["items"][0]["domainRef"] is None
+    assert temporary_fixture["injectedUUIDs"] == []
+    assert {
+        operation["targetItemId"] for operation in temporary["proposal"]["operations"]
+    } == {temporary_id}
+    assert [item["itemId"] for item in temporary["proposal"]["candidatePlan"]["items"]] == [
+        temporary_id
+    ]
+    assert temporary["proposal"]["candidatePlan"]["items"][0]["domainRef"] is None
+    assert temporary["proposal"]["candidatePlan"]["items"][0]["durationSlots"] == 3
+    assert golden_segments(temporary, temporary_id) == [(44, 47)]
+
+    for case_name, item_id, expected_segments in (
+        (
+            "protected-pinned-change-duration-authorized",
+            "pinned-duration-authorized",
+            [(36, 40)],
+        ),
+        (
+            "protected-external-change-duration-authorized",
+            "external-duration-authorized",
+            [(40, 44)],
+        ),
+    ):
+        duration_response = golden_response(case_name)
+        assert duration_response["validation"]["valid"] is True
+        assert duration_response["proposal"]["operations"][0]["type"] == "changeDuration"
+        assert duration_response["proposal"]["operations"][0]["durationSlots"] == 4
+        assert golden_segments(duration_response, item_id) == expected_segments
 
     deleted_internal = golden_response("delete-existing-internal")
     deleted_temporary = golden_response("delete-temporary")
@@ -364,6 +450,133 @@ def test_object_type_mismatch_is_rejected_without_mutating_target() -> None:
     assert "UNKNOWN_TARGET" in issue_codes(response)
     retained = item_by_id(response, "external-1")
     assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(40, 42)]
+
+
+def test_unauthorized_pinned_move_to_different_slot_retains_baseline_segments() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 2, [(36, 38)], pinned=True)],
+        text="保持 A 不变",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 44},
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is False
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned-a").segments] == [
+        (36, 38)
+    ]
+    assert response.proposal.operations == []
+
+
+def test_unauthorized_external_event_move_to_different_slot_retains_baseline_segments() -> None:
+    request = request_with_items(
+        [external_item("external-protected", "客户会议", 2, [(40, 42)])],
+        text="保持客户会议不变",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "external-protected",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 48},
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is False
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, "external-protected").segments
+    ] == [(40, 42)]
+    assert response.proposal.operations == []
+
+
+def test_any_unauthorized_operation_rejects_all_operations_for_protected_target() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 2, [(36, 38)], pinned=True)],
+        text="移动 A 到 11:00",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 44},
+                    "authorizationText": "移动 A 到 11:00",
+                    "inputOrder": 0,
+                },
+                {
+                    "type": "changeDuration",
+                    "targetItemId": "pinned-a",
+                    "allowedChanges": ["durationSlots", "segments"],
+                    "durationSlots": 4,
+                    "inputOrder": 1,
+                },
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    retained = item_by_id(response, "pinned-a")
+    assert retained.duration_slots == 2
+    assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(36, 38)]
+
+
+def test_unauthorized_external_delete_has_no_public_or_candidate_deletion() -> None:
+    request = request_with_items(
+        [external_item("external-protected", "客户会议", 2, [(40, 42)])],
+        text="保持客户会议不变",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": "external-protected",
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    assert response.proposal.deleted_external_event_ids == []
+    assert response.proposal.deleted_occurrence_ids == []
+    assert [item.item_id for item in response.proposal.candidate_plan.items] == [
+        "external-protected"
+    ]
 
 
 def test_named_pinned_task_accepts_verbatim_affirmative_authorization() -> None:
@@ -489,8 +702,9 @@ def test_negative_request_cannot_be_forged_into_protected_authorization() -> Non
     assert response.validation.valid is False
     assert "PROTECTED_OBJECT" in issue_codes(response)
     assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned-a").segments] == [
-        (40, 41)
+        (36, 37)
     ]
+    assert response.proposal.operations == []
 
 
 @pytest.mark.parametrize(

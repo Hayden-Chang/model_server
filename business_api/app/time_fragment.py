@@ -194,6 +194,34 @@ def plan_time_fragment(
                 field="operations",
             )
 
+    unauthorized_protected_targets: set[str] = set()
+    for item_id, indexed_operations in operations_by_target.items():
+        target = base_index.get(item_id)
+        if target is not None and _is_protected(target) and any(
+            not _protected_operation_is_authorized(
+                request.text,
+                target,
+                operation,
+                getattr(model_operation, "authorization_text", None),
+            )
+            for _, operation, model_operation in indexed_operations
+        ):
+            unauthorized_protected_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="PROTECTED_OBJECT",
+                message=f"用户没有明确授权修改受保护对象「{target.title}」",
+                item_id=item_id,
+                field="operations",
+            )
+
+    normalized_operations = [
+        operation
+        for operation in normalized_operations
+        if isinstance(operation, TimeFragmentAddOperation)
+        or operation.target_item_id not in unauthorized_protected_targets
+    ]
+
     candidate_items = [item.model_copy(deep=True) for item in base_items]
     candidate_by_id = {item.item_id: item for item in candidate_items if base_counts[item.item_id] == 1}
     candidate_deleted_ids: set[str] = set()
@@ -226,25 +254,9 @@ def plan_time_fragment(
                 field="objectType",
             )
             continue
-
+        if item_id in unauthorized_protected_targets:
+            continue
         operations = [operation for _, operation, _ in indexed_operations]
-        if _is_protected(target) and any(
-            not _protected_operation_is_authorized(
-                request.text,
-                target,
-                operation,
-                getattr(model_operation, "authorization_text", None),
-            )
-            for _, operation, model_operation in indexed_operations
-        ):
-            _add_issue(
-                issues,
-                code="PROTECTED_OBJECT",
-                message=f"用户没有明确授权修改受保护对象「{target.title}」",
-                item_id=item_id,
-                field="operations",
-            )
-
         if isinstance(operations[0], TimeFragmentDeleteOperation):
             candidate_deleted_ids.add(item_id)
             if isinstance(target, TimeFragmentInternalTaskItem) and target.domain_ref is not None:

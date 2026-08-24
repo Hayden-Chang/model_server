@@ -1,0 +1,110 @@
+{
+  "case": "add-uuid-collision-retry",
+  "request": {
+    "text": "新增任务",
+    "requestID": "request-golden-add-uuid-collision-retry",
+    "baseFingerprint": "sha256:golden-add-uuid-collision-retry-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "20000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-existing-uuid",
+            "occurrenceId": "20000000-0000-4000-8000-000000000001",
+            "scheduledTaskId": "scheduled-existing-uuid"
+          },
+          "title": "已有任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "add",
+        "title": "新增任务",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [
+    "20000000-0000-4000-8000-000000000001",
+    "20000000-0000-4000-8000-000000000002"
+  ],
+  "expectedResponse": {
+    "requestID": "request-golden-add-uuid-collision-retry",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-add-uuid-collision-retry-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "add",
+          "title": "新增任务",
+          "durationSlots": 2,
+          "placement": null,
+          "priority": null,
+          "inputOrder": 0,
+          "temporaryId": "20000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "20000000-0000-4000-8000-000000000001",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-existing-uuid",
+              "occurrenceId": "20000000-0000-4000-8000-000000000001",
+              "scheduledTaskId": "scheduled-existing-uuid"
+            },
+            "title": "已有任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 36,
+                "endSlot": 38
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          },
+          {
+            "itemId": "20000000-0000-4000-8000-000000000002",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "新增任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 32,
+                "endSlot": 34
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

@@ -40,7 +40,7 @@
         ],
         "placement": {
           "anchor": "start",
-          "slot": 36
+          "slot": 44
         },
         "inputOrder": 0
       }
@@ -54,22 +54,7 @@
       "algorithmVersion": "time-fragment-planner-v1",
       "deletedOccurrenceIDs": [],
       "deletedExternalEventIDs": [],
-      "operations": [
-        {
-          "targetItemId": "pinned-a",
-          "objectType": "internalTask",
-          "priority": null,
-          "inputOrder": 0,
-          "type": "move",
-          "allowedChanges": [
-            "segments"
-          ],
-          "placement": {
-            "anchor": "start",
-            "slot": 36
-          }
-        }
-      ],
+      "operations": [],
       "candidatePlan": {
         "date": "2026-08-24",
         "items": [

@@ -389,9 +389,14 @@ def test_protected_authorization_failure_returns_second_candidate_without_intern
     assert body["validation"]["valid"] is False
     assert "PROTECTED_OBJECT" in [issue["code"] for issue in body["validation"]["issues"]]
     assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [
-        {"startSlot": 48, "endSlot": 52}
+        {"startSlot": 36, "endSlot": 40}
     ]
+    assert body["proposal"]["operations"] == []
     assert "authorizationText" not in recursive_keys(body["proposal"]["operations"])
+    correction = json.loads(fake.calls[1][1])
+    assert correction["issues"][0]["code"] == "PROTECTED_OBJECT"
+    assert correction["issues"][0]["itemId"] == "occurrence-1"
+    assert correction["firstCandidate"]["operations"] == []
     assert len(fake.calls) == 2
 
 

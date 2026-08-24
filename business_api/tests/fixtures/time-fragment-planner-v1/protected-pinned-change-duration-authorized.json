@@ -1,0 +1,101 @@
+{
+  "case": "protected-pinned-change-duration-authorized",
+  "request": {
+    "text": "把 A 时长改成一小时",
+    "requestID": "request-golden-protected-pinned-change-duration-authorized",
+    "baseFingerprint": "sha256:golden-protected-pinned-change-duration-authorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "pinned-duration-authorized",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-pinned-duration-authorized",
+            "occurrenceId": "pinned-duration-authorized",
+            "scheduledTaskId": "scheduled-pinned-duration-authorized"
+          },
+          "title": "A",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "changeDuration",
+        "targetItemId": "pinned-duration-authorized",
+        "allowedChanges": [
+          "durationSlots",
+          "segments"
+        ],
+        "durationSlots": 4,
+        "authorizationText": "把 A 时长改成一小时",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-pinned-change-duration-authorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-pinned-change-duration-authorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "pinned-duration-authorized",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "changeDuration",
+          "allowedChanges": [
+            "durationSlots",
+            "segments"
+          ],
+          "durationSlots": 4
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "pinned-duration-authorized",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-pinned-duration-authorized",
+              "occurrenceId": "pinned-duration-authorized",
+              "scheduledTaskId": "scheduled-pinned-duration-authorized"
+            },
+            "title": "A",
+            "durationSlots": 4,
+            "segments": [
+              {
+                "startSlot": 36,
+                "endSlot": 40
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

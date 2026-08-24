@@ -38,7 +38,7 @@
         ],
         "placement": {
           "anchor": "start",
-          "slot": 40
+          "slot": 48
         },
         "inputOrder": 0
       }
@@ -52,22 +52,7 @@
       "algorithmVersion": "time-fragment-planner-v1",
       "deletedOccurrenceIDs": [],
       "deletedExternalEventIDs": [],
-      "operations": [
-        {
-          "targetItemId": "external-protected",
-          "objectType": "externalEvent",
-          "priority": null,
-          "inputOrder": 0,
-          "type": "move",
-          "allowedChanges": [
-            "segments"
-          ],
-          "placement": {
-            "anchor": "start",
-            "slot": 40
-          }
-        }
-      ],
+      "operations": [],
       "candidatePlan": {
         "date": "2026-08-24",
         "items": [
