@@ -36,18 +36,30 @@ sudo certbot renew --deploy-hook 'docker compose -f /opt/model_server/docker-com
 
 ## Service startup
 
+The target server may not be able to reach Docker Hub. Download the pinned
+official Caddy release archive and verify it against the release checksum, then
+place the binary at `caddy/caddy`. The project builds a minimal scratch image
+from that official static binary, so no third-party image mirror is required.
+
+```bash
+curl -fLO https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
+curl -fLO https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_checksums.txt
+sha512sum --check --ignore-missing caddy_2.11.4_checksums.txt
+tar -xzf caddy_2.11.4_linux_amd64.tar.gz caddy
+install -m 0755 caddy /opt/model_server/caddy/caddy
+```
+
 Copy `.env.example` to `.env`, replace every placeholder with independent
 secrets/provider settings, then:
 
 ```bash
 cd /opt/model_server
 sudo docker compose config
-sudo docker compose pull
-sudo docker compose build business-api
+sudo docker compose pull litellm
+sudo docker compose build caddy business-api
 sudo docker compose up -d
 sudo docker compose ps
 ```
 
 Never commit `.env`. Only Caddy should show a published host port in
 `docker compose ps`.
-
