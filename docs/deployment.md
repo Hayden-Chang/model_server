@@ -28,10 +28,14 @@ sudo certbot certonly \
   --ip-address 47.120.13.5
 ```
 
-Configure renewal to reload Caddy after a successful renewal:
+Install the deploy hook so Caddy loads the renewed certificate after each
+successful renewal:
 
 ```bash
-sudo certbot renew --deploy-hook 'docker compose -f /opt/model_server/docker-compose.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile'
+sudo install -m 0755 \
+  /opt/model_server/deploy/model-server-caddy-renew-hook.sh \
+  /etc/letsencrypt/renewal-hooks/deploy/model-server-caddy-renew-hook.sh
+sudo certbot renew --dry-run --run-deploy-hooks
 ```
 
 ## Service startup
