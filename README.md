@@ -11,6 +11,9 @@ An API-first LLM service with three runtime containers and no database:
 Only Caddy publishes a host port. The Business API and LiteLLM communicate on
 the private Docker Compose network.
 
+Current component boundaries, repository layout, request flow, extension points,
+and known limitations are documented in [architecture.md](docs/architecture.md).
+
 ## Public API
 
 ```text
@@ -56,4 +59,3 @@ python3 -m venv .venv
 
 Docker Compose startup requires a populated `.env` and a certificate at
 `/etc/letsencrypt/live/${PUBLIC_IP}`. See [deployment.md](docs/deployment.md).
-
