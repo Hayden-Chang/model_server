@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from .contracts import (
     TimeFragmentAddOperation,
     TimeFragmentChangeDurationOperation,
+    TimeFragmentChangeTitleOperation,
     TimeFragmentDeleteOperation,
     TimeFragmentExternalEventItem,
     TimeFragmentInternalTaskItem,
@@ -193,11 +194,32 @@ def plan_time_fragment(
                 item_id=item_id,
                 field="operations",
             )
+        priorities = {
+            operation.priority
+            for _, operation, _ in indexed_operations
+            if getattr(operation, "priority", None) is not None
+        }
+        if len(priorities) > 1:
+            invalid_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="INVALID_OPERATION",
+                message="同一目标的操作包含冲突的 priority",
+                item_id=item_id,
+                field="priority",
+            )
 
     unauthorized_protected_targets: set[str] = set()
     for item_id, indexed_operations in operations_by_target.items():
         target = base_index.get(item_id)
-        if target is not None and _is_protected(target) and any(
+        if target is None or item_id in invalid_targets:
+            continue
+        if any(
+            operation.object_type is not None and operation.object_type != target.object_type
+            for _, operation, _ in indexed_operations
+        ):
+            continue
+        if _is_protected(target) and any(
             not _protected_operation_is_authorized(
                 request.text,
                 target,
@@ -268,7 +290,11 @@ def plan_time_fragment(
         candidate = candidate_by_id[item_id]
         original_segments = list(candidate.segments)
         placement: TimeFragmentPlacement | None = None
-        priorities = {operation.priority for operation in operations if operation.priority is not None}
+        priorities = {
+            operation.priority
+            for operation in operations
+            if getattr(operation, "priority", None) is not None
+        }
         if len(priorities) > 1:
             _add_issue(
                 issues,
@@ -286,6 +312,22 @@ def plan_time_fragment(
                 )
             elif isinstance(operation, TimeFragmentMoveOperation):
                 placement = operation.placement
+            elif isinstance(operation, TimeFragmentChangeTitleOperation):
+                candidate = candidate.model_copy(
+                    update={"title": operation.title},
+                    deep=True,
+                )
+        requires_scheduling = any(
+            isinstance(
+                operation,
+                (TimeFragmentMoveOperation, TimeFragmentChangeDurationOperation),
+            )
+            for operation in operations
+        )
+        if not requires_scheduling:
+            _replace_item(candidate_items, candidate)
+            candidate_by_id[item_id] = candidate
+            continue
         if placement is None and not any(
             isinstance(operation, TimeFragmentMoveOperation) for operation in operations
         ):
@@ -459,20 +501,75 @@ def validate_time_fragment_proposal(
     add_operations = [
         operation for operation in proposal.operations if isinstance(operation, TimeFragmentAddOperation)
     ]
-    delete_operations = [
-        operation for operation in proposal.operations if isinstance(operation, TimeFragmentDeleteOperation)
-    ]
+    indexed_operations_by_target: dict[str, list[TimeFragmentOperation]] = {}
+    for operation in proposal.operations:
+        if not isinstance(operation, TimeFragmentAddOperation):
+            indexed_operations_by_target.setdefault(operation.target_item_id, []).append(operation)
+
+    invalid_operation_targets: set[str] = set()
+    for item_id, operations in indexed_operations_by_target.items():
+        target = base_index.get(item_id)
+        if target is None:
+            invalid_operation_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="UNKNOWN_TARGET",
+                message="操作引用的 itemId 不存在于 currentPlan",
+                item_id=item_id,
+                field="targetItemId",
+            )
+            continue
+        operation_types = [operation.type for operation in operations]
+        if len(operation_types) != len(set(operation_types)) or (
+            "delete" in operation_types and len(operation_types) > 1
+        ):
+            invalid_operation_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="INVALID_OPERATION",
+                message="同一目标存在重复或互相矛盾的操作",
+                item_id=item_id,
+                field="operations",
+            )
+        priorities = {
+            operation.priority
+            for operation in operations
+            if getattr(operation, "priority", None) is not None
+        }
+        if len(priorities) > 1:
+            invalid_operation_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="INVALID_OPERATION",
+                message="同一目标的操作包含冲突的 priority",
+                item_id=item_id,
+                field="priority",
+            )
+        if item_id in invalid_operation_targets:
+            continue
+        if any(
+            operation.object_type is not None and operation.object_type != target.object_type
+            for operation in operations
+        ):
+            invalid_operation_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="UNKNOWN_TARGET",
+                message="操作 objectType 与 currentPlan 目标不匹配",
+                item_id=item_id,
+                field="objectType",
+            )
+
     valid_deleted_occurrences: set[str] = set()
     valid_deleted_external_events: set[str] = set()
     valid_deleted_target_ids: set[str] = set()
-    for operation in delete_operations:
-        target = base_index.get(operation.target_item_id)
-        if (
-            target is None
-            or operation.object_type is not None
-            and operation.object_type != target.object_type
+    for item_id, operations in indexed_operations_by_target.items():
+        if item_id in invalid_operation_targets or not isinstance(
+            operations[0],
+            TimeFragmentDeleteOperation,
         ):
             continue
+        target = base_index[item_id]
         valid_deleted_target_ids.add(target.item_id)
         if isinstance(target, TimeFragmentInternalTaskItem) and target.domain_ref is not None:
             valid_deleted_occurrences.add(target.item_id)
@@ -504,48 +601,19 @@ def validate_time_fragment_proposal(
             field="candidatePlan.items",
         )
 
-    indexed_operations_by_target: dict[str, list[TimeFragmentOperation]] = {}
     allowed_by_target: dict[str, set[str]] = {}
     expected_duration_by_target: dict[str, int] = {}
-    for operation in proposal.operations:
-        if isinstance(operation, TimeFragmentAddOperation):
-            continue
-        indexed_operations_by_target.setdefault(operation.target_item_id, []).append(operation)
-        target = base_index.get(operation.target_item_id)
-        if target is None:
-            _add_issue(
-                issues,
-                code="UNKNOWN_TARGET",
-                message="操作引用的 itemId 不存在于 currentPlan",
-                item_id=operation.target_item_id,
-                field="targetItemId",
-            )
-            continue
-        if operation.object_type is not None and operation.object_type != target.object_type:
-            _add_issue(
-                issues,
-                code="UNKNOWN_TARGET",
-                message="操作 objectType 与 currentPlan 目标不匹配",
-                item_id=target.item_id,
-                field="objectType",
-            )
-            continue
-        allowed_by_target.setdefault(target.item_id, set()).update(operation.allowed_changes)
-        if isinstance(operation, TimeFragmentChangeDurationOperation):
-            expected_duration_by_target[target.item_id] = operation.duration_slots
-
+    expected_title_by_target: dict[str, str] = {}
     for item_id, operations in indexed_operations_by_target.items():
-        operation_types = [operation.type for operation in operations]
-        if len(operation_types) != len(set(operation_types)) or (
-            "delete" in operation_types and len(operation_types) > 1
-        ):
-            _add_issue(
-                issues,
-                code="INVALID_OPERATION",
-                message="同一目标存在重复或互相矛盾的操作",
-                item_id=item_id,
-                field="operations",
-            )
+        if item_id in invalid_operation_targets:
+            continue
+        target = base_index[item_id]
+        for operation in operations:
+            allowed_by_target.setdefault(target.item_id, set()).update(operation.allowed_changes)
+            if isinstance(operation, TimeFragmentChangeDurationOperation):
+                expected_duration_by_target[target.item_id] = operation.duration_slots
+            elif isinstance(operation, TimeFragmentChangeTitleOperation):
+                expected_title_by_target[target.item_id] = operation.title
 
     for item_id, base_item in base_index.items():
         if item_id in valid_deleted_target_ids:
@@ -582,6 +650,15 @@ def validate_time_fragment_proposal(
                 message="candidatePlan 时长与 changeDuration operation 不一致",
                 item_id=item_id,
                 field="durationSlots",
+            )
+        expected_title = expected_title_by_target.get(item_id)
+        if expected_title is not None and candidate_item.title != expected_title:
+            _add_issue(
+                issues,
+                code="INVALID_OPERATION",
+                message="candidatePlan 标题与 changeTitle operation 不一致",
+                item_id=item_id,
+                field="title",
             )
 
     for operation in add_operations:
@@ -650,6 +727,15 @@ def validate_time_fragment_proposal(
             continue
         if operation.placement is None:
             continue
+        if isinstance(operation, TimeFragmentMoveOperation):
+            target = base_index.get(operation.target_item_id)
+            if (
+                target is None
+                or operation.target_item_id in invalid_operation_targets
+                or operation.object_type is not None
+                and operation.object_type != target.object_type
+            ):
+                continue
         item_id = (
             str(operation.temporary_id)
             if isinstance(operation, TimeFragmentAddOperation)
@@ -700,6 +786,7 @@ def _normalize_operations(
         operation_type = {
             "move": TimeFragmentMoveOperation,
             "changeDuration": TimeFragmentChangeDurationOperation,
+            "changeTitle": TimeFragmentChangeTitleOperation,
             "delete": TimeFragmentDeleteOperation,
         }[operation.type]
         normalized.append(operation_type.model_validate(operation_data))
@@ -729,6 +816,7 @@ def _protected_operation_is_authorized(
     intent_terms = {
         "move": ("移动", "移到", "挪到", "改到", "调到", "重排", "安排", "调整"),
         "changeDuration": ("时长", "延长", "缩短", "改成", "调整时长", "修改时长"),
+        "changeTitle": ("改标题", "修改标题", "标题改成", "重命名", "改名", "名称改成"),
         "delete": ("删除", "删掉", "移除", "取消", "不要了"),
     }[operation.type]
     if not any(term in evidence for term in intent_terms):
@@ -788,11 +876,14 @@ def _allocate_segments(
     placement: TimeFragmentPlacement | None,
     earliest_slot: int,
 ) -> list[TimeFragmentSegmentV2]:
-    if placement is None or placement.anchor == "start":
-        start = placement.slot if placement is not None else earliest_slot
-        if start >= 96 or occupied[start]:
+    if placement is None:
+        if earliest_slot >= 96:
             return []
-        candidates = range(start, 96)
+        candidates = range(earliest_slot, 96)
+    elif placement.anchor == "start":
+        if placement.slot >= 96 or occupied[placement.slot]:
+            return []
+        candidates = range(placement.slot, 96)
     else:
         end = placement.slot
         if end <= 0 or occupied[end - 1]:

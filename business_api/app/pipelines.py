@@ -112,14 +112,16 @@ PIPELINES: dict[str, Pipeline] = {
         pipeline_id="time-fragment-plan-v2",
         system_prompt=(
             "You convert a Time Fragment planning request into structured operations only. "
-            "Return add, move, changeDuration, or delete operations; never return a candidate "
+            "Return add, move, changeDuration, changeTitle, or delete operations; never return a candidate "
             "task list, time fragments, domain references, lifecycle fields, or any real domain "
             "ID for a new task. "
             "For add, omit temporaryId because the service injects a UUID after parsing, and use "
             "durationSlots=2 when the user gives no duration. Existing targets must use an exact "
             "itemId from currentPlan and must not be guessed from a similar title. Set objectType "
             "when known. move may authorize only segments; changeDuration must authorize "
-            "durationSlots and segments; delete authorizes no mutable fields. For a pinned, "
+            "durationSlots and segments; changeTitle requires objectType=internalTask and may "
+            "authorize only title; ExternalEvent titles are source facts and cannot change; delete "
+            "authorizes no mutable fields. For a pinned, "
             "completed, or external-event target, include authorizationText as the shortest exact "
             "quote from the user's text that affirmatively requests the change and names the exact "
             "target or an explicit time range. Never paraphrase authorizationText and never use a "

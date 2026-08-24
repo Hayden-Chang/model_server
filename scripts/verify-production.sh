@@ -6,11 +6,19 @@ set -eu
 
 base_url="https://${PUBLIC_IP}"
 script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+connect_timeout_seconds=10
+standard_timeout_seconds=30
+planning_timeout_seconds=120
 
-curl --fail-with-body --silent --show-error "${base_url}/health/live"
+curl --fail-with-body --silent --show-error \
+  --connect-timeout "${connect_timeout_seconds}" \
+  --max-time "${standard_timeout_seconds}" \
+  "${base_url}/health/live"
 printf '\n'
 
 curl --fail-with-body --silent --show-error \
+  --connect-timeout "${connect_timeout_seconds}" \
+  --max-time "${standard_timeout_seconds}" \
   -H "Authorization: Bearer ${BUSINESS_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"input":"Reply with a short greeting."}' \
@@ -18,6 +26,8 @@ curl --fail-with-body --silent --show-error \
 printf '\n'
 
 curl --fail-with-body --silent --show-error \
+  --connect-timeout "${connect_timeout_seconds}" \
+  --max-time "${standard_timeout_seconds}" \
   -H "Authorization: Bearer ${BUSINESS_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"input":"Analyze the main risk of deploying without health checks."}' \
@@ -25,6 +35,8 @@ curl --fail-with-body --silent --show-error \
 printf '\n'
 
 token="$(curl --fail-with-body --silent --show-error \
+  --connect-timeout "${connect_timeout_seconds}" \
+  --max-time "${standard_timeout_seconds}" \
   -H "Content-Type: application/json" \
   -d '{"device_id":"time-fragment-production-smoke"}' \
   "${base_url}/api/auth/guest" \
@@ -32,7 +44,23 @@ token="$(curl --fail-with-body --silent --show-error \
 
 plan_date="$(TZ=Asia/Shanghai date '+%Y-%m-%d')"
 now="${plan_date}T00:00:00+08:00"
-base_fingerprint="sha256:production-smoke-empty-${plan_date}"
+base_fingerprint="$(python3 -c '
+import hashlib
+import json
+import sys
+
+projection = {
+    "currentPlan": {"date": sys.argv[1], "items": []},
+    "hiddenPendingDeletionOccurrenceSnapshots": [],
+}
+canonical = json.dumps(
+    projection,
+    ensure_ascii=False,
+    sort_keys=True,
+    separators=(",", ":"),
+).encode("utf-8")
+sys.stdout.write("sha256:" + hashlib.sha256(canonical).hexdigest())
+' "${plan_date}")"
 app_request_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 http_request_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 
@@ -65,6 +93,8 @@ json.dump(
 ' "${app_request_id}" "${base_fingerprint}" "${plan_date}" "${now}" >"${request_file}"
 
 curl --fail-with-body --silent --show-error \
+  --connect-timeout "${connect_timeout_seconds}" \
+  --max-time "${planning_timeout_seconds}" \
   -H "Authorization: Bearer ${token}" \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: ${http_request_id}" \

@@ -206,6 +206,11 @@ App 规划会话的请求标识，与 HTTP `X-Request-ID` 的日志链路标识�
 完整任务列表或时间片。服务为新增项生成临时 UUID，再由确定性排程器生成完整
 `candidatePlan`、显式删除集合和算法版本。
 
+允许的 operation 为 `add`、`move`、`changeDuration`、`changeTitle` 和 `delete`。
+`changeTitle` 必须精确引用现有 `internalTask`，只授权 `title`，不会触发时间片重排；
+ExternalEvent 标题属于来源事实，不能通过规划接口修改。钉住或已完成内部任务只有在
+用户文本中存在精确肯定授权证据时才允许改标题，内部授权证据不会进入公开响应。
+
 公开响应的 `proposal` 是 App 预览和应用的权威候选，包含：
 
 - 原样回显的 `baseFingerprint`；

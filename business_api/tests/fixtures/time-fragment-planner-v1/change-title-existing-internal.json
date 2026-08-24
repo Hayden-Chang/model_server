@@ -1,0 +1,106 @@
+{
+  "case": "change-title-existing-internal",
+  "request": {
+    "text": "把旧标题改标题为新标题",
+    "requestID": "request-golden-change-title-existing-internal",
+    "baseFingerprint": "sha256:golden-change-title-existing-internal-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "occurrence-title",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-occurrence-title",
+            "occurrenceId": "occurrence-title",
+            "scheduledTaskId": "scheduled-occurrence-title"
+          },
+          "title": "旧标题",
+          "durationSlots": 3,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 37
+            },
+            {
+              "startSlot": 40,
+              "endSlot": 42
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "changeTitle",
+        "targetItemId": "occurrence-title",
+        "objectType": "internalTask",
+        "title": "新标题",
+        "allowedChanges": [
+          "title"
+        ],
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-change-title-existing-internal",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-change-title-existing-internal-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "changeTitle",
+          "targetItemId": "occurrence-title",
+          "objectType": "internalTask",
+          "title": "新标题",
+          "allowedChanges": [
+            "title"
+          ],
+          "inputOrder": 0
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "occurrence-title",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-occurrence-title",
+              "occurrenceId": "occurrence-title",
+              "scheduledTaskId": "scheduled-occurrence-title"
+            },
+            "title": "新标题",
+            "durationSlots": 3,
+            "segments": [
+              {
+                "startSlot": 36,
+                "endSlot": 37
+              },
+              {
+                "startSlot": 40,
+                "endSlot": 42
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

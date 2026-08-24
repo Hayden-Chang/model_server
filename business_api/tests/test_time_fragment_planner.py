@@ -19,10 +19,13 @@ FIXTURES = Path(__file__).parent / "fixtures" / "time-fragment-planner-v1"
 MANIFEST = FIXTURES / "manifest.json"
 EXPECTED_GOLDEN_CASES = {
     "add-uuid-collision-retry",
+    "change-title-existing-internal",
+    "completed-unplaced-remains-completed",
     "cross-day-boundary-todo",
     "delete-existing-internal",
     "delete-temporary",
     "empty-day-default-duration",
+    "external-multi-gap-segments",
     "past-explicit-move",
     "past-history-unchanged",
     "priority-input-order",
@@ -35,6 +38,7 @@ EXPECTED_GOLDEN_CASES = {
     "protected-pinned-unauthorized",
     "split-around-pinned",
     "temporary-item-stable-id",
+    "two-add-uuid-collision-retry",
     "unknown-target-failed-candidate",
     "unplaced-external-todo",
     "unplaced-internal-todo",
@@ -299,6 +303,38 @@ def test_golden_fixtures_cover_required_planner_semantics() -> None:
         item["itemId"] for item in collision["proposal"]["candidatePlan"]["items"]
     } == {collision_id, unique_id}
 
+    same_batch_collision_fixture = golden_fixture("two-add-uuid-collision-retry")
+    same_batch_collision = same_batch_collision_fixture["expectedResponse"]
+    first_id, repeated_id, second_id = same_batch_collision_fixture["injectedUUIDs"]
+    assert repeated_id == first_id
+    assert [
+        operation["temporaryId"]
+        for operation in same_batch_collision["proposal"]["operations"]
+    ] == [first_id, second_id]
+    assert golden_segments(same_batch_collision, first_id) == [(32, 34)]
+    assert golden_segments(same_batch_collision, second_id) == [(34, 36)]
+
+    title_changed = golden_response("change-title-existing-internal")
+    title_item = title_changed["proposal"]["candidatePlan"]["items"][0]
+    assert title_changed["proposal"]["operations"][0]["allowedChanges"] == ["title"]
+    assert title_item["title"] == "新标题"
+    assert golden_segments(title_changed, "occurrence-title") == [(36, 37), (40, 42)]
+
+    completed_unplaced = golden_response("completed-unplaced-remains-completed")
+    completed_item = next(
+        item
+        for item in completed_unplaced["proposal"]["candidatePlan"]["items"]
+        if item["itemId"] == "completed-unplaced"
+    )
+    assert completed_unplaced["validation"]["valid"] is True
+    assert golden_issue_codes(completed_unplaced) == ["UNPLACED"]
+    assert completed_item["segments"] == []
+    assert completed_item["isCompleted"] is True
+
+    external_split = golden_response("external-multi-gap-segments")
+    assert external_split["validation"]["valid"] is True
+    assert golden_segments(external_split, "external-multi-gap") == [(40, 41), (42, 44)]
+
     temporary_fixture = golden_fixture("temporary-item-stable-id")
     temporary = temporary_fixture["expectedResponse"]
     temporary_id = temporary_fixture["request"]["currentPlan"]["items"][0]["itemId"]
@@ -447,9 +483,294 @@ def test_object_type_mismatch_is_rejected_without_mutating_target() -> None:
         ),
     )
 
-    assert "UNKNOWN_TARGET" in issue_codes(response)
+    assert issue_codes(response) == ["UNKNOWN_TARGET"]
+    assert response.proposal is not None
+    assert [operation.type for operation in response.proposal.operations] == ["move"]
     retained = item_by_id(response, "external-1")
     assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(40, 42)]
+
+
+def test_duplicate_protected_operations_report_only_invalid_operation_and_keep_evidence() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 2, [(36, 38)], pinned=True)],
+        text="整理今天的计划",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 44},
+                    "inputOrder": 0,
+                },
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 48},
+                    "inputOrder": 1,
+                },
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["INVALID_OPERATION"]
+    assert [operation.type for operation in response.proposal.operations] == ["move", "move"]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned-a").segments] == [
+        (36, 38)
+    ]
+
+
+def test_conflicting_priorities_on_protected_target_are_classified_before_authorization() -> None:
+    request = request_with_items(
+        [internal_item("pinned-a", "A", 2, [(36, 38)], pinned=True)],
+        text="整理今天的计划",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "pinned-a",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 44},
+                    "priority": 2,
+                    "inputOrder": 0,
+                },
+                {
+                    "type": "changeDuration",
+                    "targetItemId": "pinned-a",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["durationSlots", "segments"],
+                    "durationSlots": 4,
+                    "priority": 1,
+                    "inputOrder": 1,
+                },
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["INVALID_OPERATION"]
+    assert [operation.type for operation in response.proposal.operations] == [
+        "move",
+        "changeDuration",
+    ]
+    retained = item_by_id(response, "pinned-a")
+    assert retained.duration_slots == 2
+    assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(36, 38)]
+
+
+def test_change_title_updates_only_existing_internal_title_without_rescheduling() -> None:
+    request = request_with_items(
+        [internal_item("occurrence-title", "旧标题", 3, [(36, 37), (40, 42)])],
+        text="把旧标题改标题为新标题",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "changeTitle",
+                    "targetItemId": "occurrence-title",
+                    "objectType": "internalTask",
+                    "title": "新标题",
+                    "allowedChanges": ["title"],
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.validation.valid is True
+    assert response.proposal is not None
+    assert response.proposal.deleted_occurrence_ids == []
+    assert response.proposal.deleted_external_event_ids == []
+    assert response.proposal.operations[0].model_dump(mode="json", by_alias=True) == {
+        "type": "changeTitle",
+        "targetItemId": "occurrence-title",
+        "objectType": "internalTask",
+        "title": "新标题",
+        "allowedChanges": ["title"],
+        "inputOrder": 0,
+    }
+    changed = item_by_id(response, "occurrence-title")
+    assert changed.title == "新标题"
+    assert changed.duration_slots == 3
+    assert [(segment.start_slot, segment.end_slot) for segment in changed.segments] == [
+        (36, 37),
+        (40, 42),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pinned", "completed"),
+    [(True, False), (False, True)],
+)
+def test_change_title_requires_and_accepts_exact_authorization_for_protected_internal_task(
+    pinned: bool,
+    completed: bool,
+) -> None:
+    item_id = "protected-title"
+    baseline = internal_item(
+        item_id,
+        "旧标题",
+        2,
+        [(36, 38)],
+        pinned=pinned,
+        completed=completed,
+    )
+    operation = {
+        "type": "changeTitle",
+        "targetItemId": item_id,
+        "objectType": "internalTask",
+        "title": "新标题",
+        "allowedChanges": ["title"],
+        "inputOrder": 0,
+    }
+
+    unauthorized = plan_time_fragment(
+        request_with_items([baseline], text="保持旧标题不变"),
+        model_output([operation]),
+    )
+    authorized_text = "把旧标题改标题为新标题"
+    authorized = plan_time_fragment(
+        request_with_items([baseline], text=authorized_text),
+        model_output([{**operation, "authorizationText": authorized_text}]),
+    )
+
+    assert unauthorized.proposal is not None
+    assert issue_codes(unauthorized) == ["PROTECTED_OBJECT"]
+    assert unauthorized.proposal.operations == []
+    assert item_by_id(unauthorized, item_id).title == "旧标题"
+    assert authorized.validation.valid is True
+    assert authorized.proposal is not None
+    assert item_by_id(authorized, item_id).title == "新标题"
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(authorized, item_id).segments] == [
+        (36, 38)
+    ]
+    serialized = authorized.proposal.model_dump(mode="json", by_alias=True)
+    assert contains_key(serialized, "authorizationText") is False
+    assert contains_key(serialized, "isExplicit") is False
+    assert contains_key(serialized, "status") is False
+
+
+def test_external_event_title_is_source_fact_and_cannot_be_changed() -> None:
+    request = request_with_items(
+        [external_item("external-title", "来源标题", 2, [(40, 42)])],
+        text="把来源标题改标题为新标题",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "changeTitle",
+                    "targetItemId": "external-title",
+                    "objectType": "internalTask",
+                    "title": "新标题",
+                    "allowedChanges": ["title"],
+                    "authorizationText": "把来源标题改标题为新标题",
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert issue_codes(response) == ["UNKNOWN_TARGET"]
+    retained = item_by_id(response, "external-title")
+    assert retained.title == "来源标题"
+    assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(40, 42)]
+
+
+def test_two_default_adds_retry_same_batch_uuid_collision_and_scan_next_gap() -> None:
+    first_id = UUID("30000000-0000-4000-8000-000000000001")
+    second_id = UUID("30000000-0000-4000-8000-000000000002")
+    injected = iter([first_id, first_id, second_id])
+    consumed: list[UUID] = []
+
+    def uuid_factory() -> UUID:
+        value = next(injected)
+        consumed.append(value)
+        return value
+
+    response = plan_time_fragment(
+        request_with_items([], text="新增 A 和 B"),
+        model_output(
+            [
+                {"type": "add", "title": "A", "inputOrder": 0},
+                {"type": "add", "title": "B", "inputOrder": 1},
+            ]
+        ),
+        uuid_factory=uuid_factory,
+    )
+
+    assert consumed == [first_id, first_id, second_id]
+    assert response.validation.valid is True
+    assert response.proposal is not None
+    assert [str(operation.temporary_id) for operation in response.proposal.operations] == [
+        str(first_id),
+        str(second_id),
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, str(first_id)).segments] == [
+        (32, 34)
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, str(second_id)).segments] == [
+        (34, 36)
+    ]
+
+
+@pytest.mark.parametrize("operation_type", ["move", "delete"])
+def test_unauthorized_completed_move_or_delete_preserves_entire_baseline(
+    operation_type: str,
+) -> None:
+    baseline = internal_item(
+        "completed-protected",
+        "已完成任务",
+        2,
+        [(36, 38)],
+        completed=True,
+    )
+    operation: dict[str, Any] = {
+        "type": operation_type,
+        "targetItemId": "completed-protected",
+        "objectType": "internalTask",
+        "inputOrder": 0,
+    }
+    if operation_type == "move":
+        operation.update(
+            {
+                "allowedChanges": ["segments"],
+                "placement": {"anchor": "start", "slot": 44},
+            }
+        )
+
+    response = plan_time_fragment(
+        request_with_items([baseline], text="保持已完成任务不变"),
+        model_output([operation]),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    assert response.proposal.deleted_occurrence_ids == []
+    assert response.proposal.deleted_external_event_ids == []
+    retained = item_by_id(response, "completed-protected")
+    assert retained.title == "已完成任务"
+    assert retained.is_completed is True
+    assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(36, 38)]
 
 
 def test_unauthorized_pinned_move_to_different_slot_retains_baseline_segments() -> None:

@@ -1,0 +1,144 @@
+{
+  "case": "completed-unplaced-remains-completed",
+  "request": {
+    "text": "把已完成任务移到8点",
+    "requestID": "request-golden-completed-unplaced-remains-completed",
+    "baseFingerprint": "sha256:golden-completed-unplaced-remains-completed-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "completed-unplaced",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-completed-unplaced",
+            "occurrenceId": "completed-unplaced",
+            "scheduledTaskId": "scheduled-completed-unplaced"
+          },
+          "title": "已完成任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 20,
+              "endSlot": 22
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": true
+        },
+        {
+          "itemId": "fixed-after-eight",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "fixed-after-eight"
+          },
+          "title": "固定占用",
+          "durationSlots": 64,
+          "segments": [
+            {
+              "startSlot": 32,
+              "endSlot": 96
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "completed-unplaced",
+        "objectType": "internalTask",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 32
+        },
+        "authorizationText": "把已完成任务移到8点",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-completed-unplaced-remains-completed",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-completed-unplaced-remains-completed-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "completed-unplaced",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 32
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "completed-unplaced",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-completed-unplaced",
+              "occurrenceId": "completed-unplaced",
+              "scheduledTaskId": "scheduled-completed-unplaced"
+            },
+            "title": "已完成任务",
+            "durationSlots": 2,
+            "segments": [],
+            "isPinned": false,
+            "isCompleted": true
+          },
+          {
+            "itemId": "fixed-after-eight",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "fixed-after-eight"
+            },
+            "title": "固定占用",
+            "durationSlots": 64,
+            "segments": [
+              {
+                "startSlot": 32,
+                "endSlot": 96
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "warning",
+          "code": "UNPLACED",
+          "message": "对象「已完成任务」在当天剩余空间中无法完整排下",
+          "itemId": "completed-unplaced",
+          "field": "segments"
+        }
+      ]
+    }
+  }
+}

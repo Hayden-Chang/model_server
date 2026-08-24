@@ -7,6 +7,14 @@
       "sha256": "f06dccc66fd0280f07edc7e8c51a6c08322c91035e8a6df5a72b9660677f57ef"
     },
     {
+      "file": "change-title-existing-internal.json",
+      "sha256": "916fde1683ecceff5203e4618de674691d7cd5231ef8199c60729428cf356663"
+    },
+    {
+      "file": "completed-unplaced-remains-completed.json",
+      "sha256": "79abb5f20dc23c82965269e152b4c5035a6f914e7d7649772ba82fe07e137f17"
+    },
+    {
       "file": "cross-day-boundary-todo.json",
       "sha256": "f8374c2bc4077e930e0e9cd9750454d2ae5b636be2d4cfcabe3ee87611ee8375"
     },
@@ -21,6 +29,10 @@
     {
       "file": "empty-day-default-duration.json",
       "sha256": "a47f5759fe57896c54d217ac74e6942c887069f893b9b547364507147be8b192"
+    },
+    {
+      "file": "external-multi-gap-segments.json",
+      "sha256": "de34c87da137cc46d3184a625b1df08d0f643f01680ed0727a0687db88552fbf"
     },
     {
       "file": "past-explicit-move.json",
@@ -69,6 +81,10 @@
     {
       "file": "temporary-item-stable-id.json",
       "sha256": "85c96963a4889a8a22db157342d298f7b2587cfbab2c83a81ac383c782137b7d"
+    },
+    {
+      "file": "two-add-uuid-collision-retry.json",
+      "sha256": "c68bf2b7586c0db588358090645cac6cf48151b7a697e2f40b19aa5c1e0e2d6e"
     },
     {
       "file": "unknown-target-failed-candidate.json",

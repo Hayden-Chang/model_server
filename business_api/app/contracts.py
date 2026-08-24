@@ -357,6 +357,39 @@ class TimeFragmentModelChangeDurationOperation(_TimeFragmentExistingModelOperati
         return value
 
 
+class TimeFragmentModelChangeTitleOperation(_TimeFragmentV2Model):
+    type: Literal["changeTitle"]
+    target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
+    object_type: Literal["internalTask"] = Field(alias="objectType")
+    title: str = Field(min_length=1, max_length=500)
+    allowed_changes: list[Literal["title"]] = Field(
+        alias="allowedChanges",
+        min_length=1,
+        max_length=1,
+    )
+    input_order: int = Field(alias="inputOrder", ge=0, strict=True)
+    authorization_text: str | None = Field(
+        default=None,
+        alias="authorizationText",
+        min_length=1,
+        max_length=1_000,
+    )
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title must not be blank")
+        return value
+
+    @field_validator("allowed_changes")
+    @classmethod
+    def only_title_may_change(cls, value: list[str]) -> list[str]:
+        if value != ["title"]:
+            raise ValueError("changeTitle allowedChanges must be exactly ['title']")
+        return value
+
+
 class TimeFragmentModelDeleteOperation(_TimeFragmentExistingModelOperation):
     type: Literal["delete"]
     allowed_changes: list[Literal["item"]] = Field(
@@ -377,6 +410,7 @@ TimeFragmentModelOperation = Annotated[
     TimeFragmentModelAddOperation
     | TimeFragmentModelMoveOperation
     | TimeFragmentModelChangeDurationOperation
+    | TimeFragmentModelChangeTitleOperation
     | TimeFragmentModelDeleteOperation,
     Field(discriminator="type"),
 ]
@@ -433,6 +467,33 @@ class TimeFragmentChangeDurationOperation(_TimeFragmentExistingOperation):
         return value
 
 
+class TimeFragmentChangeTitleOperation(_TimeFragmentV2Model):
+    type: Literal["changeTitle"]
+    target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
+    object_type: Literal["internalTask"] = Field(alias="objectType")
+    title: str = Field(min_length=1, max_length=500)
+    allowed_changes: list[Literal["title"]] = Field(
+        alias="allowedChanges",
+        min_length=1,
+        max_length=1,
+    )
+    input_order: int = Field(alias="inputOrder", ge=0, strict=True)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title must not be blank")
+        return value
+
+    @field_validator("allowed_changes")
+    @classmethod
+    def only_title_may_change(cls, value: list[str]) -> list[str]:
+        if value != ["title"]:
+            raise ValueError("changeTitle allowedChanges must be exactly ['title']")
+        return value
+
+
 class TimeFragmentDeleteOperation(_TimeFragmentExistingOperation):
     type: Literal["delete"]
     allowed_changes: list[Literal["item"]] = Field(
@@ -446,6 +507,7 @@ TimeFragmentOperation = Annotated[
     TimeFragmentAddOperation
     | TimeFragmentMoveOperation
     | TimeFragmentChangeDurationOperation
+    | TimeFragmentChangeTitleOperation
     | TimeFragmentDeleteOperation,
     Field(discriminator="type"),
 ]

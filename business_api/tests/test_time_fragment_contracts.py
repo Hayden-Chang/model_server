@@ -227,6 +227,63 @@ def test_model_operation_defaults_add_duration_to_two_slots_without_inventing_an
     assert "temporaryId" not in operation.model_dump(mode="json", by_alias=True)
 
 
+def test_change_title_model_contract_is_internal_only_exact_and_private_evidence_is_not_public() -> None:
+    output = TimeFragmentModelOperations.model_validate(
+        {
+            "operations": [
+                {
+                    "type": "changeTitle",
+                    "targetItemId": "occurrence-1",
+                    "objectType": "internalTask",
+                    "title": "写最终方案",
+                    "allowedChanges": ["title"],
+                    "authorizationText": "把写方案改标题为写最终方案",
+                    "inputOrder": 0,
+                }
+            ]
+        }
+    )
+
+    operation = output.operations[0]
+    assert operation.type == "changeTitle"
+    assert operation.target_item_id == "occurrence-1"
+    assert operation.object_type == "internalTask"
+    assert operation.title == "写最终方案"
+    assert operation.allowed_changes == ["title"]
+    assert operation.authorization_text == "把写方案改标题为写最终方案"
+    assert "changeTitle" in json.dumps(TIME_FRAGMENT_OPERATIONS_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "invalid_change",
+    [
+        {"objectType": "externalEvent"},
+        {"objectType": None},
+        {"title": ""},
+        {"title": "   "},
+        {"title": "x" * 501},
+        {"allowedChanges": []},
+        {"allowedChanges": ["segments"]},
+        {"allowedChanges": ["title", "segments"]},
+    ],
+)
+def test_change_title_model_contract_rejects_non_internal_or_non_exact_fields(
+    invalid_change: dict[str, Any],
+) -> None:
+    operation = {
+        "type": "changeTitle",
+        "targetItemId": "occurrence-1",
+        "objectType": "internalTask",
+        "title": "新标题",
+        "allowedChanges": ["title"],
+        "inputOrder": 0,
+        **invalid_change,
+    }
+
+    with pytest.raises(ValidationError):
+        TimeFragmentModelOperations.model_validate({"operations": [operation]})
+
+
 def test_parse_failure_has_structured_issue_and_no_empty_candidate() -> None:
     response = build_time_fragment_parse_failed_response(
         "request-parse-failed",

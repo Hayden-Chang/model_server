@@ -1,0 +1,144 @@
+{
+  "case": "external-multi-gap-segments",
+  "request": {
+    "text": "把客户会议移到10点",
+    "requestID": "request-golden-external-multi-gap-segments",
+    "baseFingerprint": "sha256:golden-external-multi-gap-segments-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-multi-gap",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-multi-gap"
+          },
+          "title": "客户会议",
+          "durationSlots": 3,
+          "segments": [
+            {
+              "startSlot": 56,
+              "endSlot": 59
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        },
+        {
+          "itemId": "pinned-gap",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-pinned-gap",
+            "occurrenceId": "pinned-gap",
+            "scheduledTaskId": "scheduled-pinned-gap"
+          },
+          "title": "固定 A",
+          "durationSlots": 1,
+          "segments": [
+            {
+              "startSlot": 41,
+              "endSlot": 42
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "external-multi-gap",
+        "objectType": "externalEvent",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 40
+        },
+        "authorizationText": "把客户会议移到10点",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-external-multi-gap-segments",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-external-multi-gap-segments-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "external-multi-gap",
+          "objectType": "externalEvent",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 40
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "external-multi-gap",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "external-multi-gap"
+            },
+            "title": "客户会议",
+            "durationSlots": 3,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 41
+              },
+              {
+                "startSlot": 42,
+                "endSlot": 44
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          },
+          {
+            "itemId": "pinned-gap",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-pinned-gap",
+              "occurrenceId": "pinned-gap",
+              "scheduledTaskId": "scheduled-pinned-gap"
+            },
+            "title": "固定 A",
+            "durationSlots": 1,
+            "segments": [
+              {
+                "startSlot": 41,
+                "endSlot": 42
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

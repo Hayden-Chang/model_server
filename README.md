@@ -75,9 +75,11 @@ including an empty-day plan with `items: []`:
 model receives only the planning projection: `text`, `now`, and `currentPlan`
 items with `domainRef` removed. It does not receive the App request ID, baseline
 fingerprint, or real domain references. The model proposes `add`, `move`,
-`changeDuration`, or `delete` operations; the server assigns temporary UUIDs,
-runs the deterministic planner, validates the complete candidate, and returns a
-`PlanProposal`. The proposal is authoritative and contains the echoed
+`changeDuration`, `changeTitle`, or `delete` operations. `changeTitle` is
+limited to an exact existing internal-task ID and never changes its segments;
+ExternalEvent titles remain read-only source facts. The server assigns temporary
+UUIDs, runs the deterministic planner, validates the complete candidate, and
+returns a `PlanProposal`. The proposal is authoritative and contains the echoed
 `baseFingerprint`, `algorithmVersion`, normalized `operations`, explicit delete
 sets, and the complete `candidatePlan` with time segments.
 

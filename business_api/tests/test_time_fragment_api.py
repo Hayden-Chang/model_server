@@ -266,6 +266,59 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
     }
 
 
+def test_plan_parse_change_title_returns_title_only_candidate_without_private_fields(
+    settings: Settings,
+) -> None:
+    authorization_text = "把写方案改标题为最终方案"
+    fake = FakeModelClient(
+        [
+            operations_output(
+                [
+                    {
+                        "type": "changeTitle",
+                        "targetItemId": "occurrence-1",
+                        "objectType": "internalTask",
+                        "title": "最终方案",
+                        "allowedChanges": ["title"],
+                        "authorizationText": authorization_text,
+                        "inputOrder": 0,
+                    }
+                ]
+            )
+        ]
+    )
+    payload = request_payload(text=authorization_text, items=[internal_item()])
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert body["proposal"]["operations"] == [
+        {
+            "type": "changeTitle",
+            "targetItemId": "occurrence-1",
+            "objectType": "internalTask",
+            "title": "最终方案",
+            "allowedChanges": ["title"],
+            "inputOrder": 0,
+        }
+    ]
+    candidate = body["proposal"]["candidatePlan"]["items"][0]
+    assert candidate["title"] == "最终方案"
+    assert candidate["durationSlots"] == 4
+    assert candidate["segments"] == [{"startSlot": 36, "endSlot": 40}]
+    assert "authorizationText" not in recursive_keys(body)
+    assert "isExplicit" not in recursive_keys(body)
+    assert "status" not in recursive_keys(body)
+    assert len(fake.calls) == 1
+
+
 def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
     settings: Settings,
 ) -> None:

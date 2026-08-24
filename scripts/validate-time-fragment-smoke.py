@@ -12,6 +12,7 @@ from typing import Any
 
 FORBIDDEN_PUBLIC_KEYS = {"status", "authorizationText", "isExplicit"}
 ALGORITHM_VERSION = "time-fragment-planner-v1"
+EXPECTED_SMOKE_TITLE = "Production Smoke"
 
 
 class SmokeValidationError(ValueError):
@@ -161,7 +162,7 @@ def validate_response(
         operation = require_object(raw_operation, operation_path)
         operation_type = operation.get("type")
         require(
-            operation_type in {"add", "move", "changeDuration", "delete"},
+            operation_type in {"add", "move", "changeDuration", "changeTitle", "delete"},
             f"{operation_path}.type is invalid",
         )
         if operation_type == "add":
@@ -175,7 +176,14 @@ def validate_response(
         add_operation.get("temporaryId"),
         "response.proposal.operations[add].temporaryId",
     )
-    require_string(add_operation.get("title"), "response.proposal.operations[add].title")
+    add_title = require_string(
+        add_operation.get("title"),
+        "response.proposal.operations[add].title",
+    )
+    require(
+        add_title == EXPECTED_SMOKE_TITLE,
+        f"smoke add title must be {EXPECTED_SMOKE_TITLE}",
+    )
     require(
         require_int(
             add_operation.get("durationSlots"),
@@ -240,7 +248,10 @@ def validate_response(
     smoke_item = next(item for item in items if item["itemId"] == temporary_id)
     require(smoke_item.get("objectType") == "internalTask", "smoke task must be an internalTask")
     require(smoke_item.get("domainRef") is None, "new smoke task domainRef must be null")
-    require(smoke_item.get("title") == add_operation.get("title"), "smoke task title must match add")
+    require(
+        smoke_item.get("title") == EXPECTED_SMOKE_TITLE,
+        f"smoke task title must be {EXPECTED_SMOKE_TITLE}",
+    )
     require(smoke_item.get("durationSlots") == 2, "smoke task duration must be 30 minutes")
     require(smoke_item.get("segments"), "empty-day smoke task must be completely scheduled")
     return attempts, len(items)

@@ -90,17 +90,20 @@ POST /api/auth/guest
 
 The Time Fragment request uses the current `Asia/Shanghai` local date, midnight
 at `+08:00`, a non-null empty `currentPlan`, an App `requestID` independent from
-the HTTP `X-Request-ID`, and a date-bearing baseline fingerprint. It asks for a
-single default-duration task; the current deterministic planner represents the
-30-minute default as two 15-minute slots.
+the HTTP `X-Request-ID`, and the SHA-256 of the same sorted-key canonical empty
+projection used by iOS (`currentPlan` plus
+`hiddenPendingDeletionOccurrenceSnapshots`). It asks for one task titled
+`Production Smoke`; the current deterministic planner represents the 30-minute
+default as two 15-minute slots. Every curl call has explicit connection and
+overall timeouts, with a longer overall timeout for the model-backed request.
 
 The V2 assertion helper checks the echoed request ID and fingerprint, supported
 algorithm version, candidate date and complete item set, one-or-two model-call
-count, segment bounds and total duration, explicit-delete consistency, and the
-absence of `status`, `authorizationText`, and `isExplicit` anywhere in the
-public response. A semantic or parse failure therefore makes this production
-smoke fail even when the endpoint correctly used HTTP 200 for the business
-result.
+count, the exact `Production Smoke` title in both the add operation and candidate,
+segment bounds and total duration, explicit-delete consistency, and the absence
+of `status`, `authorizationText`, and `isExplicit` anywhere in the public
+response. A semantic or parse failure therefore makes this production smoke fail
+even when the endpoint correctly used HTTP 200 for the business result.
 
 Temporary request, response, and header files are created with `mktemp` and
 removed by a trap. The guest token remains only in a shell variable and is not
