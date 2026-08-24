@@ -34,16 +34,12 @@ TIME_FRAGMENT_PLAN_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["id", "title", "start", "end", "status"],
+                "required": ["id", "title", "start", "end"],
                 "properties": {
                     "id": {"type": "string", "minLength": 1, "maxLength": 200},
                     "title": {"type": "string", "minLength": 1, "maxLength": 500},
                     "start": {"type": ["string", "null"]},
                     "end": {"type": ["string", "null"]},
-                    "status": {
-                        "type": "string",
-                        "enum": ["scheduled", "active", "done", "skipped"],
-                    },
                 },
             },
         }
@@ -97,8 +93,7 @@ PIPELINES: dict[str, Pipeline] = {
             "boundaries. A task may be left unscheduled only by setting both start and end to null. "
             "For a first request, create a practical non-overlapping day plan. When currentPlan is "
             "present, change only what text explicitly requests and preserve every unaffected task's "
-            "id, title, start, end, and status exactly. Preserve done and skipped tasks unless the "
-            "request explicitly addresses them. New tasks use stable short ids and scheduled status. "
+            "id, title, start, and end exactly. New tasks use stable short ids. "
             "Sort scheduled tasks by start time, place unscheduled tasks afterward, and never return "
             "overlapping or cross-day times."
         ),

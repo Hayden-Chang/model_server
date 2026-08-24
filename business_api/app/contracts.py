@@ -50,7 +50,6 @@ class TimeFragmentTask(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     start: str | None
     end: str | None
-    status: Literal["scheduled", "active", "done", "skipped"]
 
     @field_validator("id", "title")
     @classmethod
@@ -71,7 +70,6 @@ class TimeFragmentCurrentPlan(BaseModel):
 
     id: str
     date: str
-    state: Literal["PLANNING", "RUNNING", "SLOWED", "DONE"]
     task_ids: list[str] = Field(alias="taskIds")
     tasks: list[TimeFragmentTask]
     checkins: list[dict[str, Any]]

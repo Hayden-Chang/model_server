@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.contracts import TimeFragmentCurrentPlan
 from app.factory import create_app
 from app.guest_auth import GuestTokenCodec, GuestTokenError
 from app.model_client import ModelOutput
@@ -54,7 +55,6 @@ def valid_output() -> ModelOutput:
                         "title": "写方案",
                         "start": "2026-08-24T09:00:00",
                         "end": "2026-08-24T10:00:00",
-                        "status": "scheduled",
                     }
                 ]
             },
@@ -98,7 +98,6 @@ def test_plan_parse_adapts_time_fragment_request_to_server_owned_pipeline(settin
     current_plan = {
         "id": "plan_20260824_ai",
         "date": "2026-08-24",
-        "state": "PLANNING",
         "taskIds": ["task-1"],
         "tasks": [
             {
@@ -106,7 +105,6 @@ def test_plan_parse_adapts_time_fragment_request_to_server_owned_pipeline(settin
                 "title": "写方案",
                 "start": "2026-08-24T08:00:00",
                 "end": "2026-08-24T09:00:00",
-                "status": "scheduled",
             }
         ],
         "checkins": [],
@@ -132,16 +130,48 @@ def test_plan_parse_adapts_time_fragment_request_to_server_owned_pipeline(settin
         "currentPlan": current_plan,
         "now": "2026-08-24T08:10:00+08:00",
     }
+    assert set(TimeFragmentCurrentPlan.model_json_schema()["properties"]) == {
+        "id",
+        "date",
+        "taskIds",
+        "tasks",
+        "checkins",
+    }
+
+
+def test_plan_parse_task_contract_does_not_include_status(settings: Settings) -> None:
+    fake = FakeModelClient(
+        ModelOutput(
+            content=(
+                '{"tasks":[{"id":"task-1","title":"写方案",'
+                '"start":"2026-08-24T09:00:00","end":"2026-08-24T10:00:00"}]}'
+            ),
+            provider_model=None,
+            usage=None,
+        )
+    )
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
+        )
+
+    assert response.status_code == 200
+    task_schema = fake.calls[0][0].response_schema["properties"]["tasks"]["items"]
+    assert "status" not in task_schema["required"]
+    assert "status" not in task_schema["properties"]
 
 
 @pytest.mark.parametrize(
     "content",
     [
-        '{"tasks":[{"id":"task-1","title":"写方案","start":null,"end":"2026-08-24T10:00:00","status":"scheduled"}]}',
-        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-25T09:00:00","end":"2026-08-25T10:00:00","status":"scheduled"}]}',
-        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-24T09:05:00","end":"2026-08-24T10:00:00","status":"scheduled"}]}',
-        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-24T09:00","end":"2026-08-24T10:00","status":"scheduled"}]}',
-        '{"tasks":[{"id":"task-1","title":"   ","start":null,"end":null,"status":"scheduled"}]}',
+        '{"tasks":[{"id":"task-1","title":"写方案","start":null,"end":"2026-08-24T10:00:00"}]}',
+        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-25T09:00:00","end":"2026-08-25T10:00:00"}]}',
+        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-24T09:05:00","end":"2026-08-24T10:00:00"}]}',
+        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-24T09:00","end":"2026-08-24T10:00"}]}',
+        '{"tasks":[{"id":"task-1","title":"   ","start":null,"end":null}]}',
+        '{"tasks":[{"id":"task-1","title":"写方案","start":"2026-08-24T09:00:00","end":"2026-08-24T10:00:00","status":"scheduled"}]}',
     ],
 )
 def test_plan_parse_rejects_output_that_time_fragment_cannot_apply(
