@@ -464,6 +464,43 @@ def test_unknown_target_is_not_guessed_from_matching_title_and_candidate_is_reta
     assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(36, 38)]
 
 
+def test_duplicate_moves_for_unknown_target_report_only_unknown_target() -> None:
+    request = request_with_items([internal_item("occurrence-1", "写方案", 2, [(36, 38)])])
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "move",
+                    "targetItemId": "missing-id",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 40},
+                    "inputOrder": 0,
+                },
+                {
+                    "type": "move",
+                    "targetItemId": "missing-id",
+                    "objectType": "internalTask",
+                    "allowedChanges": ["segments"],
+                    "placement": {"anchor": "start", "slot": 44},
+                    "inputOrder": 1,
+                },
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is False
+    assert issue_codes(response) == ["UNKNOWN_TARGET"]
+    assert response.validation.issues[0].item_id == "missing-id"
+    assert response.validation.issues[0].field == "targetItemId"
+    assert [operation.type for operation in response.proposal.operations] == ["move", "move"]
+    retained = item_by_id(response, "occurrence-1")
+    assert [(segment.start_slot, segment.end_slot) for segment in retained.segments] == [(36, 38)]
+
+
 def test_object_type_mismatch_is_rejected_without_mutating_target() -> None:
     request = request_with_items([external_item("external-1", "客户会议", 2, [(40, 42)])])
 
@@ -884,6 +921,102 @@ def test_unauthorized_external_delete_has_no_public_or_candidate_deletion() -> N
                 {
                     "type": "delete",
                     "targetItemId": "external-protected",
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    assert response.proposal.deleted_external_event_ids == []
+    assert response.proposal.deleted_occurrence_ids == []
+    assert [item.item_id for item in response.proposal.candidate_plan.items] == [
+        "external-protected"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("item_id", "title", "object_type", "pinned", "completed"),
+    [
+        ("external-delete", "客户会议", "externalEvent", False, False),
+        ("pinned-delete", "钉住任务", "internalTask", True, False),
+        ("completed-delete", "已完成任务", "internalTask", False, True),
+    ],
+)
+def test_buyaole_is_affirmative_delete_authorization_for_protected_target(
+    item_id: str,
+    title: str,
+    object_type: str,
+    pinned: bool,
+    completed: bool,
+) -> None:
+    item = (
+        external_item(item_id, title, 2, [(40, 42)])
+        if object_type == "externalEvent"
+        else internal_item(
+            item_id,
+            title,
+            2,
+            [(40, 42)],
+            pinned=pinned,
+            completed=completed,
+        )
+    )
+    authorization_text = f"{title}不要了"
+
+    response = plan_time_fragment(
+        request_with_items([item], text=authorization_text),
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": item_id,
+                    "objectType": object_type,
+                    "authorizationText": authorization_text,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is True
+    assert [operation.type for operation in response.proposal.operations] == ["delete"]
+    assert response.proposal.candidate_plan.items == []
+    assert response.proposal.deleted_external_event_ids == (
+        [item_id] if object_type == "externalEvent" else []
+    )
+    assert response.proposal.deleted_occurrence_ids == (
+        [item_id] if object_type == "internalTask" else []
+    )
+
+
+@pytest.mark.parametrize(
+    "authorization_text",
+    [
+        "不要删除客户会议",
+        "客户会议不要删掉",
+        "别删除客户会议",
+        "保持客户会议不变",
+    ],
+)
+def test_negative_delete_language_does_not_authorize_protected_target(
+    authorization_text: str,
+) -> None:
+    response = plan_time_fragment(
+        request_with_items(
+            [external_item("external-protected", "客户会议", 2, [(40, 42)])],
+            text=authorization_text,
+        ),
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": "external-protected",
+                    "objectType": "externalEvent",
+                    "authorizationText": authorization_text,
                     "inputOrder": 0,
                 }
             ]

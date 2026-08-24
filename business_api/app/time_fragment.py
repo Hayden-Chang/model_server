@@ -182,6 +182,17 @@ def plan_time_fragment(
 
     invalid_targets: set[str] = set()
     for item_id, indexed_operations in operations_by_target.items():
+        target = base_index.get(item_id)
+        if target is None:
+            invalid_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="UNKNOWN_TARGET",
+                message="操作引用的 itemId 不存在于 currentPlan",
+                item_id=item_id,
+                field="targetItemId",
+            )
+            continue
         operation_types = [operation.type for _, operation, _ in indexed_operations]
         if len(operation_types) != len(set(operation_types)) or (
             "delete" in operation_types and len(operation_types) > 1
@@ -208,17 +219,26 @@ def plan_time_fragment(
                 item_id=item_id,
                 field="priority",
             )
-
-    unauthorized_protected_targets: set[str] = set()
-    for item_id, indexed_operations in operations_by_target.items():
-        target = base_index.get(item_id)
-        if target is None or item_id in invalid_targets:
+        if item_id in invalid_targets:
             continue
         if any(
             operation.object_type is not None and operation.object_type != target.object_type
             for _, operation, _ in indexed_operations
         ):
+            invalid_targets.add(item_id)
+            _add_issue(
+                issues,
+                code="UNKNOWN_TARGET",
+                message="操作 objectType 与 currentPlan 目标不匹配",
+                item_id=item_id,
+                field="objectType",
+            )
+
+    unauthorized_protected_targets: set[str] = set()
+    for item_id, indexed_operations in operations_by_target.items():
+        if item_id in invalid_targets:
             continue
+        target = base_index[item_id]
         if _is_protected(target) and any(
             not _protected_operation_is_authorized(
                 request.text,
@@ -252,32 +272,11 @@ def plan_time_fragment(
     schedule_targets: list[_ScheduleTarget] = []
 
     for item_id, indexed_operations in operations_by_target.items():
-        target = base_index.get(item_id)
-        if target is None:
-            _add_issue(
-                issues,
-                code="UNKNOWN_TARGET",
-                message="操作引用的 itemId 不存在于 currentPlan",
-                item_id=item_id,
-                field="targetItemId",
-            )
-            continue
         if item_id in invalid_targets:
-            continue
-        if any(
-            operation.object_type is not None and operation.object_type != target.object_type
-            for _, operation, _ in indexed_operations
-        ):
-            _add_issue(
-                issues,
-                code="UNKNOWN_TARGET",
-                message="操作 objectType 与 currentPlan 目标不匹配",
-                item_id=item_id,
-                field="objectType",
-            )
             continue
         if item_id in unauthorized_protected_targets:
             continue
+        target = base_index[item_id]
         operations = [operation for _, operation, _ in indexed_operations]
         if isinstance(operations[0], TimeFragmentDeleteOperation):
             candidate_deleted_ids.add(item_id)
@@ -295,15 +294,6 @@ def plan_time_fragment(
             for operation in operations
             if getattr(operation, "priority", None) is not None
         }
-        if len(priorities) > 1:
-            _add_issue(
-                issues,
-                code="INVALID_OPERATION",
-                message="同一目标的操作包含冲突的 priority",
-                item_id=item_id,
-                field="priority",
-            )
-            continue
         for operation in operations:
             if isinstance(operation, TimeFragmentChangeDurationOperation):
                 candidate = candidate.model_copy(
@@ -811,7 +801,23 @@ def _protected_operation_is_authorized(
     if not evidence or evidence not in request_text:
         return False
     clause = _clause_containing(request_text, evidence)
-    if any(marker in clause for marker in ("不要", "别", "无需", "不许", "不能", "禁止", "保持不变", "保持原样")):
+    negative_markers = ("别", "无需", "不许", "不能", "禁止", "保持不变", "保持原样")
+    operation_negative_markers = {
+        "move": ("不要",),
+        "changeDuration": ("不要",),
+        "changeTitle": ("不要",),
+        "delete": (
+            "不要删除",
+            "不要删掉",
+            "不要移除",
+            "不要取消",
+            "不删除",
+            "不删掉",
+            "不移除",
+            "不取消",
+        ),
+    }[operation.type]
+    if any(marker in clause for marker in negative_markers + operation_negative_markers):
         return False
     intent_terms = {
         "move": ("移动", "移到", "挪到", "改到", "调到", "重排", "安排", "调整"),

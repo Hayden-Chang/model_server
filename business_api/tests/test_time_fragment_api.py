@@ -319,6 +319,52 @@ def test_plan_parse_change_title_returns_title_only_candidate_without_private_fi
     assert len(fake.calls) == 1
 
 
+def test_plan_parse_buyaole_authorizes_pinned_delete_without_private_fields(
+    settings: Settings,
+) -> None:
+    authorization_text = "钉住任务不要了"
+    model_response = operations_output(
+        [
+            {
+                "type": "delete",
+                "targetItemId": "occurrence-1",
+                "objectType": "internalTask",
+                "authorizationText": authorization_text,
+                "inputOrder": 0,
+            }
+        ]
+    )
+    fake = FakeModelClient([model_response, model_response])
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(text=authorization_text, items=[internal_item(pinned=True)]),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert body["proposal"]["operations"] == [
+        {
+            "type": "delete",
+            "targetItemId": "occurrence-1",
+            "objectType": "internalTask",
+            "priority": None,
+            "allowedChanges": [],
+            "inputOrder": 0,
+        }
+    ]
+    assert body["proposal"]["candidatePlan"]["items"] == []
+    assert body["proposal"]["deletedOccurrenceIDs"] == ["occurrence-1"]
+    assert body["proposal"]["deletedExternalEventIDs"] == []
+    assert "authorizationText" not in recursive_keys(body)
+    assert "isExplicit" not in recursive_keys(body)
+    assert "status" not in recursive_keys(body)
+    assert len(fake.calls) == 1
+
+
 def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
     settings: Settings,
 ) -> None:
