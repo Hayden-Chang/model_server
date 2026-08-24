@@ -1,0 +1,113 @@
+{
+  "case": "protected-pinned-unauthorized",
+  "request": {
+    "text": "保持 A 不变",
+    "requestID": "request-golden-protected-pinned-unauthorized",
+    "baseFingerprint": "sha256:golden-protected-pinned-unauthorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "pinned-a",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-pinned-a",
+            "occurrenceId": "pinned-a",
+            "scheduledTaskId": "scheduled-pinned-a"
+          },
+          "title": "A",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "pinned-a",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 36
+        },
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-pinned-unauthorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-pinned-unauthorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "pinned-a",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 36
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "pinned-a",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-pinned-a",
+              "occurrenceId": "pinned-a",
+              "scheduledTaskId": "scheduled-pinned-a"
+            },
+            "title": "A",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 36,
+                "endSlot": 38
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": false,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "error",
+          "code": "PROTECTED_OBJECT",
+          "message": "用户没有明确授权修改受保护对象「A」",
+          "itemId": "pinned-a",
+          "field": "operations"
+        }
+      ]
+    }
+  }
+}

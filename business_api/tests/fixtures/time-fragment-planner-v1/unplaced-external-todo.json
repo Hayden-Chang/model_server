@@ -1,0 +1,136 @@
+{
+  "case": "unplaced-external-todo",
+  "request": {
+    "text": "移动客户会议到今天剩余时间",
+    "requestID": "request-golden-unplaced-external-todo",
+    "baseFingerprint": "sha256:golden-unplaced-external-todo-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-unplaced",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-unplaced"
+          },
+          "title": "客户会议",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 30,
+              "endSlot": 32
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        },
+        {
+          "itemId": "fixed-rest-of-day",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-fixed-rest-of-day",
+            "occurrenceId": "fixed-rest-of-day",
+            "scheduledTaskId": "scheduled-fixed-rest-of-day"
+          },
+          "title": "固定占用",
+          "durationSlots": 64,
+          "segments": [
+            {
+              "startSlot": 32,
+              "endSlot": 96
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "external-unplaced",
+        "allowedChanges": [
+          "segments"
+        ],
+        "authorizationText": "移动客户会议到今天剩余时间",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-unplaced-external-todo",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-unplaced-external-todo-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "external-unplaced",
+          "objectType": "externalEvent",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": null
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "external-unplaced",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "external-unplaced"
+            },
+            "title": "客户会议",
+            "durationSlots": 2,
+            "segments": [],
+            "isAllDay": false,
+            "isFixed": true
+          },
+          {
+            "itemId": "fixed-rest-of-day",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-fixed-rest-of-day",
+              "occurrenceId": "fixed-rest-of-day",
+              "scheduledTaskId": "scheduled-fixed-rest-of-day"
+            },
+            "title": "固定占用",
+            "durationSlots": 64,
+            "segments": [
+              {
+                "startSlot": 32,
+                "endSlot": 96
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "warning",
+          "code": "UNPLACED",
+          "message": "对象「客户会议」在当天剩余空间中无法完整排下",
+          "itemId": "external-unplaced",
+          "field": "segments"
+        }
+      ]
+    }
+  }
+}

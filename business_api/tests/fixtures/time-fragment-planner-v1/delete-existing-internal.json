@@ -1,0 +1,112 @@
+{
+  "case": "delete-existing-internal",
+  "request": {
+    "text": "删除旧任务",
+    "requestID": "request-golden-delete-existing-internal",
+    "baseFingerprint": "sha256:golden-delete-existing-internal-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "occurrence-delete",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-occurrence-delete",
+            "occurrenceId": "occurrence-delete",
+            "scheduledTaskId": "scheduled-occurrence-delete"
+          },
+          "title": "旧任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "occurrence-keep",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-occurrence-keep",
+            "occurrenceId": "occurrence-keep",
+            "scheduledTaskId": "scheduled-occurrence-keep"
+          },
+          "title": "保留任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 40,
+              "endSlot": 42
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "delete",
+        "targetItemId": "occurrence-delete",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-delete-existing-internal",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-delete-existing-internal-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [
+        "occurrence-delete"
+      ],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "occurrence-delete",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "delete",
+          "allowedChanges": []
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "occurrence-keep",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-occurrence-keep",
+              "occurrenceId": "occurrence-keep",
+              "scheduledTaskId": "scheduled-occurrence-keep"
+            },
+            "title": "保留任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 42
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

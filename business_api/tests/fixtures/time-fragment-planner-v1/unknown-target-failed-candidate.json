@@ -1,0 +1,114 @@
+{
+  "case": "unknown-target-failed-candidate",
+  "request": {
+    "text": "移动不存在的任务",
+    "requestID": "request-golden-unknown-target-failed-candidate",
+    "baseFingerprint": "sha256:golden-unknown-target-failed-candidate-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "known-item",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-known-item",
+            "occurrenceId": "known-item",
+            "scheduledTaskId": "scheduled-known-item"
+          },
+          "title": "已知任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "missing-item",
+        "objectType": "internalTask",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 40
+        },
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-unknown-target-failed-candidate",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-unknown-target-failed-candidate-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "missing-item",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 40
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "known-item",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-known-item",
+              "occurrenceId": "known-item",
+              "scheduledTaskId": "scheduled-known-item"
+            },
+            "title": "已知任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 36,
+                "endSlot": 38
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": false,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "error",
+          "code": "UNKNOWN_TARGET",
+          "message": "操作引用的 itemId 不存在于 currentPlan",
+          "itemId": "missing-item",
+          "field": "targetItemId"
+        }
+      ]
+    }
+  }
+}

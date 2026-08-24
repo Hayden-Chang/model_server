@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterator
@@ -15,6 +16,32 @@ from app.time_fragment import plan_time_fragment, validate_time_fragment_proposa
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "time-fragment-planner-v1"
+MANIFEST = FIXTURES / "manifest.json"
+EXPECTED_GOLDEN_CASES = {
+    "cross-day-boundary-todo",
+    "delete-existing-internal",
+    "delete-temporary",
+    "empty-day-default-duration",
+    "past-explicit-move",
+    "past-history-unchanged",
+    "priority-input-order",
+    "protected-external-authorized",
+    "protected-external-unauthorized",
+    "protected-pinned-authorized",
+    "protected-pinned-unauthorized",
+    "split-around-pinned",
+    "unknown-target-failed-candidate",
+    "unplaced-external-todo",
+    "unplaced-internal-todo",
+}
+
+
+def golden_fixture_paths() -> tuple[Path, ...]:
+    manifest = json.loads(MANIFEST.read_bytes())
+    return tuple(FIXTURES / entry["file"] for entry in manifest["fixtures"])
+
+
+GOLDEN_FIXTURE_PATHS = golden_fixture_paths()
 
 
 def internal_item(
@@ -96,19 +123,173 @@ def issue_codes(response: Any) -> list[str]:
     return [issue.code for issue in response.validation.issues]
 
 
-def test_golden_three_slot_task_splits_around_pinned_a() -> None:
-    fixture = json.loads((FIXTURES / "split-around-pinned.json").read_text())
+def run_golden_fixture(fixture_path: Path) -> tuple[dict[str, Any], Any]:
+    fixture = json.loads(fixture_path.read_bytes())
     request = TimeFragmentPlanRequestV2.model_validate(fixture["request"])
     operations = TimeFragmentModelOperations.model_validate(fixture["modelOutput"])
+    injected_uuids: Iterator[UUID] = iter(
+        UUID(value) for value in fixture["injectedUUIDs"]
+    )
+    consumed_uuids: list[str] = []
+
+    def uuid_factory() -> UUID:
+        value = next(injected_uuids)
+        consumed_uuids.append(str(value))
+        return value
 
     response = plan_time_fragment(
         request,
         operations,
-        uuid_factory=lambda: UUID(fixture["injectedTemporaryId"]),
+        uuid_factory=uuid_factory,
     )
+    assert consumed_uuids == fixture["injectedUUIDs"]
+    return fixture, response
 
-    assert response.model_dump(mode="json", by_alias=True) == fixture["expectedResponse"]
-    task_b = item_by_id(response, fixture["injectedTemporaryId"])
+
+def contains_key(value: Any, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(contains_key(child, key) for child in value.values())
+    if isinstance(value, list):
+        return any(contains_key(child, key) for child in value)
+    return False
+
+
+def golden_response(case_name: str) -> dict[str, Any]:
+    fixture = json.loads((FIXTURES / f"{case_name}.json").read_bytes())
+    return fixture["expectedResponse"]
+
+
+def golden_segments(response: dict[str, Any], item_id: str) -> list[tuple[int, int]]:
+    item = next(
+        item
+        for item in response["proposal"]["candidatePlan"]["items"]
+        if item["itemId"] == item_id
+    )
+    return [(segment["startSlot"], segment["endSlot"]) for segment in item["segments"]]
+
+
+def golden_issue_codes(response: dict[str, Any]) -> list[str]:
+    return [issue["code"] for issue in response["validation"]["issues"]]
+
+
+@pytest.mark.parametrize(
+    "fixture_path",
+    GOLDEN_FIXTURE_PATHS,
+    ids=lambda fixture_path: fixture_path.stem,
+)
+def test_time_fragment_planner_golden_fixture(fixture_path: Path) -> None:
+    fixture, response = run_golden_fixture(fixture_path)
+    actual = response.model_dump(mode="json", by_alias=True)
+
+    assert set(fixture) == {
+        "case",
+        "request",
+        "modelOutput",
+        "injectedUUIDs",
+        "expectedResponse",
+    }
+    assert actual == fixture["expectedResponse"]
+    assert actual["requestID"] == fixture["request"]["requestID"]
+    assert actual["proposal"]["baseFingerprint"] == fixture["request"]["baseFingerprint"]
+    assert actual["proposal"]["candidatePlan"]["date"] == fixture["request"][
+        "currentPlan"
+    ]["date"]
+    assert actual["validation"]["attempts"] == 1
+    for private_key in ("authorizationText", "isExplicit", "status"):
+        assert contains_key(actual, private_key) is False
+    for item in actual["proposal"]["candidatePlan"]["items"]:
+        for segment in item["segments"]:
+            assert 0 <= segment["startSlot"] < segment["endSlot"] <= 96
+
+
+def test_golden_fixture_manifest_matches_exact_bytes_and_case_set() -> None:
+    manifest = json.loads(MANIFEST.read_bytes())
+    entries = manifest["fixtures"]
+    listed_names = [entry["file"] for entry in entries]
+    actual_names = {
+        path.name for path in FIXTURES.glob("*.json") if path.name != MANIFEST.name
+    }
+
+    assert manifest["hashAlgorithm"] == "SHA-256"
+    assert "excluded" in manifest["scope"]
+    assert listed_names == sorted(listed_names)
+    assert len(listed_names) == len(set(listed_names))
+    assert set(listed_names) == actual_names
+    assert {Path(name).stem for name in listed_names} == EXPECTED_GOLDEN_CASES
+    for entry in entries:
+        fixture_bytes = (FIXTURES / entry["file"]).read_bytes()
+        assert hashlib.sha256(fixture_bytes).hexdigest() == entry["sha256"]
+
+
+def test_golden_fixtures_cover_required_planner_semantics() -> None:
+    empty = golden_response("empty-day-default-duration")
+    empty_item = empty["proposal"]["candidatePlan"]["items"][0]
+    assert empty_item["durationSlots"] == 2
+    assert golden_segments(empty, empty_item["itemId"]) == [(32, 34)]
+
+    past = golden_response("past-history-unchanged")
+    moved_past = golden_response("past-explicit-move")
+    assert golden_segments(past, "past-history") == [(20, 22)]
+    assert golden_segments(moved_past, "past-move") == [(48, 50)]
+
+    pinned_unauthorized = golden_response("protected-pinned-unauthorized")
+    external_unauthorized = golden_response("protected-external-unauthorized")
+    assert golden_issue_codes(pinned_unauthorized) == ["PROTECTED_OBJECT"]
+    assert golden_segments(pinned_unauthorized, "pinned-a") == [(36, 38)]
+    assert golden_issue_codes(external_unauthorized) == ["PROTECTED_OBJECT"]
+    assert golden_segments(external_unauthorized, "external-protected") == [(40, 42)]
+
+    pinned_authorized = golden_response("protected-pinned-authorized")
+    external_authorized = golden_response("protected-external-authorized")
+    assert pinned_authorized["validation"]["valid"] is True
+    assert golden_segments(pinned_authorized, "pinned-authorized") == [(40, 41)]
+    assert external_authorized["validation"]["valid"] is True
+    assert golden_segments(external_authorized, "external-authorized") == [(60, 62)]
+
+    deleted_internal = golden_response("delete-existing-internal")
+    deleted_temporary = golden_response("delete-temporary")
+    assert deleted_internal["proposal"]["deletedOccurrenceIDs"] == [
+        "occurrence-delete"
+    ]
+    assert deleted_internal["proposal"]["deletedExternalEventIDs"] == []
+    assert deleted_temporary["proposal"]["candidatePlan"]["items"] == []
+    assert deleted_temporary["proposal"]["deletedOccurrenceIDs"] == []
+    assert deleted_temporary["proposal"]["deletedExternalEventIDs"] == []
+
+    for case_name, item_id in (
+        ("unplaced-internal-todo", "10000000-0000-4000-8000-000000000002"),
+        ("unplaced-external-todo", "external-unplaced"),
+    ):
+        unplaced = golden_response(case_name)
+        assert unplaced["validation"]["valid"] is True
+        assert golden_issue_codes(unplaced) == ["UNPLACED"]
+        assert golden_segments(unplaced, item_id) == []
+
+    priority = golden_response("priority-input-order")
+    assert golden_segments(priority, "10000000-0000-4000-8000-000000000003") == []
+    assert golden_segments(priority, "10000000-0000-4000-8000-000000000004") == []
+    assert golden_segments(priority, "10000000-0000-4000-8000-000000000005") == [
+        (32, 34)
+    ]
+
+    unknown = golden_response("unknown-target-failed-candidate")
+    assert unknown["proposal"] is not None
+    assert unknown["validation"]["valid"] is False
+    assert golden_issue_codes(unknown) == ["UNKNOWN_TARGET"]
+    assert golden_segments(unknown, "known-item") == [(36, 38)]
+
+    boundary = golden_response("cross-day-boundary-todo")
+    assert boundary["validation"]["valid"] is False
+    assert golden_issue_codes(boundary) == ["INVALID_TIME", "UNPLACED"]
+    assert golden_segments(
+        boundary, "10000000-0000-4000-8000-000000000006"
+    ) == []
+
+
+def test_golden_three_slot_task_splits_around_pinned_a() -> None:
+    fixture, response = run_golden_fixture(FIXTURES / "split-around-pinned.json")
+
+    task_b = item_by_id(response, fixture["injectedUUIDs"][0])
     assert [(segment.start_slot, segment.end_slot) for segment in task_b.segments] == [
         (40, 41),
         (42, 44),

@@ -1,0 +1,66 @@
+{
+  "hashAlgorithm": "SHA-256",
+  "scope": "Exact UTF-8 bytes of every listed fixture JSON file. manifest.json is excluded to avoid a self-referential hash cycle.",
+  "fixtures": [
+    {
+      "file": "cross-day-boundary-todo.json",
+      "sha256": "f8374c2bc4077e930e0e9cd9750454d2ae5b636be2d4cfcabe3ee87611ee8375"
+    },
+    {
+      "file": "delete-existing-internal.json",
+      "sha256": "9e01279e98b077eda39bb04e3e8a7574e30d6ce6675e4e7ba0c8d08011ef2861"
+    },
+    {
+      "file": "delete-temporary.json",
+      "sha256": "89ae7cb36aed834ea44879ceb2faf49e48b96303319c400011013fb24f8b437c"
+    },
+    {
+      "file": "empty-day-default-duration.json",
+      "sha256": "a47f5759fe57896c54d217ac74e6942c887069f893b9b547364507147be8b192"
+    },
+    {
+      "file": "past-explicit-move.json",
+      "sha256": "c20097b21eec322ce30f5f209c357a77d9d7d211627c13f55e043a5cc0254c29"
+    },
+    {
+      "file": "past-history-unchanged.json",
+      "sha256": "d8fde527cfb779a26825beac5ec3c9889d04655d287dba3e9f3dc762ce4cf241"
+    },
+    {
+      "file": "priority-input-order.json",
+      "sha256": "e54873b385a151a56cd7858cb537391320078d3a6625d18a3ec048fa4259772a"
+    },
+    {
+      "file": "protected-external-authorized.json",
+      "sha256": "0259d13c6bf16ff6b5dfe558255b555e39e2241f64f15b08041446ceecf8d7b7"
+    },
+    {
+      "file": "protected-external-unauthorized.json",
+      "sha256": "286d8ce95d8b9385099f85fe9506374601e460f42cfdd0d1ee8616d542de6631"
+    },
+    {
+      "file": "protected-pinned-authorized.json",
+      "sha256": "0be88b905daa35ffd48b1d9ad79eee9c486fd2e3b18181ab9a5da09ddabf553b"
+    },
+    {
+      "file": "protected-pinned-unauthorized.json",
+      "sha256": "26744b0fe5de9752a6b23b6d2c957807e034276c1cea44ffa9453f676eb9d8cc"
+    },
+    {
+      "file": "split-around-pinned.json",
+      "sha256": "77b7ba2824309d29d613dee7409fdb1709c066f3b0b2627d40ce7864aa8ab4f2"
+    },
+    {
+      "file": "unknown-target-failed-candidate.json",
+      "sha256": "8b42dcce53938861d9ee7dc94d4ff626514ace3893cbef27708e53dc221e4380"
+    },
+    {
+      "file": "unplaced-external-todo.json",
+      "sha256": "44b2a9f8b4463dacb33600f1ccb3798ec1dd26bcb6676fa33003d3e5d999f5d2"
+    },
+    {
+      "file": "unplaced-internal-todo.json",
+      "sha256": "fcd2d4594bbea332c0fbae0e15271b61a556c3f7f35f38bee33c4726a53ccf14"
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "case": "unplaced-internal-todo",
+  "request": {
+    "text": "新增两格任务",
+    "requestID": "request-golden-unplaced-internal-todo",
+    "baseFingerprint": "sha256:golden-unplaced-internal-todo-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "fixed-after-now",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "fixed-after-now"
+          },
+          "title": "固定占用",
+          "durationSlots": 63,
+          "segments": [
+            {
+              "startSlot": 33,
+              "endSlot": 96
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "add",
+        "title": "两格任务",
+        "durationSlots": 2,
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [
+    "10000000-0000-4000-8000-000000000002"
+  ],
+  "expectedResponse": {
+    "requestID": "request-golden-unplaced-internal-todo",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-unplaced-internal-todo-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "add",
+          "title": "两格任务",
+          "durationSlots": 2,
+          "placement": null,
+          "priority": null,
+          "inputOrder": 0,
+          "temporaryId": "10000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "fixed-after-now",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "fixed-after-now"
+            },
+            "title": "固定占用",
+            "durationSlots": 63,
+            "segments": [
+              {
+                "startSlot": 33,
+                "endSlot": 96
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          },
+          {
+            "itemId": "10000000-0000-4000-8000-000000000002",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "两格任务",
+            "durationSlots": 2,
+            "segments": [],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "warning",
+          "code": "UNPLACED",
+          "message": "对象「两格任务」在当天剩余空间中无法完整排下",
+          "itemId": "10000000-0000-4000-8000-000000000002",
+          "field": "segments"
+        }
+      ]
+    }
+  }
+}

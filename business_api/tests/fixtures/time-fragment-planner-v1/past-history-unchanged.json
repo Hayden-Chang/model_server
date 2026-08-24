@@ -1,0 +1,76 @@
+{
+  "case": "past-history-unchanged",
+  "request": {
+    "text": "保留今天已有计划",
+    "requestID": "request-golden-past-history-unchanged",
+    "baseFingerprint": "sha256:golden-past-history-unchanged-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "past-history",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-past-history",
+            "occurrenceId": "past-history",
+            "scheduledTaskId": "scheduled-past-history"
+          },
+          "title": "晨间任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 20,
+              "endSlot": 22
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T12:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": []
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-past-history-unchanged",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-past-history-unchanged-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "past-history",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-past-history",
+              "occurrenceId": "past-history",
+              "scheduledTaskId": "scheduled-past-history"
+            },
+            "title": "晨间任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 20,
+                "endSlot": 22
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}
