@@ -1033,6 +1033,152 @@ def test_negative_delete_language_does_not_authorize_protected_target(
     ]
 
 
+@pytest.mark.parametrize(
+    ("authorization_text", "item_id", "title", "object_type", "pinned", "completed"),
+    [
+        (
+            "不要把客户会议删除",
+            "external-protected",
+            "客户会议",
+            "externalEvent",
+            False,
+            False,
+        ),
+        (
+            "请不要将客户会议删除",
+            "external-protected",
+            "客户会议",
+            "externalEvent",
+            False,
+            False,
+        ),
+        (
+            "不要再删除钉住任务",
+            "pinned-protected",
+            "钉住任务",
+            "internalTask",
+            True,
+            False,
+        ),
+        (
+            "不要给我删除已完成任务",
+            "completed-protected",
+            "已完成任务",
+            "internalTask",
+            False,
+            True,
+        ),
+    ],
+)
+def test_delete_negation_with_intervening_words_does_not_authorize_protected_target(
+    authorization_text: str,
+    item_id: str,
+    title: str,
+    object_type: str,
+    pinned: bool,
+    completed: bool,
+) -> None:
+    item = (
+        external_item(item_id, title, 2, [(40, 42)])
+        if object_type == "externalEvent"
+        else internal_item(
+            item_id,
+            title,
+            2,
+            [(40, 42)],
+            pinned=pinned,
+            completed=completed,
+        )
+    )
+
+    response = plan_time_fragment(
+        request_with_items([item], text=authorization_text),
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": item_id,
+                    "objectType": object_type,
+                    "authorizationText": authorization_text,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    assert response.proposal.deleted_external_event_ids == []
+    assert response.proposal.deleted_occurrence_ids == []
+    assert [item.item_id for item in response.proposal.candidate_plan.items] == [item_id]
+
+
+def test_buyaole_followed_by_delete_negation_does_not_authorize_protected_target() -> None:
+    authorization_text = "客户会议不要了，请不要再删除客户会议"
+
+    response = plan_time_fragment(
+        request_with_items(
+            [external_item("external-protected", "客户会议", 2, [(40, 42)])],
+            text=authorization_text,
+        ),
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": "external-protected",
+                    "objectType": "externalEvent",
+                    "authorizationText": authorization_text,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert issue_codes(response) == ["PROTECTED_OBJECT"]
+    assert response.proposal.operations == []
+    assert response.proposal.deleted_external_event_ids == []
+    assert [item.item_id for item in response.proposal.candidate_plan.items] == [
+        "external-protected"
+    ]
+
+
+@pytest.mark.parametrize(
+    "authorization_text",
+    [
+        "客户会议不要了。",
+        "客户会议不要了，谢谢。",
+    ],
+)
+def test_buyaole_allows_trailing_politeness_and_punctuation(
+    authorization_text: str,
+) -> None:
+    response = plan_time_fragment(
+        request_with_items(
+            [external_item("external-protected", "客户会议", 2, [(40, 42)])],
+            text=authorization_text,
+        ),
+        model_output(
+            [
+                {
+                    "type": "delete",
+                    "targetItemId": "external-protected",
+                    "objectType": "externalEvent",
+                    "authorizationText": authorization_text,
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+    )
+
+    assert response.proposal is not None
+    assert response.validation.valid is True
+    assert [operation.type for operation in response.proposal.operations] == ["delete"]
+    assert response.proposal.deleted_external_event_ids == ["external-protected"]
+    assert response.proposal.candidate_plan.items == []
+
+
 def test_named_pinned_task_accepts_verbatim_affirmative_authorization() -> None:
     request = request_with_items(
         [internal_item("pinned-a", "A", 1, [(36, 37)], pinned=True)],

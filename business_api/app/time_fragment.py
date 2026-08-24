@@ -801,16 +801,25 @@ def _protected_operation_is_authorized(
     if not evidence or evidence not in request_text:
         return False
     clause = _clause_containing(request_text, evidence)
+    if operation.type == "delete":
+        is_affirmative_buyaole = _is_affirmative_buyaole_delete_evidence(evidence, item)
+        if "不要" in evidence and not is_affirmative_buyaole:
+            return False
+        if "不要" in clause and not _is_affirmative_buyaole_delete_evidence(clause, item):
+            return False
+        if is_affirmative_buyaole and _has_following_buyao_delete_negation(
+            request_text,
+            evidence,
+        ):
+            return False
+    elif "不要" in clause:
+        return False
     negative_markers = ("别", "无需", "不许", "不能", "禁止", "保持不变", "保持原样")
     operation_negative_markers = {
-        "move": ("不要",),
-        "changeDuration": ("不要",),
-        "changeTitle": ("不要",),
+        "move": (),
+        "changeDuration": (),
+        "changeTitle": (),
         "delete": (
-            "不要删除",
-            "不要删掉",
-            "不要移除",
-            "不要取消",
             "不删除",
             "不删掉",
             "不移除",
@@ -830,6 +839,38 @@ def _protected_operation_is_authorized(
     if item.title in evidence or item.item_id in evidence:
         return True
     return _evidence_scope_contains_item(evidence, item)
+
+
+def _is_affirmative_buyaole_delete_evidence(
+    evidence: str,
+    item: TimeFragmentPlanItem,
+) -> bool:
+    punctuation = " \t\r\n，,。；;！!？?、"
+    normalized = evidence.strip(punctuation)
+    for polite_prefix in ("请", "麻烦"):
+        if normalized.startswith(polite_prefix):
+            normalized = normalized[len(polite_prefix) :].lstrip(punctuation)
+            break
+    for polite_suffix in ("谢谢你", "谢谢", "麻烦了", "拜托了"):
+        if normalized.endswith(polite_suffix):
+            normalized = normalized[: -len(polite_suffix)].rstrip(punctuation)
+            break
+    return any(
+        normalized == f"{target_reference}不要了"
+        for target_reference in (item.title, item.item_id)
+    )
+
+
+def _has_following_buyao_delete_negation(request_text: str, evidence: str) -> bool:
+    evidence_end = request_text.find(evidence) + len(evidence)
+    following_text = request_text[evidence_end:]
+    search_start = 0
+    while (buyao_index := following_text.find("不要", search_start)) != -1:
+        after_buyao = following_text[buyao_index + len("不要") :]
+        if any(term in after_buyao for term in ("删除", "删掉", "移除", "取消")):
+            return True
+        search_start = buyao_index + len("不要")
+    return False
 
 
 def _clause_containing(text: str, evidence: str) -> str:
