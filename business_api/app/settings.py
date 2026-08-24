@@ -1,0 +1,23 @@
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, HttpUrl, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    business_api_key: SecretStr = Field(min_length=16)
+    litellm_base_url: HttpUrl = "http://litellm:4000"
+    litellm_master_key: SecretStr = Field(min_length=16)
+    litellm_model_alias: str = "primary-model"
+    structured_output_mode: Literal["json_schema", "json_object"] = "json_schema"
+    model_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
+    max_input_chars: int = Field(default=20_000, ge=1, le=200_000)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+

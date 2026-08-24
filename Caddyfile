@@ -1,0 +1,20 @@
+https://{$PUBLIC_IP} {
+    tls /etc/letsencrypt/live/{$PUBLIC_IP}/fullchain.pem /etc/letsencrypt/live/{$PUBLIC_IP}/privkey.pem
+
+    encode zstd gzip
+
+    header {
+        -Server
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+
+    reverse_proxy business-api:8000 {
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 120s
+        }
+    }
+}
+

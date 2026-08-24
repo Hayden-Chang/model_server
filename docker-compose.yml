@@ -1,0 +1,63 @@
+name: model-server
+
+services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    depends_on:
+      business-api:
+        condition: service_healthy
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:?PUBLIC_IP is required}
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+
+  business-api:
+    build:
+      context: ./business_api
+    restart: unless-stopped
+    depends_on:
+      - litellm
+    environment:
+      BUSINESS_API_KEY: ${BUSINESS_API_KEY:?BUSINESS_API_KEY is required}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}
+      LITELLM_MODEL_ALIAS: primary-model
+      STRUCTURED_OUTPUT_MODE: ${STRUCTURED_OUTPUT_MODE:-json_schema}
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.98.0
+    restart: unless-stopped
+    command:
+      - --config
+      - /app/config.yaml
+      - --port
+      - "4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL is required}
+      LLM_API_BASE: ${LLM_API_BASE:?LLM_API_BASE is required}
+      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
+    expose:
+      - "4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+
