@@ -438,6 +438,50 @@ def test_empty_day_add_uses_server_uuid_default_30_minutes_and_earliest_remainin
     assert [(segment.start_slot, segment.end_slot) for segment in added.segments] == [(32, 34)]
 
 
+def test_default_temporary_ids_make_identical_request_and_operations_byte_identical() -> None:
+    request = request_with_items([])
+    operations = model_output(
+        [
+            {"type": "add", "title": "第一项", "inputOrder": 0},
+            {"type": "add", "title": "第二项", "inputOrder": 1},
+        ]
+    )
+
+    first = plan_time_fragment(request, operations)
+    second = plan_time_fragment(request, operations)
+
+    assert first.proposal is not None
+    assert second.proposal is not None
+    assert first.proposal.model_dump_json(by_alias=True) == second.proposal.model_dump_json(
+        by_alias=True
+    )
+    temporary_ids = [operation.temporary_id for operation in first.proposal.operations]
+    assert len(set(temporary_ids)) == 2
+    assert all(temporary_id.version == 5 for temporary_id in temporary_ids)
+
+
+def test_default_temporary_id_collision_retry_is_stable() -> None:
+    operations = model_output([{"type": "add", "title": "新增", "inputOrder": 0}])
+    first = plan_time_fragment(request_with_items([]), operations)
+    assert first.proposal is not None
+    colliding_id = str(first.proposal.operations[0].temporary_id)
+    collision_request = request_with_items(
+        [internal_item(colliding_id, "已有", 2, [(36, 38)])]
+    )
+
+    collided = plan_time_fragment(collision_request, operations)
+    repeated = plan_time_fragment(collision_request, operations)
+
+    assert collided.proposal is not None
+    assert repeated.proposal is not None
+    replacement_id = str(collided.proposal.operations[0].temporary_id)
+    assert replacement_id != colliding_id
+    assert UUID(replacement_id).version == 5
+    assert collided.proposal.model_dump_json(by_alias=True) == repeated.proposal.model_dump_json(
+        by_alias=True
+    )
+
+
 def test_unknown_target_is_not_guessed_from_matching_title_and_candidate_is_retained() -> None:
     request = request_with_items([internal_item("occurrence-1", "写方案", 2, [(36, 38)])])
 

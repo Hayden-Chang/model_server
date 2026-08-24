@@ -2,7 +2,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Literal
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .contracts import (
     TimeFragmentAddOperation,
@@ -35,6 +35,10 @@ from .postprocessors import ModelOutputInvalid
 
 
 TIME_FRAGMENT_PLANNER_VERSION = "time-fragment-planner-v1"
+_TEMPORARY_ID_NAMESPACE = uuid5(
+    NAMESPACE_URL,
+    "https://timefragment.app/time-fragment-plan-v2/temporary-id",
+)
 
 
 def validate_plan_for_request(plan: TimeFragmentPlanResponse, now: str) -> None:
@@ -141,7 +145,7 @@ def plan_time_fragment(
     model_output: TimeFragmentModelOperations,
     *,
     attempts: Literal[1, 2] = 1,
-    uuid_factory: Callable[[], UUID] = uuid4,
+    uuid_factory: Callable[[], UUID] | None = None,
 ) -> TimeFragmentPlanResponseV2:
     """Expand parsed model operations into a complete, deterministic candidate plan.
 
@@ -156,6 +160,7 @@ def plan_time_fragment(
     normalized_operations = _normalize_operations(
         model_output,
         base_index,
+        request_id=request.request_id,
         existing_item_ids=set(base_counts),
         uuid_factory=uuid_factory,
     )
@@ -754,17 +759,30 @@ def _normalize_operations(
     model_output: TimeFragmentModelOperations,
     base_index: dict[str, TimeFragmentPlanItem],
     *,
+    request_id: str,
     existing_item_ids: set[str],
-    uuid_factory: Callable[[], UUID],
+    uuid_factory: Callable[[], UUID] | None,
 ) -> list[TimeFragmentOperation]:
     used_ids = set(existing_item_ids)
     normalized: list[TimeFragmentOperation] = []
-    for operation in model_output.operations:
+    for operation_index, operation in enumerate(model_output.operations):
         operation_data = operation.model_dump(mode="json", by_alias=True)
         if isinstance(operation, TimeFragmentModelAddOperation):
-            temporary_id = uuid_factory()
+            collision_index = 0
+            temporary_id = _next_temporary_id(
+                request_id=request_id,
+                operation_index=operation_index,
+                collision_index=collision_index,
+                uuid_factory=uuid_factory,
+            )
             while str(temporary_id) in used_ids:
-                temporary_id = uuid_factory()
+                collision_index += 1
+                temporary_id = _next_temporary_id(
+                    request_id=request_id,
+                    operation_index=operation_index,
+                    collision_index=collision_index,
+                    uuid_factory=uuid_factory,
+                )
             used_ids.add(str(temporary_id))
             operation_data["temporaryId"] = temporary_id
             normalized.append(TimeFragmentAddOperation.model_validate(operation_data))
@@ -781,6 +799,19 @@ def _normalize_operations(
         }[operation.type]
         normalized.append(operation_type.model_validate(operation_data))
     return normalized
+
+
+def _next_temporary_id(
+    *,
+    request_id: str,
+    operation_index: int,
+    collision_index: int,
+    uuid_factory: Callable[[], UUID] | None,
+) -> UUID:
+    if uuid_factory is not None:
+        return uuid_factory()
+    seed = f"{len(request_id)}:{request_id}:{operation_index}:{collision_index}"
+    return uuid5(_TEMPORARY_ID_NAMESPACE, seed)
 
 
 def _is_protected(item: TimeFragmentPlanItem) -> bool:
