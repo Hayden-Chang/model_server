@@ -14,6 +14,7 @@ def make_settings(mode: str) -> Settings:
         litellm_master_key="litellm-test-key-with-32-characters",
         litellm_base_url="http://litellm:4000",
         structured_output_mode=mode,
+        time_fragment_token_secret="time-fragment-test-token-secret-with-32-characters",
     )
 
 
@@ -41,4 +42,3 @@ def test_structured_output_mode_is_applied(monkeypatch: pytest.MonkeyPatch, mode
 
     assert captured["model"] == "primary-model"
     assert captured["response_format"]["type"] == expected_type
-

@@ -19,6 +19,8 @@ and known limitations are documented in [architecture.md](docs/architecture.md).
 ```text
 POST /v1/pipelines/general-text-v1:run
 POST /v1/pipelines/general-analysis-v1:run
+POST /api/auth/guest
+POST /api/plan/parse
 GET  /health/live
 GET  /health/ready
 ```
@@ -46,6 +48,31 @@ curl --fail-with-body \
 Clients choose a versioned business pipeline, not a provider model. That keeps
 provider swaps inside LiteLLM and prompt/schema changes inside a new pipeline
 version.
+
+## Time Fragment API
+
+The iOS app uses a stateless guest token instead of embedding the business API
+key. Its existing request and response contract is exposed directly by this
+service:
+
+```bash
+TOKEN="$(curl --fail-with-body --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -d '{"device_id":"time-fragment-ios-example-device"}' \
+  "https://${PUBLIC_IP}/api/auth/guest" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+curl --fail-with-body \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"9点到10点写周报","currentPlan":null,"now":"2026-08-24T08:00:00+08:00"}' \
+  "https://${PUBLIC_IP}/api/plan/parse"
+```
+
+`/api/plan/parse` uses the server-owned `time-fragment-plan-v1` pipeline and
+returns `{ "tasks": [...] }`. Model and business credentials never leave the
+server. The guest token identifies an installation and enables a per-process
+request limit; it is not an account or a durable anti-abuse boundary.
 
 ## Local development
 

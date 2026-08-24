@@ -163,6 +163,26 @@ POST /v1/pipelines/{pipeline_id}:run
 | `GET /health/live` | Business API 进程可以响应 | 否 |
 | `GET /health/ready` | Business API 能访问 LiteLLM 的存活接口 | 否 |
 
+### 5.3 Time Fragment 客户端兼容接口
+
+```text
+POST /api/auth/guest
+POST /api/plan/parse
+```
+
+`/api/auth/guest` 接收当前 iOS 已有的 `{device_id}` 请求。服务只把完整设备标识
+用于计算 SHA-256 摘要，签发带过期时间的 HMAC 令牌；令牌载荷不包含原始设备标识。
+`/api/plan/parse` 只接受这种游客 Bearer 令牌，继续沿用项目既有的
+`{text,currentPlan,now} -> {tasks}` 契约，因此 App 不需要持有 `BUSINESS_API_KEY`。
+
+该接口内部固定选择 `time-fragment-plan-v1`。Pipeline 拥有系统提示词、模型参数和
+输出 Schema；路由在 Schema 校验之后继续确定性检查当天边界、15 分钟网格、任务
+排序和重叠。任何不适合 Time Fragment 原子应用的模型输出都会以
+`502 MODEL_OUTPUT_INVALID` 结束，不会下发给客户端。
+
+游客调用按令牌主体做进程内分钟限流。它保护单个安装的正常误触或重试风暴，但服务
+重启会清空计数，且攻击者仍可申请新设备令牌，因此不能替代网关级配额或正式账号权限。
+
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
 
 ## 6. Pipeline 是业务层的版本化配置
@@ -209,6 +229,9 @@ deepseek-v4-flash
 | `LLM_API_BASE` | LiteLLM | 外部供应商 API 地址 |
 | `LLM_API_KEY` | LiteLLM | 外部供应商密钥 |
 | `STRUCTURED_OUTPUT_MODE` | Business API | `json_schema` 或 `json_object` |
+| `TIME_FRAGMENT_TOKEN_SECRET` | Business API | 签发 Time Fragment 游客令牌，至少 32 字符 |
+| `TIME_FRAGMENT_TOKEN_TTL_SECONDS` | Business API | 游客令牌有效期，默认 30 天 |
+| `TIME_FRAGMENT_REQUESTS_PER_MINUTE` | Business API | 每个游客主体每分钟 AI 请求数，默认 10 |
 
 `Settings` 还定义了当前默认值：
 
@@ -231,6 +254,7 @@ deepseek-v4-flash
 | `502` | `MODEL_GATEWAY_ERROR` | LiteLLM 拒绝请求或返回格式错误 |
 | `502` | `MODEL_OUTPUT_INVALID` | 模型结果无法通过后处理和 Schema 校验 |
 | `503` | `MODEL_GATEWAY_UNAVAILABLE` | 无法连接 LiteLLM，或 LiteLLM 返回 5xx |
+| `429` | `RATE_LIMITED` | Time Fragment 游客超过进程内分钟限额 |
 
 所有 HTTP 响应都会带 `X-Request-ID`，可用于串联客户端错误与服务日志。
 
@@ -297,6 +321,7 @@ LLM_API_KEY
 - 流式响应、异步任务和批处理接口。
 - 数据库、对话历史、缓存和持久化费用记录。
 - 按调用方的限流、配额、租户和权限模型。
+- 可持久化、可撤销的 Time Fragment 游客令牌和跨实例共享限流。
 - 完整的指标、分布式追踪和集中日志平台。
 - 后处理层的独立容器部署。
 

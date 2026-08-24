@@ -22,3 +22,16 @@ curl --fail-with-body --silent --show-error \
   -d '{"input":"Analyze the main risk of deploying without health checks."}' \
   "${base_url}/v1/pipelines/general-analysis-v1:run"
 printf '\n'
+
+token="$(curl --fail-with-body --silent --show-error \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"time-fragment-production-smoke"}' \
+  "${base_url}/api/auth/guest" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: Bearer ${token}" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"9点到10点写周报","currentPlan":null,"now":"2026-08-24T08:00:00+08:00"}' \
+  "${base_url}/api/plan/parse"
+printf '\n'
