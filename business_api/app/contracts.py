@@ -79,7 +79,7 @@ class TimeFragmentPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     text: str = Field(min_length=1, max_length=4_000)
-    current_plan: TimeFragmentCurrentPlan | None = Field(alias="currentPlan")
+    current_plan: TimeFragmentCurrentPlan = Field(alias="currentPlan")
     now: str
 
     @field_validator("text")

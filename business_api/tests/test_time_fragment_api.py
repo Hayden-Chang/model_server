@@ -45,6 +45,16 @@ def guest_headers(client: TestClient, device_id: str = "time-fragment-ios-device
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def empty_current_plan() -> dict[str, Any]:
+    return {
+        "id": "plan_20260824_ai",
+        "date": "2026-08-24",
+        "taskIds": [],
+        "tasks": [],
+        "checkins": [],
+    }
+
+
 def valid_output() -> ModelOutput:
     return ModelOutput(
         content=json.dumps(
@@ -86,7 +96,7 @@ def test_plan_parse_rejects_missing_or_invalid_guest_token(
         response = client.post(
             "/api/plan/parse",
             headers=headers,
-            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
+            json={"text": "列计划", "currentPlan": empty_current_plan(), "now": "2026-08-24T08:00:00+08:00"},
         )
 
     assert response.status_code == 401
@@ -154,13 +164,26 @@ def test_plan_parse_task_contract_does_not_include_status(settings: Settings) ->
         response = client.post(
             "/api/plan/parse",
             headers=guest_headers(client),
-            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
+            json={"text": "列计划", "currentPlan": empty_current_plan(), "now": "2026-08-24T08:00:00+08:00"},
         )
 
     assert response.status_code == 200
     task_schema = fake.calls[0][0].response_schema["properties"]["tasks"]["items"]
     assert "status" not in task_schema["required"]
     assert "status" not in task_schema["properties"]
+
+
+def test_plan_parse_rejects_null_current_plan(settings: Settings) -> None:
+    fake = FakeModelClient(valid_output())
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
+        )
+
+    assert response.status_code == 422
+    assert fake.calls == []
 
 
 @pytest.mark.parametrize(
@@ -183,7 +206,7 @@ def test_plan_parse_rejects_output_that_time_fragment_cannot_apply(
         response = client.post(
             "/api/plan/parse",
             headers=guest_headers(client),
-            json={"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00"},
+            json={"text": "列计划", "currentPlan": empty_current_plan(), "now": "2026-08-24T08:00:00+08:00"},
         )
 
     assert response.status_code == 502
@@ -200,7 +223,7 @@ def test_plan_parse_does_not_rate_limit_guest_requests(settings: Settings) -> No
                 headers=headers,
                 json={
                     "text": f"第 {index + 1} 次列计划",
-                    "currentPlan": None,
+                    "currentPlan": empty_current_plan(),
                     "now": "2026-08-24T08:00:00+08:00",
                 },
             )
@@ -214,8 +237,13 @@ def test_plan_parse_does_not_rate_limit_guest_requests(settings: Settings) -> No
 @pytest.mark.parametrize(
     "payload",
     [
-        {"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00"},
-        {"text": "列计划", "currentPlan": None, "now": "2026-08-24T08:00:00+08:00", "extra": True},
+        {"text": "列计划", "currentPlan": empty_current_plan(), "now": "2026-08-24T08:00:00"},
+        {
+            "text": "列计划",
+            "currentPlan": empty_current_plan(),
+            "now": "2026-08-24T08:00:00+08:00",
+            "extra": True,
+        },
     ],
 )
 def test_plan_parse_rejects_requests_outside_project_contract(settings: Settings, payload: dict) -> None:
