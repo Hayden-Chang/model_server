@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from .admin_dashboard import ADMIN_DASHBOARD_HEADERS, ADMIN_DASHBOARD_HTML
 from .contracts import (
     ModelMetadata,
     RunRequest,
@@ -69,6 +70,9 @@ def create_app(
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
+        if request.url.path.startswith("/admin/observability"):
+            response.headers["cache-control"] = "no-store"
+            response.headers["x-content-type-options"] = "nosniff"
         return response
 
     async def require_api_key(authorization: str | None = Header(default=None)) -> None:
@@ -187,6 +191,11 @@ def create_app(
         is_ready = await client.is_ready()
         status_code = status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=status_code, content={"status": "ready" if is_ready else "not_ready"})
+
+    @app.get("/admin/observability", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/admin/observability/ui", response_class=HTMLResponse, include_in_schema=False)
+    async def observability_dashboard() -> HTMLResponse:
+        return HTMLResponse(ADMIN_DASHBOARD_HTML, headers=ADMIN_DASHBOARD_HEADERS)
 
     @app.post("/api/auth/guest", response_model=TimeFragmentGuestResponse)
     async def time_fragment_guest(payload: TimeFragmentGuestRequest) -> TimeFragmentGuestResponse:

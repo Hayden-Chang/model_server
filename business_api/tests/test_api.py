@@ -65,6 +65,26 @@ def test_liveness_does_not_require_authentication(settings: Settings) -> None:
     assert response.headers["x-request-id"]
 
 
+@pytest.mark.parametrize("path", ["/admin/observability", "/admin/observability/ui"])
+def test_observability_dashboard_loads_without_embedding_admin_key(
+    settings: Settings,
+    path: str,
+) -> None:
+    with TestClient(create_app(settings, FakeModelClient())) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "connect-src 'self'" in response.headers["content-security-policy"]
+    assert "模型调用观测" in response.text
+    assert "/admin/observability/summary" in response.text
+    assert "/admin/observability/requests" in response.text
+    assert "sessionStorage" in response.text
+    assert ADMIN_KEY not in response.text
+
+
 @pytest.mark.parametrize("header", [None, "Bearer wrong-key"])
 def test_pipeline_rejects_missing_or_invalid_authentication(settings: Settings, header: str | None) -> None:
     headers = {} if header is None else {"Authorization": header}

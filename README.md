@@ -24,6 +24,7 @@ POST /api/auth/guest
 POST /api/plan/parse
 GET  /admin/observability/requests
 GET  /admin/observability/summary
+GET  /admin/observability
 GET  /health/live
 GET  /health/ready
 ```
@@ -121,6 +122,11 @@ business or guest credentials:
 GET /admin/observability/requests?device_id=<installation-id>&start_time=<ISO-8601>&end_time=<ISO-8601>
 GET /admin/observability/summary?device_key=<guest-key>&start_time=<ISO-8601>&end_time=<ISO-8601>
 ```
+
+Open `https://${PUBLIC_IP}/admin/observability` for the browser dashboard. The
+page itself contains no data or credentials. Enter `ADMIN_API_KEY` in the login
+form; the key is kept only in that tab's `sessionStorage` and sent as a Bearer
+header to the management endpoints. It is never placed in the URL.
 
 Raw API and model-call content is removed after
 `USAGE_CONTENT_RETENTION_DAYS` (30 by default). Device, status, timing, model-call
