@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.tx
 
 COPY app ./app
 
+RUN mkdir -p /var/lib/model-server && chown 10001:10001 /var/lib/model-server
+
 USER 10001:10001
 
 EXPOSE 8000

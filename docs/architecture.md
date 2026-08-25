@@ -5,11 +5,12 @@
 
 ## 1. 当前实现概览
 
-项目是一套无数据库的 API-first 大模型服务，当前运行约束为：
+项目是一套 API-first 大模型服务，当前运行约束为：
 
 - 3 个容器：`caddy`、`business-api`、`litellm`。
 - 1 个公网端口：只有 Caddy 发布 `443`。
-- 0 个数据库：Pipeline、模型路由和 Schema 都由代码或配置文件维护。
+- Pipeline、模型路由和 Schema 仍由代码或配置文件维护，没有业务数据库。
+- Business API 使用一个持久化 SQLite 文件保存模型请求审计和 Token 聚合数据。
 - 客户端选择版本化的业务 Pipeline，不直接选择供应商模型。
 - 后处理是独立的代码层，但目前和业务层运行在同一个 `business-api` 容器中。
 
@@ -18,6 +19,7 @@ flowchart LR
     Client[业务客户端] -->|HTTPS :443\nBUSINESS_API_KEY| Caddy[Caddy\nTLS 与反向代理]
     Caddy -->|HTTP :8000\nDocker 私有网络| API[Business API\n鉴权、Pipeline、编排]
     API -->|HTTP :4000\nLITELLM_MASTER_KEY| Gateway[LiteLLM\n模型别名与供应商适配]
+    API --> Usage[(SQLite\n请求、模型调用、Token)]
     Gateway -->|HTTPS\nLLM_API_KEY| Provider[外部模型供应商]
     Provider --> Gateway
     Gateway --> API
@@ -37,6 +39,7 @@ flowchart LR
 | 大模型层 | `model_client.py` 与 `litellm` 容器 | 形成 OpenAI 兼容请求、内部鉴权、模型别名解析、供应商适配、响应归一化 | 公开业务 API、最终业务结果校验 |
 | 确定性规划层 | `business-api` 容器中的 `time_fragment.py` | 把 V2 operations 应用于完整基线，生成时间片、显式删除集合和完整 PlanProposal，并执行领域无关的确定性校验 | App 本地领域写入、状态或 EventKit 回写 |
 | 后处理层 | `business-api` 容器中的 `postprocessors.py`、`time_fragment_postprocessor.py` | 文本清理、JSON 解析、Schema 校验、Time Fragment operations 解析和纠错输入构造 | 模型选择、外部网络调用 |
+| 可观测性层 | `observability.py`、`usage_store.py`、SQLite Docker Volume | 匿名设备维度、请求/响应原文、逐模型调用、Token、状态和耗时 | 用户账户、付费额度、安全鉴权 |
 | 部署运维 | Compose、部署脚本和证书配置 | 容器编排、健康检查、证书续期、生产验证 | 业务逻辑 |
 
 这里的“分层”首先是代码职责边界，不完全等同于容器边界。当前业务层和后处理层可以独立修改代码，但发布时会一起重建 `business-api` 镜像。
@@ -63,6 +66,8 @@ model_server/
 │   │   ├── factory.py                # 路由、中间件、鉴权和总流程编排
 │   │   ├── pipelines.py              # Pipeline、提示词、参数和 Schema
 │   │   ├── model_client.py            # business-api 到 LiteLLM 的适配器
+│   │   ├── observability.py            # 单次模型调用采集和 Token 归一化
+│   │   ├── usage_store.py              # SQLite 明细、保留期和聚合查询
 │   │   ├── postprocessors.py          # 普通文本和结构化结果后处理
 │   │   ├── time_fragment.py           # V2 确定性排程、Proposal 生成和校验
 │   │   ├── time_fragment_service.py   # Time Fragment 最多两次模型调用编排
@@ -116,6 +121,8 @@ Content-Type: application/json
 11. LiteLLM 把供应商响应归一化为 Chat Completions 响应；`model_client.py` 提取 `choices[0].message.content`、供应商模型名和 token 用量。
 12. 普通文本 Pipeline 调用 `process_text()`；结构化 Pipeline 调用 `process_structured()`。
 13. 业务层组装 `RunResponse`，经过 Caddy 以 HTTPS 返回客户端。
+14. 可观测性层把顶层请求和每次模型调用写入 SQLite；写入异常会记录服务错误，
+    但不会把已经成功的模型调用改成业务失败。
 
 服务之间有三套不同的鉴权边界：
 
@@ -163,6 +170,9 @@ POST /v1/pipelines/{pipeline_id}:run
 ```
 
 `usage` 由供应商响应决定，也可能是 `null`。
+
+通用 Pipeline 可选发送 `X-Device-ID`。服务仅保存稳定的 `guest_...` 摘要；未发送时
+记录为 `unattributed`。它只是统计维度，不参与鉴权。
 
 ### 5.2 健康接口
 
@@ -230,8 +240,23 @@ API 调用最多调用模型两次。第二次可解析但仍有语义错误时�
 LiteLLM 不可达或返回 5xx 返回 503。这些错误发生时不返回伪造的 PlanProposal。
 
 Time Fragment 路由没有应用层请求频率限制、限流状态或限流缓存，也不生成应用层
-429。当前 guest 只是无数据库的设备级身份；注册登录、正式用户 Session、游客升级、
-持久配额、调用审计、成本记账以及上线阶段的地区/合规路由均未实现。
+429。当前 guest 只是设备级匿名身份；注册登录、正式用户 Session、游客升级、
+持久配额、成本记账以及上线阶段的地区/合规路由均未实现。
+
+### 5.4 可观测性管理接口
+
+```text
+GET /admin/observability/requests
+GET /admin/observability/summary
+```
+
+两者只接受独立的 `ADMIN_API_KEY`。明细接口可通过原始 `device_id`（服务现场计算摘要）
+或已知 `device_key`、ISO 8601 起止时间筛选，并返回顶层业务请求及其逐次模型调用。
+聚合接口返回整体和逐设备的请求数、成功/失败数、模型调用数、Token 合计、Token
+上报请求数、平均耗时以及首次/最近请求时间。
+
+原始业务请求、业务响应、模型输入和模型输出默认保留 30 天，之后置空；设备摘要、
+状态、耗时和 Token 元数据继续保留。鉴权头和 Bearer Token 不进入 SQLite。
 
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
 

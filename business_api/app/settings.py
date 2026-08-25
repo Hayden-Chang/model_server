@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     max_input_chars: int = Field(default=20_000, ge=1, le=200_000)
     time_fragment_token_secret: SecretStr = Field(min_length=32)
     time_fragment_token_ttl_seconds: int = Field(default=2_592_000, ge=300, le=31_536_000)
+    admin_api_key: SecretStr | None = Field(default=None, min_length=16)
+    usage_db_path: str = ":memory:"
+    usage_content_retention_days: int = Field(default=30, ge=1, le=365)
 
 
 @lru_cache

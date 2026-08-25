@@ -16,7 +16,7 @@ class GuestTokenCodec:
 
     def issue(self, device_id: str, now: float | None = None) -> str:
         issued_at = int(time.time() if now is None else now)
-        subject = "guest_" + hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:24]
+        subject = self.device_key(device_id)
         payload = {
             "aud": "time-fragment-ios",
             "exp": issued_at + self._ttl_seconds,
@@ -52,6 +52,10 @@ class GuestTokenCodec:
         ):
             raise GuestTokenError("invalid or expired guest token")
         return subject
+
+    @staticmethod
+    def device_key(device_id: str) -> str:
+        return "guest_" + hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:24]
 
     @staticmethod
     def _encode(value: bytes) -> str:

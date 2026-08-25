@@ -10,6 +10,7 @@ from app.settings import Settings
 
 
 API_KEY = "business-test-key-with-32-characters"
+ADMIN_KEY = "admin-test-key-with-32-characters"
 
 
 @dataclass
@@ -43,11 +44,16 @@ def settings() -> Settings:
         litellm_base_url="http://litellm:4000",
         max_input_chars=10,
         time_fragment_token_secret="time-fragment-test-token-secret-with-32-characters",
+        admin_api_key=ADMIN_KEY,
     )
 
 
 def authorized_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {API_KEY}"}
+
+
+def admin_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {ADMIN_KEY}"}
 
 
 def test_liveness_does_not_require_authentication(settings: Settings) -> None:
@@ -194,3 +200,74 @@ def test_readiness_reflects_gateway_state(settings: Settings) -> None:
 
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
+
+
+def test_observability_records_content_tokens_and_aggregates_by_device(settings: Settings) -> None:
+    device_a = "generic-ios-device-a-1234"
+    device_b = "generic-ios-device-b-1234"
+    with TestClient(create_app(settings, FakeModelClient())) as client:
+        for request_id, device_id, content in (
+            ("request-a-1", device_a, "hello"),
+            ("request-a-2", device_a, "world"),
+            ("request-b-1", device_b, "other"),
+        ):
+            response = client.post(
+                "/v1/pipelines/general-text-v1:run",
+                headers={
+                    **authorized_headers(),
+                    "X-Device-ID": device_id,
+                    "X-Request-ID": request_id,
+                },
+                json={"input": content},
+            )
+            assert response.status_code == 200
+
+        detail = client.get(
+            "/admin/observability/requests",
+            headers=admin_headers(),
+            params={"device_id": device_a},
+        )
+        summary = client.get(
+            "/admin/observability/summary",
+            headers=admin_headers(),
+        )
+
+    assert detail.status_code == 200
+    assert detail.json()["total"] == 2
+    record = detail.json()["records"][0]
+    assert record["request_content"] == {"input": "world"}
+    assert record["response_content"]["result"] == "A concise answer."
+    assert record["usage"] == {
+        "prompt_tokens": 5,
+        "completion_tokens": 4,
+        "total_tokens": 9,
+    }
+    assert record["model_calls"][0]["input_content"] == "world"
+    assert summary.status_code == 200
+    assert summary.json()["totals"]["request_count"] == 3
+    assert summary.json()["totals"]["total_tokens"] == 27
+    assert len(summary.json()["devices"]) == 2
+
+
+def test_observability_requires_admin_key_and_records_gateway_failure(settings: Settings) -> None:
+    fake = FakeModelClient(error=ModelGatewayUnavailable("model gateway is unavailable"))
+    with TestClient(create_app(settings, fake)) as client:
+        failed = client.post(
+            "/v1/pipelines/general-text-v1:run",
+            headers={**authorized_headers(), "X-Device-ID": "generic-ios-device-failure"},
+            json={"input": "hello"},
+        )
+        unauthorized = client.get("/admin/observability/requests")
+        records = client.get(
+            "/admin/observability/requests",
+            headers=admin_headers(),
+            params={"device_id": "generic-ios-device-failure"},
+        )
+
+    assert failed.status_code == 503
+    assert unauthorized.status_code == 401
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status_code"] == 503
+    assert record["usage"] is None
+    assert record["model_calls"][0]["error_type"] == "ModelGatewayUnavailable"

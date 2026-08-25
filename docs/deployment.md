@@ -54,7 +54,8 @@ install -m 0755 caddy /opt/model_server/caddy/caddy
 ```
 
 Copy `.env.example` to `.env`, replace every placeholder with independent
-secrets/provider settings, then:
+secrets/provider settings, including a dedicated `ADMIN_API_KEY` for the
+read-only observability endpoints, then:
 
 ```bash
 cd /opt/model_server
@@ -66,12 +67,15 @@ sudo docker compose ps
 ```
 
 Never commit `.env`. Only Caddy should show a published host port in
-`docker compose ps`.
+`docker compose ps`. The named `model-server-usage` volume stores SQLite data
+across `business-api` container rebuilds. Back up or migrate that volume before
+removing it; `docker compose down` without `--volumes` preserves it.
 
 ## Production verification
 
 After deployment, run the repository smoke script from `/opt/model_server` with
-`PUBLIC_IP` and `BUSINESS_API_KEY` already present in the operator's environment:
+`PUBLIC_IP`, `BUSINESS_API_KEY`, and `ADMIN_API_KEY` already present in the
+operator's environment:
 
 ```bash
 cd /opt/model_server
@@ -112,5 +116,7 @@ general Pipeline responses and a concise Time Fragment success summary.
 
 This smoke verifies the currently deployed request path and one real model
 response. It does not prove or provision formal accounts, persistent quotas,
-audit storage, cost accounting, regional routing, compliance presentation, or
-additional gateway anti-abuse controls; those capabilities are not implemented.
+cost accounting, regional routing, compliance presentation, or additional
+gateway anti-abuse controls. The smoke also queries the observability summary
+for its Time Fragment device and confirms that the just-completed request and
+reported Token metadata are visible; it does not inspect or print raw content.
