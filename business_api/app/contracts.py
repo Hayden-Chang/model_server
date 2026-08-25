@@ -33,6 +33,78 @@ class RunResponse(BaseModel):
     model: ModelMetadata
 
 
+class TokenUsageMetadata(BaseModel):
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+
+
+class ModelCallRecord(BaseModel):
+    call_index: int = Field(ge=1)
+    pipeline: str
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: int = Field(ge=0)
+    input_content: str | None
+    output_content: str | None
+    provider_model: str | None
+    usage: TokenUsageMetadata | None
+    usage_complete: bool
+    error_type: str | None
+    error_message: str | None
+
+
+class UsageRecordResponse(BaseModel):
+    id: int = Field(ge=1)
+    request_id: str
+    device_key: str
+    route: str
+    pipeline: str
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: int = Field(ge=0)
+    status_code: int
+    request_content: Any | None
+    response_content: Any | None
+    model_call_count: int = Field(ge=0)
+    usage: TokenUsageMetadata | None
+    usage_complete: bool
+    model_calls: list[ModelCallRecord]
+
+
+class UsageRecordListResponse(BaseModel):
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+    records: list[UsageRecordResponse]
+
+
+class UsageAggregate(BaseModel):
+    request_count: int = Field(ge=0)
+    successful_requests: int = Field(ge=0)
+    failed_requests: int = Field(ge=0)
+    model_call_count: int = Field(ge=0)
+    token_reported_requests: int = Field(ge=0)
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    average_duration_ms: float = Field(ge=0)
+    first_request_at: datetime | None
+    last_request_at: datetime | None
+
+
+class DeviceUsageAggregate(UsageAggregate):
+    device_key: str
+
+
+class UsageSummaryResponse(BaseModel):
+    device_key: str | None
+    start_time: datetime | None
+    end_time: datetime | None
+    totals: UsageAggregate
+    devices: list[DeviceUsageAggregate]
+
+
 class TimeFragmentGuestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -1,6 +1,7 @@
 # Model Server
 
-An API-first LLM service with three runtime containers and no database:
+An API-first LLM service with three runtime containers and an embedded SQLite
+observability store:
 
 1. **Caddy** exposes the single public HTTPS port (`443`).
 2. **Business API** owns authentication, versioned pipelines, prompt assembly,
@@ -21,6 +22,9 @@ POST /v1/pipelines/general-text-v1:run
 POST /v1/pipelines/general-analysis-v1:run
 POST /api/auth/guest
 POST /api/plan/parse
+GET  /admin/observability/requests
+GET  /admin/observability/summary
+GET  /admin/observability
 GET  /health/live
 GET  /health/ready
 ```
@@ -30,6 +34,7 @@ Example:
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer ${BUSINESS_API_KEY}" \
+  -H 'X-Device-ID: example-installation-id-1234' \
   -H 'Content-Type: application/json' \
   -d '{"input":"Explain why the sky is blue in two sentences."}' \
   "https://${PUBLIC_IP}/v1/pipelines/general-text-v1:run"
@@ -93,10 +98,40 @@ and 503 as applicable.
 
 There is no application-layer request-rate limiter and this route does not
 return an application-generated 429. The current guest token identifies one
-installation; it is not an account, persistent quota, audit trail, or durable
-anti-abuse boundary. Registration, user sessions, account upgrades, persistent
-usage accounting, and launch-stage compliance/routing controls are not
-implemented.
+installation; it is not an account, persistent quota, or durable anti-abuse
+boundary. Registration, user sessions, account upgrades, persistent quotas,
+cost accounting, and launch-stage compliance/routing controls are not implemented.
+
+## Observability API
+
+Every authenticated model-backed request is stored with its pseudonymous
+`device_key`, public request and response content, status, total duration, and
+aggregated token usage. Each provider call is stored separately so a Time
+Fragment correction request remains visible as a second model call.
+
+Generic Pipeline clients may send an installation identifier in `X-Device-ID`.
+The server stores the same stable `guest_...` SHA-256-derived key used by the
+existing Time Fragment guest token, never the original identifier. Without the
+header, generic requests are grouped under `unattributed`. This identifier is
+for analytics only and is not an authentication or quota boundary.
+
+The read-only management endpoints require `ADMIN_API_KEY`, not the client-facing
+business or guest credentials:
+
+```text
+GET /admin/observability/requests?device_id=<installation-id>&start_time=<ISO-8601>&end_time=<ISO-8601>
+GET /admin/observability/summary?device_key=<guest-key>&start_time=<ISO-8601>&end_time=<ISO-8601>
+```
+
+Open `https://${PUBLIC_IP}/admin/observability` for the browser dashboard. The
+page itself contains no data or credentials. Enter `ADMIN_API_KEY` in the login
+form; the key is kept only in that tab's `sessionStorage` and sent as a Bearer
+header to the management endpoints. It is never placed in the URL.
+
+Raw API and model-call content is removed after
+`USAGE_CONTENT_RETENTION_DAYS` (30 by default). Device, status, timing, model-call
+count, and token metadata remain. Authorization headers and Bearer tokens are
+never persisted. The SQLite database lives in a dedicated Docker volume.
 
 Run the dynamic production smoke in [deployment.md](docs/deployment.md) to
 exercise guest authentication and the full V2 planning response without

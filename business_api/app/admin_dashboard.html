@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>模型调用观测</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc; --surface: #ffffff; --surface-2: #eef4ff;
+      --text: #172554; --muted: #52627d; --border: #cbdcf7;
+      --primary: #1e40af; --primary-hover: #1e3a8a; --on-primary: #ffffff;
+      --success: #166534; --success-bg: #dcfce7; --danger: #b91c1c; --danger-bg: #fee2e2;
+      --warning: #92400e; --warning-bg: #fef3c7; --focus: #2563eb;
+      --shadow: 0 8px 28px rgba(30, 64, 175, .08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #08111f; --surface: #111c2e; --surface-2: #172643;
+        --text: #e7eefc; --muted: #afbdd3; --border: #314466;
+        --primary: #7aa2ff; --primary-hover: #9cb8ff; --on-primary: #071225;
+        --success: #86efac; --success-bg: #123522; --danger: #fca5a5; --danger-bg: #40191d;
+        --warning: #fcd34d; --warning-bg: #422c0e; --focus: #93b4ff;
+        --shadow: 0 12px 34px rgba(0, 0, 0, .24);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
+    body { margin: 0; min-height: 100dvh; color: var(--text); background: var(--bg); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button, input, select { font: inherit; }
+    button, select { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .shell { width: min(1440px, 100%); margin: 0 auto; padding: 24px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 4px; font-size: clamp(1.55rem, 3vw, 2.15rem); line-height: 1.2; }
+    h2 { margin-bottom: 16px; font-size: 1.12rem; }
+    h3 { margin: 0; font-size: 1rem; }
+    .content-label { margin-bottom: 8px; color: var(--muted); font-size: .82rem; font-weight: 700; }
+    .muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .surface { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+    .login { width: min(560px, 100%); margin: 10vh auto 0; padding: 28px; }
+    .login p { color: var(--muted); }
+    .field { display: grid; gap: 6px; min-width: 0; }
+    label, legend { font-size: .84rem; font-weight: 650; }
+    input, select { width: 100%; min-height: 44px; padding: 9px 11px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; }
+    input::placeholder { color: var(--muted); opacity: .85; }
+    .help { color: var(--muted); font-size: .78rem; }
+    .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .button { min-height: 44px; padding: 9px 16px; color: var(--on-primary); background: var(--primary); border: 1px solid var(--primary); border-radius: 9px; font-weight: 700; transition: background 180ms ease-out, opacity 180ms ease-out; }
+    .button:hover { background: var(--primary-hover); }
+    .button.secondary { color: var(--text); background: var(--surface); border-color: var(--border); }
+    .button.secondary:hover { background: var(--surface-2); }
+    .button.link { min-height: 36px; padding: 5px 8px; color: var(--primary); background: transparent; border-color: transparent; }
+    .alert { margin: 0 0 16px; padding: 11px 14px; color: var(--danger); background: var(--danger-bg); border: 1px solid currentColor; border-radius: 10px; }
+    .statusline { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--muted); font-size: .82rem; }
+    .dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--success); }
+    .dot.loading { background: var(--warning); animation: pulse 900ms ease-in-out infinite alternate; }
+    .filters { display: grid; grid-template-columns: 150px minmax(220px, 1.3fr) minmax(180px, 1fr) minmax(180px, 1fr) 110px auto; gap: 12px; align-items: end; margin-bottom: 16px; padding: 18px; }
+    .filters .actions { flex-wrap: nowrap; }
+    .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .stat { padding: 16px; }
+    .stat .label { color: var(--muted); font-size: .78rem; font-weight: 650; }
+    .stat .value { margin-top: 6px; font-size: clamp(1.25rem, 2vw, 1.85rem); font-weight: 750; line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .panel { margin-bottom: 16px; overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .86rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    th { color: var(--muted); background: var(--surface-2); font-size: .75rem; letter-spacing: .02em; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: var(--surface-2); }
+    .device-button { padding: 4px 7px; color: var(--primary); background: transparent; border: 0; border-radius: 6px; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .request-list { display: grid; gap: 10px; padding: 14px; }
+    details.request { border: 1px solid var(--border); border-radius: 11px; background: var(--surface); overflow: clip; }
+    details.request[open] { box-shadow: 0 4px 18px rgba(30, 64, 175, .08); }
+    summary { display: grid; grid-template-columns: minmax(210px, 1.5fr) minmax(120px, .8fr) minmax(160px, 1fr) repeat(3, minmax(85px, .55fr)); gap: 12px; align-items: center; min-height: 56px; padding: 10px 13px; cursor: pointer; }
+    summary:hover { background: var(--surface-2); }
+    summary::marker { color: var(--primary); }
+    .request-title { min-width: 0; }
+    .request-title strong, .request-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .request-title span { color: var(--muted); font-size: .76rem; }
+    .badge { display: inline-flex; width: fit-content; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: .74rem; font-weight: 750; }
+    .badge.ok { color: var(--success); background: var(--success-bg); }
+    .badge.fail { color: var(--danger); background: var(--danger-bg); }
+    .metric { font-size: .82rem; font-variant-numeric: tabular-nums; }
+    .metric small { display: block; color: var(--muted); font-size: .68rem; }
+    .request-body { padding: 0 14px 14px; border-top: 1px solid var(--border); }
+    .meta-grid, .content-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+    .meta-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .meta { min-width: 0; padding: 10px; background: var(--surface-2); border-radius: 8px; }
+    .meta span { display: block; color: var(--muted); font-size: .7rem; }
+    .meta strong { display: block; overflow-wrap: anywhere; font-size: .82rem; }
+    .content { min-width: 0; }
+    pre { max-height: 420px; margin: 0; padding: 12px; overflow: auto; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font: .78rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .calls { display: grid; gap: 10px; margin-top: 14px; }
+    .call { padding: 12px; border: 1px solid var(--border); border-radius: 9px; }
+    .call-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .empty { padding: 36px 18px; color: var(--muted); text-align: center; }
+    .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); }
+    [hidden] { display: none !important; }
+    @keyframes pulse { from { opacity: .45; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+    @media (max-width: 1100px) {
+      .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      summary { grid-template-columns: minmax(190px, 1.5fr) minmax(120px, 1fr) repeat(3, minmax(75px, .6fr)); }
+      summary > :nth-child(3) { display: none; }
+    }
+    @media (max-width: 720px) {
+      .shell { padding: 16px; }
+      .topbar { align-items: flex-start; flex-direction: column; gap: 12px; }
+      .filters { grid-template-columns: 1fr; }
+      .filters .actions { flex-wrap: wrap; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      summary { grid-template-columns: minmax(150px, 1fr) 72px 70px; gap: 8px; }
+      summary > :nth-child(2), summary > :nth-child(3), summary > :nth-child(5) { display: none; }
+      .meta-grid, .content-grid { grid-template-columns: 1fr; }
+      .pagination { align-items: stretch; flex-direction: column; }
+      .pagination .actions { justify-content: space-between; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell" id="main-content">
+    <section class="surface login" id="login-panel" aria-labelledby="login-title">
+      <h1 id="login-title">模型调用观测</h1>
+      <p>输入服务器上的管理员密钥，查看设备用量、Token、耗时和请求明细。</p>
+      <div class="alert" id="login-error" role="alert" hidden></div>
+      <form id="login-form" class="field">
+        <input type="text" name="username" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true" hidden>
+        <label for="admin-key">管理员密钥</label>
+        <input id="admin-key" type="password" autocomplete="current-password" spellcheck="false" required>
+        <span class="help">密钥仅保存在当前浏览器标签页，不会写入 URL 或页面内容。</span>
+        <div class="actions" style="margin-top:10px">
+          <button class="button" id="login-button" type="submit">登录并加载</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="dashboard" hidden>
+      <header class="topbar">
+        <div>
+          <h1>模型调用观测</h1>
+          <div class="statusline"><span class="dot" id="status-dot"></span><span id="status-text">等待加载</span></div>
+        </div>
+        <button class="button secondary" id="logout-button" type="button">退出管理</button>
+      </header>
+
+      <div class="alert" id="error" role="alert" hidden></div>
+
+      <form class="surface filters" id="filters" aria-label="观测数据筛选">
+        <div class="field">
+          <label for="device-type">设备标识类型</label>
+          <select id="device-type">
+            <option value="">全部设备</option>
+            <option value="device_id">原始设备 ID</option>
+            <option value="device_key">匿名 device_key</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="device-value">设备标识</label>
+          <input id="device-value" placeholder="选择全部设备时留空" spellcheck="false" disabled>
+          <span class="help" id="device-help">点击设备排行中的标识可快速筛选。</span>
+        </div>
+        <div class="field">
+          <label for="start-time">开始时间</label>
+          <input id="start-time" type="datetime-local">
+        </div>
+        <div class="field">
+          <label for="end-time">结束时间</label>
+          <input id="end-time" type="datetime-local">
+        </div>
+        <div class="field">
+          <label for="page-size">每页</label>
+          <select id="page-size"><option>20</option><option selected>50</option><option>100</option></select>
+        </div>
+        <div class="actions">
+          <button class="button" id="refresh-button" type="submit">应用筛选</button>
+          <button class="button secondary" id="reset-button" type="button">重置</button>
+        </div>
+      </form>
+
+      <section class="stats" aria-label="用量汇总">
+        <article class="surface stat"><div class="label">请求数</div><div class="value" id="requests-value">—</div></article>
+        <article class="surface stat"><div class="label">总 Token</div><div class="value" id="tokens-value">—</div></article>
+        <article class="surface stat"><div class="label">输入 Token</div><div class="value" id="prompt-value">—</div></article>
+        <article class="surface stat"><div class="label">输出 Token</div><div class="value" id="completion-value">—</div></article>
+        <article class="surface stat"><div class="label">平均耗时</div><div class="value" id="duration-value">—</div></article>
+        <article class="surface stat"><div class="label">失败请求</div><div class="value" id="failed-value">—</div></article>
+      </section>
+
+      <section class="surface panel" aria-labelledby="devices-title">
+        <div class="panel-head"><h2 id="devices-title">设备用量</h2><span class="muted" id="device-count"></span></div>
+        <div class="table-wrap" id="devices-table"></div>
+      </section>
+
+      <section class="surface panel" aria-labelledby="requests-title">
+        <div class="panel-head"><h2 id="requests-title">请求明细</h2><span class="muted">展开一条记录查看原始内容与模型调用</span></div>
+        <div class="request-list" id="request-list"></div>
+        <div class="pagination">
+          <span class="muted" id="page-label">—</span>
+          <div class="actions">
+            <button class="button secondary" id="prev-button" type="button">上一页</button>
+            <button class="button secondary" id="next-button" type="button">下一页</button>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const state = { key: '', offset: 0, total: 0, loading: false };
+    const number = new Intl.NumberFormat('zh-CN');
+    const decimal = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
+    const dateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' });
+
+    function storageGet() { try { return sessionStorage.getItem('model-server-admin-key') || ''; } catch (_) { return ''; } }
+    function storageSet(value) { try { value ? sessionStorage.setItem('model-server-admin-key', value) : sessionStorage.removeItem('model-server-admin-key'); } catch (_) {} }
+    function node(tag, className, text) {
+      const result = document.createElement(tag);
+      if (className) result.className = className;
+      if (text !== undefined) result.textContent = text;
+      return result;
+    }
+    function pretty(value) { return value === null || value === undefined ? '内容已清理或未记录' : JSON.stringify(value, null, 2); }
+    function formattedDate(value) { return value ? dateTime.format(new Date(value)) : '—'; }
+    function localIso(value) { return value ? new Date(value).toISOString() : ''; }
+    function params(includePaging = false) {
+      const result = new URLSearchParams();
+      const type = $('device-type').value;
+      const device = $('device-value').value.trim();
+      if (type && device) result.set(type, device);
+      const start = localIso($('start-time').value);
+      const end = localIso($('end-time').value);
+      if (start) result.set('start_time', start);
+      if (end) result.set('end_time', end);
+      if (includePaging) {
+        result.set('limit', $('page-size').value);
+        result.set('offset', String(state.offset));
+      }
+      return result;
+    }
+    function validateFilters() {
+      const type = $('device-type').value;
+      const device = $('device-value').value.trim();
+      if (type && !device) throw new Error('请输入设备标识，或选择“全部设备”。');
+      if (type === 'device_id' && device.length < 16) throw new Error('原始设备 ID 至少需要 16 个字符。');
+      const start = $('start-time').value;
+      const end = $('end-time').value;
+      if (start && end && new Date(start) >= new Date(end)) throw new Error('开始时间必须早于结束时间。');
+    }
+    async function api(path, query) {
+      const url = new URL(path, window.location.origin);
+      url.search = query.toString();
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${state.key}` }, cache: 'no-store' });
+      if (!response.ok) {
+        let message = `请求失败（HTTP ${response.status}）`;
+        try { const body = await response.json(); message = body.detail?.message || body.detail || message; } catch (_) {}
+        const error = new Error(message); error.status = response.status; throw error;
+      }
+      return response.json();
+    }
+    function setLoading(loading) {
+      state.loading = loading;
+      for (const id of ['login-button', 'refresh-button', 'reset-button']) $(id).disabled = loading;
+      $('prev-button').disabled = loading || state.offset === 0;
+      $('next-button').disabled = loading || state.offset + Number($('page-size').value) >= state.total;
+      $('status-dot').classList.toggle('loading', loading);
+      $('status-text').textContent = loading ? '正在加载数据…' : `已更新 ${new Date().toLocaleTimeString('zh-CN')}`;
+    }
+    function showError(message) {
+      const target = $('dashboard').hidden ? $('login-error') : $('error');
+      for (const id of ['login-error', 'error']) { $(id).textContent = ''; $(id).hidden = true; }
+      target.textContent = message; target.hidden = !message;
+    }
+    function stat(id, value) { $(id).textContent = value; }
+    function renderSummary(data) {
+      const totals = data.totals;
+      stat('requests-value', number.format(totals.request_count));
+      stat('tokens-value', number.format(totals.total_tokens));
+      stat('prompt-value', number.format(totals.prompt_tokens));
+      stat('completion-value', number.format(totals.completion_tokens));
+      stat('duration-value', `${decimal.format(totals.average_duration_ms)} ms`);
+      stat('failed-value', number.format(totals.failed_requests));
+      renderDevices(data.devices);
+    }
+    function renderDevices(devices) {
+      $('device-count').textContent = `${number.format(devices.length)} 台设备`;
+      const host = $('devices-table'); host.replaceChildren();
+      if (!devices.length) { host.append(node('div', 'empty', '当前筛选范围内没有设备数据。')); return; }
+      const table = node('table');
+      const head = node('thead'); const headRow = node('tr');
+      ['设备标识', '请求数', '总 Token', '平均耗时', '失败', '最后请求'].forEach((label) => headRow.append(node('th', '', label)));
+      head.append(headRow); table.append(head);
+      const body = node('tbody');
+      devices.forEach((device) => {
+        const row = node('tr'); const keyCell = node('td'); const button = node('button', 'device-button', device.device_key);
+        button.type = 'button'; button.title = '按此设备筛选';
+        button.addEventListener('click', () => { $('device-type').value = 'device_key'; syncDeviceInput(); $('device-value').value = device.device_key; state.offset = 0; loadData(); });
+        keyCell.append(button); row.append(keyCell);
+        [number.format(device.request_count), number.format(device.total_tokens), `${decimal.format(device.average_duration_ms)} ms`, number.format(device.failed_requests), formattedDate(device.last_request_at)].forEach((value) => row.append(node('td', '', value)));
+        body.append(row);
+      });
+      table.append(body); host.append(table);
+    }
+    function meta(label, value) { const box = node('div', 'meta'); box.append(node('span', '', label), node('strong', 'mono', value)); return box; }
+    function contentBlock(title, value) { const box = node('section', 'content'); box.append(node('div', 'content-label', title)); const pre = node('pre'); pre.textContent = typeof value === 'string' ? value : pretty(value); box.append(pre); return box; }
+    function renderCall(call) {
+      const box = node('section', 'call'); const head = node('div', 'call-head');
+      head.append(node('h3', '', `模型调用 #${call.call_index}`), node('span', 'mono muted', `${number.format(call.usage?.total_tokens || 0)} tokens · ${number.format(call.duration_ms)} ms`));
+      box.append(head);
+      const metadata = node('div', 'meta-grid');
+      metadata.append(meta('模型', call.provider_model || '未报告'), meta('Pipeline', call.pipeline), meta('开始时间', formattedDate(call.started_at)), meta('状态', call.error_type || '成功'));
+      box.append(metadata);
+      if (call.error_message) box.append(contentBlock('错误信息', call.error_message));
+      const contents = node('div', 'content-grid'); contents.append(contentBlock('模型输入', call.input_content), contentBlock('模型输出', call.output_content)); box.append(contents);
+      return box;
+    }
+    function renderRecord(record) {
+      const details = node('details', 'request'); const summary = node('summary');
+      const title = node('div', 'request-title'); title.append(node('strong', '', record.pipeline), node('span', 'mono', record.request_id));
+      summary.append(title, node('span', `badge ${record.status_code < 400 ? 'ok' : 'fail'}`, String(record.status_code)), node('span', 'mono metric', record.device_key));
+      const token = node('span', 'metric', number.format(record.usage?.total_tokens || 0)); token.append(node('small', '', 'Token'));
+      const duration = node('span', 'metric', number.format(record.duration_ms)); duration.append(node('small', '', '毫秒'));
+      const when = node('span', 'metric', formattedDate(record.started_at)); when.append(node('small', '', '开始时间'));
+      summary.append(token, duration, when); details.append(summary);
+      const body = node('div', 'request-body'); const metadata = node('div', 'meta-grid');
+      metadata.append(meta('设备', record.device_key), meta('路由', record.route), meta('模型调用数', String(record.model_call_count)), meta('Token 完整', record.usage_complete ? '是' : '否'));
+      body.append(metadata);
+      const contents = node('div', 'content-grid'); contents.append(contentBlock('API 请求', record.request_content), contentBlock('API 返回', record.response_content)); body.append(contents);
+      const calls = node('div', 'calls'); record.model_calls.forEach((call) => calls.append(renderCall(call))); if (!record.model_calls.length) calls.append(node('div', 'empty', '此请求没有产生模型调用。')); body.append(calls);
+      details.append(body); return details;
+    }
+    function renderRequests(data) {
+      state.total = data.total; const host = $('request-list'); host.replaceChildren();
+      if (!data.records.length) host.append(node('div', 'empty', '当前筛选范围内没有请求记录。'));
+      else data.records.forEach((record) => host.append(renderRecord(record)));
+      const start = data.total ? data.offset + 1 : 0; const end = Math.min(data.offset + data.records.length, data.total);
+      $('page-label').textContent = `显示 ${number.format(start)}–${number.format(end)}，共 ${number.format(data.total)} 条`;
+      $('prev-button').disabled = state.loading || data.offset === 0;
+      $('next-button').disabled = state.loading || data.offset + data.limit >= data.total;
+    }
+    async function loadData() {
+      try {
+        validateFilters(); showError(''); setLoading(true);
+        const [summary, requests] = await Promise.all([
+          api('/admin/observability/summary', params(false)),
+          api('/admin/observability/requests', params(true))
+        ]);
+        $('login-panel').hidden = true; $('dashboard').hidden = false;
+        renderSummary(summary); renderRequests(requests);
+      } catch (error) {
+        let message = error.message || '数据加载失败，请稍后重试。';
+        if (error.status === 401) { storageSet(''); state.key = ''; $('dashboard').hidden = true; $('login-panel').hidden = false; $('admin-key').focus(); message = '管理员密钥无效，请重新输入。'; }
+        showError(message);
+        if (!$('dashboard').hidden) $('error').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } finally { setLoading(false); }
+    }
+    function syncDeviceInput() {
+      const selected = $('device-type').value;
+      $('device-value').disabled = !selected;
+      $('device-value').placeholder = selected === 'device_id' ? '例如 iOS installation UUID' : selected === 'device_key' ? '例如 guest_…' : '选择全部设备时留空';
+      if (!selected) $('device-value').value = '';
+    }
+
+    $('login-form').addEventListener('submit', (event) => { event.preventDefault(); state.key = $('admin-key').value.trim(); if (!state.key) return; storageSet(state.key); state.offset = 0; loadData(); });
+    $('filters').addEventListener('submit', (event) => { event.preventDefault(); state.offset = 0; loadData(); });
+    $('device-type').addEventListener('change', syncDeviceInput);
+    $('reset-button').addEventListener('click', () => { $('filters').reset(); syncDeviceInput(); state.offset = 0; loadData(); });
+    $('prev-button').addEventListener('click', () => { state.offset = Math.max(0, state.offset - Number($('page-size').value)); loadData(); });
+    $('next-button').addEventListener('click', () => { state.offset += Number($('page-size').value); loadData(); });
+    $('logout-button').addEventListener('click', () => { storageSet(''); state.key = ''; showError(''); $('admin-key').value = ''; $('dashboard').hidden = true; $('login-panel').hidden = false; $('admin-key').focus(); });
+
+    state.key = storageGet();
+    if (state.key) { $('admin-key').value = state.key; loadData(); }
+  </script>
+</body>
+</html>

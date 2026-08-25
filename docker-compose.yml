@@ -26,17 +26,22 @@ services:
       - litellm
     environment:
       BUSINESS_API_KEY: ${BUSINESS_API_KEY:?BUSINESS_API_KEY is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}
       LITELLM_MODEL_ALIAS: primary-model
       STRUCTURED_OUTPUT_MODE: ${STRUCTURED_OUTPUT_MODE:-json_schema}
       TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
       TIME_FRAGMENT_TOKEN_TTL_SECONDS: ${TIME_FRAGMENT_TOKEN_TTL_SECONDS:-2592000}
+      USAGE_DB_PATH: /var/lib/model-server/usage.sqlite3
+      USAGE_CONTENT_RETENTION_DAYS: ${USAGE_CONTENT_RETENTION_DAYS:-30}
     expose:
       - "8000"
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - model-server-usage:/var/lib/model-server
     healthcheck:
       test:
         - CMD
@@ -65,3 +70,6 @@ services:
       - "4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+
+volumes:
+  model-server-usage:

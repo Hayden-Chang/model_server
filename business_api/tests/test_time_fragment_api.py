@@ -18,6 +18,7 @@ from app.settings import Settings
 
 
 API_KEY = "business-test-key-with-32-characters"
+ADMIN_KEY = "admin-test-key-with-32-characters"
 TOKEN_SECRET = "time-fragment-test-token-secret-with-32-characters"
 
 
@@ -54,6 +55,7 @@ def settings() -> Settings:
         litellm_master_key="litellm-test-key-with-32-characters",
         litellm_base_url="http://litellm:4000",
         time_fragment_token_secret=TOKEN_SECRET,
+        admin_api_key=ADMIN_KEY,
     )
 
 
@@ -61,6 +63,10 @@ def guest_headers(client: TestClient, device_id: str = "time-fragment-ios-device
     response = client.post("/api/auth/guest", json={"device_id": device_id})
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def admin_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {ADMIN_KEY}"}
 
 
 def internal_item(*, pinned: bool = False) -> dict[str, Any]:
@@ -99,12 +105,15 @@ def request_payload(
     }
 
 
-def operations_output(operations: list[dict[str, Any]]) -> ModelOutput:
-    return raw_output(json.dumps({"operations": operations}, ensure_ascii=False))
+def operations_output(
+    operations: list[dict[str, Any]],
+    usage: dict[str, int] | None = None,
+) -> ModelOutput:
+    return raw_output(json.dumps({"operations": operations}, ensure_ascii=False), usage=usage)
 
 
-def raw_output(content: str) -> ModelOutput:
-    return ModelOutput(content=content, provider_model="provider/model-a", usage=None)
+def raw_output(content: str, usage: dict[str, int] | None = None) -> ModelOutput:
+    return ModelOutput(content=content, provider_model="provider/model-a", usage=usage)
 
 
 def recursive_keys(value: Any) -> set[str]:
@@ -418,6 +427,60 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         assert payload["requestID"] not in serialized
         assert payload["baseFingerprint"] not in serialized
         assert "status" not in recursive_keys(json.loads(serialized))
+
+
+def test_observability_aggregates_two_model_calls_for_guest_device(settings: Settings) -> None:
+    device_id = "time-fragment-observed-device-1234"
+    unknown_move = {
+        "type": "move",
+        "targetItemId": "missing-item",
+        "allowedChanges": ["segments"],
+        "inputOrder": 0,
+    }
+    fake = FakeModelClient(
+        [
+            operations_output(
+                [unknown_move],
+                usage={"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+            ),
+            operations_output(
+                [],
+                usage={"prompt_tokens": 140, "completion_tokens": 10, "total_tokens": 150},
+            ),
+        ]
+    )
+    payload = request_payload(items=[internal_item()])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client, device_id),
+            json=payload,
+        )
+        records = client.get(
+            "/admin/observability/requests",
+            headers=admin_headers(),
+            params={"device_id": device_id},
+        )
+        summary = client.get(
+            "/admin/observability/summary",
+            headers=admin_headers(),
+            params={"device_id": device_id},
+        )
+
+    assert response.status_code == 200
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["request_content"] == payload
+    assert record["response_content"] == response.json()
+    assert record["model_call_count"] == 2
+    assert record["usage"] == {
+        "prompt_tokens": 240,
+        "completion_tokens": 30,
+        "total_tokens": 270,
+    }
+    assert [call["call_index"] for call in record["model_calls"]] == [1, 2]
+    assert summary.json()["totals"]["request_count"] == 1
+    assert summary.json()["totals"]["total_tokens"] == 270
 
 
 def test_second_parseable_semantic_failure_keeps_second_complete_candidate(
