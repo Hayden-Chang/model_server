@@ -268,7 +268,7 @@ GET /admin/observability/summary
 | --- | --- | ---: | ---: | --- |
 | `general-text-v1` | 准确、简洁地回答 | `0.2` | `2000` | 字符串 |
 | `general-analysis-v1` | 为下游业务系统分析输入 | `0.1` | `2000` | 符合 `ANALYSIS_SCHEMA` 的对象 |
-| `time-fragment-plan-v2` | 把 V2 规划请求转换为受限 operations | `0.0` | `2000` | 符合 operations Schema 的对象 |
+| `time-fragment-plan-v2` | 把 V2 规划请求转换为受限 operations | `0.0` | `20000` | 符合 operations Schema 的对象 |
 
 Pipeline ID 是公网业务契约，模型别名是内部实现。调用方选择：
 

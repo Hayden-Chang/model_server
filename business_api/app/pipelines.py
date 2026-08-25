@@ -130,7 +130,7 @@ PIPELINES: dict[str, Pipeline] = {
             "priority only when the user specified one."
         ),
         temperature=0.0,
-        max_tokens=2_000,
+        max_tokens=20_000,
         response_schema=TIME_FRAGMENT_OPERATIONS_SCHEMA,
     ),
 }

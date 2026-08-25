@@ -13,12 +13,20 @@ from app.model_client import (
     ModelGatewayUnavailable,
     ModelOutput,
 )
+from app.pipelines import get_pipeline
 from app.settings import Settings
 
 
 API_KEY = "business-test-key-with-32-characters"
 ADMIN_KEY = "admin-test-key-with-32-characters"
 TOKEN_SECRET = "time-fragment-test-token-secret-with-32-characters"
+
+
+def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> None:
+    pipeline = get_pipeline("time-fragment-plan-v2")
+
+    assert pipeline is not None
+    assert pipeline.max_tokens == 20_000
 
 
 @dataclass
