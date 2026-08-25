@@ -1420,7 +1420,18 @@ def test_non_target_is_locked_while_target_moves_to_requested_start() -> None:
     ]
 
 
-def test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks() -> None:
+@pytest.mark.parametrize(
+    ("model_slot", "request_text"),
+    [
+        pytest.param(74, "写完报告之后跑步", id="correct-model-anchor"),
+        pytest.param(84, "写完报告之后跑步", id="wrong-model-anchor"),
+        pytest.param(84, "写完报告之后，跑步", id="punctuated-wrong-model-anchor"),
+    ],
+)
+def test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks(
+    model_slot: int,
+    request_text: str,
+) -> None:
     temporary_id = UUID("77777777-7777-4777-8777-777777777777")
     request = request_with_items(
         [
@@ -1431,7 +1442,7 @@ def test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks
             external_item("external", "外部会议", 2, [(82, 84)]),
         ],
         now="2026-08-24T15:54:00+08:00",
-        text="写完报告之后跑步",
+        text=request_text,
     )
 
     response = plan_time_fragment(
@@ -1442,7 +1453,7 @@ def test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks
                     "type": "add",
                     "title": "跑步",
                     "durationSlots": 2,
-                    "placement": {"anchor": "start", "slot": 74},
+                    "placement": {"anchor": "start", "slot": model_slot},
                     "inputOrder": 0,
                 }
             ]
@@ -1515,6 +1526,37 @@ def test_explicit_add_preserves_following_task_when_existing_gap_is_sufficient()
         (76, 78)
     ]
     assert [operation.type for operation in response.proposal.operations] == ["add"]
+
+
+def test_explicit_time_after_relation_keeps_model_anchor() -> None:
+    temporary_id = UUID("99999999-9999-4999-8999-999999999999")
+    request = request_with_items(
+        [internal_item("report", "写报告", 3, [(71, 74)])],
+        now="2026-08-24T15:54:00+08:00",
+        text="写完报告之后，21:00 跑步",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "add",
+                    "title": "跑步",
+                    "durationSlots": 2,
+                    "placement": {"anchor": "start", "slot": 84},
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(84, 86)]
 
 
 def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set() -> None:
