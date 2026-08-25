@@ -138,6 +138,7 @@ class _ScheduleTarget:
     priority: int | None
     input_order: int
     operation_index: int
+    cascaded: bool = False
 
 
 def plan_time_fragment(
@@ -379,6 +380,60 @@ def plan_time_fragment(
             )
         )
 
+    added_ids = {
+        str(operation.temporary_id)
+        for operation in normalized_operations
+        if isinstance(operation, TimeFragmentAddOperation)
+    }
+    insertion_anchors = [
+        target.placement.slot
+        for target in schedule_targets
+        if target.item_id in added_ids
+        and target.placement is not None
+        and target.placement.anchor == "start"
+    ]
+    if insertion_anchors:
+        cascade_start = min(insertion_anchors)
+        already_scheduled = {target.item_id for target in schedule_targets}
+        cascading_items = sorted(
+            (
+                item
+                for item in base_items
+                if isinstance(item, TimeFragmentInternalTaskItem)
+                and not _is_protected(item)
+                and item.item_id not in already_scheduled
+                and item.item_id not in candidate_deleted_ids
+                and item.segments
+                and any(segment.end_slot > cascade_start for segment in item.segments)
+            ),
+            key=lambda item: min(segment.start_slot for segment in item.segments),
+        )
+        next_input_order = max(
+            (target.input_order for target in schedule_targets),
+            default=-1,
+        ) + 1
+        for offset, item in enumerate(cascading_items):
+            candidate = candidate_by_id[item.item_id].model_copy(
+                update={"segments": []},
+                deep=True,
+            )
+            _replace_item(candidate_items, candidate)
+            candidate_by_id[item.item_id] = candidate
+            schedule_targets.append(
+                _ScheduleTarget(
+                    item_id=item.item_id,
+                    placement=TimeFragmentPlacement(
+                        anchor="start",
+                        slot=min(segment.start_slot for segment in item.segments),
+                    ),
+                    placement_is_explicit=False,
+                    priority=None,
+                    input_order=next_input_order + offset,
+                    operation_index=len(normalized_operations) + offset,
+                    cascaded=True,
+                )
+            )
+
     occupied = [False] * 96
     scheduled_ids = {target.item_id for target in schedule_targets}
     for item in candidate_items:
@@ -415,10 +470,29 @@ def plan_time_fragment(
                 item.duration_slots,
                 placement=target.placement,
                 earliest_slot=earliest_slot,
+                allow_occupied_anchor=target.cascaded,
             )
         item = item.model_copy(update={"segments": segments}, deep=True)
         _replace_item(candidate_items, item)
         candidate_by_id[item.item_id] = item
+        if target.cascaded and item.segments != base_index[item.item_id].segments:
+            normalized_operations.append(
+                TimeFragmentMoveOperation(
+                    type="move",
+                    targetItemId=item.item_id,
+                    objectType="internalTask",
+                    allowedChanges=["segments"],
+                    placement=(
+                        TimeFragmentPlacement(
+                            anchor="start",
+                            slot=item.segments[0].start_slot,
+                        )
+                        if item.segments
+                        else None
+                    ),
+                    inputOrder=target.input_order,
+                )
+            )
         if segments:
             _occupy(occupied, segments)
         else:
@@ -953,13 +1027,16 @@ def _allocate_segments(
     *,
     placement: TimeFragmentPlacement | None,
     earliest_slot: int,
+    allow_occupied_anchor: bool = False,
 ) -> list[TimeFragmentSegmentV2]:
     if placement is None:
         if earliest_slot >= 96:
             return []
         candidates = range(earliest_slot, 96)
     elif placement.anchor == "start":
-        if placement.slot >= 96 or occupied[placement.slot]:
+        if placement.slot >= 96 or (
+            occupied[placement.slot] and not allow_occupied_anchor
+        ):
             return []
         candidates = range(placement.slot, 96)
     else:
