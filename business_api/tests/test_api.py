@@ -253,6 +253,7 @@ def test_observability_records_content_tokens_and_aggregates_by_device(settings:
         )
 
     assert detail.status_code == 200
+    assert detail.headers["cache-control"] == "no-store"
     assert detail.json()["total"] == 2
     record = detail.json()["records"][0]
     assert record["request_content"] == {"input": "world"}
@@ -264,6 +265,7 @@ def test_observability_records_content_tokens_and_aggregates_by_device(settings:
     }
     assert record["model_calls"][0]["input_content"] == "world"
     assert summary.status_code == 200
+    assert summary.headers["cache-control"] == "no-store"
     assert summary.json()["totals"]["request_count"] == 3
     assert summary.json()["totals"]["total_tokens"] == 27
     assert len(summary.json()["devices"]) == 2
