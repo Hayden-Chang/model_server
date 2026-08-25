@@ -1,4 +1,6 @@
+import stat
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.observability import ModelCallCapture, TokenUsage
 from app.usage_store import InferenceCapture, UsageStore
@@ -136,3 +138,12 @@ def test_empty_summary_returns_zero_totals_and_no_devices() -> None:
         "last_request_at": None,
     }
     assert devices == []
+
+
+def test_file_backed_database_is_owner_readable_and_writable_only(tmp_path: Path) -> None:
+    database_path = tmp_path / "usage.sqlite3"
+
+    store = UsageStore(str(database_path), content_retention_days=30)
+
+    assert stat.S_IMODE(database_path.stat().st_mode) == 0o600
+    store.close()

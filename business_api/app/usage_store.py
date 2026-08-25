@@ -29,7 +29,10 @@ class InferenceCapture:
 class UsageStore:
     def __init__(self, database_path: str, content_retention_days: int) -> None:
         if database_path != ":memory:":
-            Path(database_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+            database_file = Path(database_path).expanduser()
+            database_file.parent.mkdir(parents=True, exist_ok=True)
+            database_file.touch(mode=0o600, exist_ok=True)
+            database_file.chmod(0o600)
         self._content_retention_days = content_retention_days
         self._lock = threading.RLock()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
