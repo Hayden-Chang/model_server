@@ -165,6 +165,11 @@ def plan_time_fragment(
         existing_item_ids=set(base_counts),
         uuid_factory=uuid_factory,
     )
+    normalized_operations = _apply_clear_after_insertion_intent(
+        request.text,
+        base_items,
+        normalized_operations,
+    )
     issues: list[TimeFragmentValidationIssue] = []
     if any(count > 1 for count in base_counts.values()):
         _add_issue(
@@ -892,6 +897,85 @@ def _is_protected(item: TimeFragmentPlanItem) -> bool:
     if isinstance(item, TimeFragmentExternalEventItem):
         return True
     return item.is_pinned or item.is_completed
+
+
+def _apply_clear_after_insertion_intent(
+    request_text: str,
+    base_items: list[TimeFragmentPlanItem],
+    operations: list[TimeFragmentOperation],
+) -> list[TimeFragmentOperation]:
+    corrected: list[TimeFragmentOperation] = []
+    for operation in operations:
+        if not isinstance(operation, TimeFragmentAddOperation):
+            corrected.append(operation)
+            continue
+        slot = _clear_after_insertion_slot(request_text, operation.title, base_items)
+        corrected.append(
+            operation.model_copy(
+                update={"placement": TimeFragmentPlacement(anchor="start", slot=slot)},
+                deep=True,
+            )
+            if slot is not None
+            else operation
+        )
+    return corrected
+
+
+def _clear_after_insertion_slot(
+    request_text: str,
+    added_title: str,
+    base_items: list[TimeFragmentPlanItem],
+) -> int | None:
+    title_index = request_text.rfind(added_title)
+    if title_index == -1:
+        return None
+    marker_matches = [
+        (request_text.rfind(marker, 0, title_index), marker)
+        for marker in ("之后", "以后", "后")
+    ]
+    marker_index, marker = max(
+        marker_matches,
+        key=lambda match: (match[0] + len(match[1]), len(match[1])),
+    )
+    if marker_index == -1:
+        return None
+    connector = request_text[marker_index + len(marker) : title_index]
+    if _has_explicit_time_reference(connector) or connector.strip(" \t\r\n，,。；;！!？?、") not in {
+        "",
+        "就",
+        "再",
+        "然后",
+        "立即",
+        "马上",
+        "直接",
+    }:
+        return None
+    before = request_text[:marker_index]
+    clause_start = max(
+        (before.rfind(delimiter) for delimiter in "，,。；;！!？?\n"),
+        default=-1,
+    )
+    before = before[clause_start + 1 :]
+    normalized_before = before.replace("完成", "").replace("完", "")
+    anchors = [
+        item
+        for item in base_items
+        if item.segments
+        and (item.title in before or item.title in normalized_before)
+    ]
+    if not anchors:
+        return None
+    anchor = max(anchors, key=lambda item: len(item.title))
+    return max(segment.end_slot for segment in anchor.segments)
+
+
+def _has_explicit_time_reference(text: str) -> bool:
+    if any(
+        marker in text
+        for marker in ("上午", "中午", "下午", "晚上", "傍晚", "凌晨", "早上", "清晨", ":", "：")
+    ):
+        return True
+    return any(f"{number}点" in text for number in "零一二三四五六七八九十两0123456789")
 
 
 def _protected_operation_is_authorized(
