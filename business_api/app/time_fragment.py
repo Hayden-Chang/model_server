@@ -170,6 +170,11 @@ def plan_time_fragment(
         base_items,
         normalized_operations,
     )
+    has_clear_after_insertion = any(
+        isinstance(operation, TimeFragmentAddOperation)
+        and _clear_after_insertion_slot(request.text, operation.title, base_items) is not None
+        for operation in normalized_operations
+    )
     issues: list[TimeFragmentValidationIssue] = []
     if any(count > 1 for count in base_counts.values()):
         _add_issue(
@@ -183,10 +188,26 @@ def plan_time_fragment(
         str,
         list[tuple[int, TimeFragmentOperation, TimeFragmentModelOperation]],
     ] = {}
+    model_derived_move_indexes: set[int] = set()
     for index, (operation, model_operation) in enumerate(
         zip(normalized_operations, model_output.operations, strict=True)
     ):
         if not isinstance(operation, TimeFragmentAddOperation):
+            target = base_index.get(operation.target_item_id)
+            if (
+                has_clear_after_insertion
+                and isinstance(operation, TimeFragmentMoveOperation)
+                and isinstance(target, TimeFragmentInternalTaskItem)
+                and not _is_protected(target)
+                and not _operation_is_explicitly_requested(
+                    request.text,
+                    target,
+                    operation,
+                    getattr(model_operation, "authorization_text", None),
+                )
+            ):
+                model_derived_move_indexes.add(index)
+                continue
             operations_by_target.setdefault(operation.target_item_id, []).append(
                 (index, operation, model_operation)
             )
@@ -270,9 +291,12 @@ def plan_time_fragment(
 
     normalized_operations = [
         operation
-        for operation in normalized_operations
-        if isinstance(operation, TimeFragmentAddOperation)
-        or operation.target_item_id not in unauthorized_protected_targets
+        for index, operation in enumerate(normalized_operations)
+        if index not in model_derived_move_indexes
+        and (
+            isinstance(operation, TimeFragmentAddOperation)
+            or operation.target_item_id not in unauthorized_protected_targets
+        )
     ]
 
     candidate_items = [item.model_copy(deep=True) for item in base_items]
@@ -976,6 +1000,33 @@ def _has_explicit_time_reference(text: str) -> bool:
     ):
         return True
     return any(f"{number}点" in text for number in "零一二三四五六七八九十两0123456789")
+
+
+def _operation_is_explicitly_requested(
+    request_text: str,
+    item: TimeFragmentPlanItem,
+    operation: TimeFragmentOperation,
+    authorization_text: str | None,
+) -> bool:
+    if _protected_operation_is_authorized(
+        request_text,
+        item,
+        operation,
+        authorization_text,
+    ):
+        return True
+    for identifier in (item.title, item.item_id):
+        if identifier not in request_text:
+            continue
+        clause = _clause_containing(request_text, identifier)
+        if _protected_operation_is_authorized(
+            request_text,
+            item,
+            operation,
+            clause,
+        ):
+            return True
+    return False
 
 
 def _protected_operation_is_authorized(
