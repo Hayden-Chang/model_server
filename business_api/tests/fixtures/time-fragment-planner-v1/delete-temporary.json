@@ -1,0 +1,67 @@
+{
+  "case": "delete-temporary",
+  "request": {
+    "text": "删除临时任务",
+    "requestID": "request-golden-delete-temporary",
+    "baseFingerprint": "sha256:golden-delete-temporary-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "20000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "domainRef": null,
+          "title": "临时任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "delete",
+        "targetItemId": "20000000-0000-4000-8000-000000000001",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-delete-temporary",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-delete-temporary-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "20000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "delete",
+          "allowedChanges": []
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": []
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

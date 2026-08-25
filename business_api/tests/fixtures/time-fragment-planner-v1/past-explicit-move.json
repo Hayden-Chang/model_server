@@ -1,0 +1,97 @@
+{
+  "case": "past-explicit-move",
+  "request": {
+    "text": "把晨间任务移到现在之后",
+    "requestID": "request-golden-past-explicit-move",
+    "baseFingerprint": "sha256:golden-past-explicit-move-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "past-move",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-past-move",
+            "occurrenceId": "past-move",
+            "scheduledTaskId": "scheduled-past-move"
+          },
+          "title": "晨间任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 20,
+              "endSlot": 22
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T12:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "past-move",
+        "allowedChanges": [
+          "segments"
+        ],
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-past-explicit-move",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-past-explicit-move-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "past-move",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": null
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "past-move",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-past-move",
+              "occurrenceId": "past-move",
+              "scheduledTaskId": "scheduled-past-move"
+            },
+            "title": "晨间任务",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 48,
+                "endSlot": 50
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

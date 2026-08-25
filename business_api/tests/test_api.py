@@ -42,6 +42,7 @@ def settings() -> Settings:
         litellm_master_key="litellm-test-key-with-32-characters",
         litellm_base_url="http://litellm:4000",
         max_input_chars=10,
+        time_fragment_token_secret="time-fragment-test-token-secret-with-32-characters",
     )
 
 
@@ -193,4 +194,3 @@ def test_readiness_reflects_gateway_state(settings: Settings) -> None:
 
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
-

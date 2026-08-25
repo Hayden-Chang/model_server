@@ -15,9 +15,10 @@ class Settings(BaseSettings):
     structured_output_mode: Literal["json_schema", "json_object"] = "json_schema"
     model_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
     max_input_chars: int = Field(default=20_000, ge=1, le=200_000)
+    time_fragment_token_secret: SecretStr = Field(min_length=32)
+    time_fragment_token_ttl_seconds: int = Field(default=2_592_000, ge=300, le=31_536_000)
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

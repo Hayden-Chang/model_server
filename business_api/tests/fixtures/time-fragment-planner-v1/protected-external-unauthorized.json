@@ -1,0 +1,94 @@
+{
+  "case": "protected-external-unauthorized",
+  "request": {
+    "text": "保持客户会议不变",
+    "requestID": "request-golden-protected-external-unauthorized",
+    "baseFingerprint": "sha256:golden-protected-external-unauthorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-protected",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-protected"
+          },
+          "title": "客户会议",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 40,
+              "endSlot": 42
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "external-protected",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 48
+        },
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-external-unauthorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-external-unauthorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "external-protected",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "external-protected"
+            },
+            "title": "客户会议",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 42
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": false,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "error",
+          "code": "PROTECTED_OBJECT",
+          "message": "用户没有明确授权修改受保护对象「客户会议」",
+          "itemId": "external-protected",
+          "field": "operations"
+        }
+      ]
+    }
+  }
+}

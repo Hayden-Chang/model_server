@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .contracts import TimeFragmentModelOperations
+
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -19,6 +21,36 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "minLength": 1},
         },
     },
+}
+
+TIME_FRAGMENT_PLAN_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["tasks"],
+    "properties": {
+        "tasks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 96,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "title", "start", "end"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "start": {"type": ["string", "null"]},
+                    "end": {"type": ["string", "null"]},
+                },
+            },
+        }
+    },
+}
+
+TIME_FRAGMENT_OPERATIONS_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    **TimeFragmentModelOperations.model_json_schema(by_alias=True),
 }
 
 
@@ -58,9 +90,51 @@ PIPELINES: dict[str, Pipeline] = {
         max_tokens=2_000,
         response_schema=ANALYSIS_SCHEMA,
     ),
+    "time-fragment-plan-v1": Pipeline(
+        pipeline_id="time-fragment-plan-v1",
+        system_prompt=(
+            "You are the Time Fragment scheduling engine. The user message is a JSON object with "
+            "text, currentPlan, and now. Interpret now as the user's local wall-clock time. Return "
+            "only the required JSON object. Keep every scheduled task on the calendar date of now; "
+            "emit local ISO 8601 datetimes without Z or a timezone suffix, aligned to 15-minute "
+            "boundaries. A task may be left unscheduled only by setting both start and end to null. "
+            "currentPlan always contains the current-day base, including an empty task list when the "
+            "day has no tasks. Change only what text explicitly requests and preserve every unaffected task's "
+            "id, title, start, and end exactly. New tasks use stable short ids. "
+            "Sort scheduled tasks by start time, place unscheduled tasks afterward, and never return "
+            "overlapping or cross-day times."
+        ),
+        temperature=0.1,
+        max_tokens=4_000,
+        response_schema=TIME_FRAGMENT_PLAN_SCHEMA,
+    ),
+    "time-fragment-plan-v2": Pipeline(
+        pipeline_id="time-fragment-plan-v2",
+        system_prompt=(
+            "You convert a Time Fragment planning request into structured operations only. "
+            "Return add, move, changeDuration, changeTitle, or delete operations; never return a candidate "
+            "task list, time fragments, domain references, lifecycle fields, or any real domain "
+            "ID for a new task. "
+            "For add, omit temporaryId because the service injects a UUID after parsing, and use "
+            "durationSlots=2 when the user gives no duration. Existing targets must use an exact "
+            "itemId from currentPlan and must not be guessed from a similar title. Set objectType "
+            "when known. move may authorize only segments; changeDuration must authorize "
+            "durationSlots and segments; changeTitle requires objectType=internalTask and may "
+            "authorize only title; ExternalEvent titles are source facts and cannot change; delete "
+            "authorizes no mutable fields. For a pinned, "
+            "completed, or external-event target, include authorizationText as the shortest exact "
+            "quote from the user's text that affirmatively requests the change and names the exact "
+            "target or an explicit time range. Never paraphrase authorizationText and never use a "
+            "negative or keep-unchanged phrase as authorization. placement slots are 15-minute "
+            "grid indices from 0 through 96. Preserve user ordering in inputOrder and include "
+            "priority only when the user specified one."
+        ),
+        temperature=0.0,
+        max_tokens=2_000,
+        response_schema=TIME_FRAGMENT_OPERATIONS_SCHEMA,
+    ),
 }
 
 
 def get_pipeline(pipeline_id: str) -> Pipeline | None:
     return PIPELINES.get(pipeline_id)
-

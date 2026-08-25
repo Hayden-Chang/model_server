@@ -1,0 +1,118 @@
+{
+  "case": "temporary-item-stable-id",
+  "request": {
+    "text": "把临时任务移到 11:00 并改成 45 分钟",
+    "requestID": "request-golden-temporary-item-stable-id",
+    "baseFingerprint": "sha256:golden-temporary-item-stable-id-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "30000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "domainRef": null,
+          "title": "临时任务",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "30000000-0000-4000-8000-000000000001",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 44
+        },
+        "inputOrder": 0
+      },
+      {
+        "type": "changeDuration",
+        "targetItemId": "30000000-0000-4000-8000-000000000001",
+        "allowedChanges": [
+          "durationSlots",
+          "segments"
+        ],
+        "durationSlots": 3,
+        "inputOrder": 1
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-temporary-item-stable-id",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-temporary-item-stable-id-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "30000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 44
+          }
+        },
+        {
+          "targetItemId": "30000000-0000-4000-8000-000000000001",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 1,
+          "type": "changeDuration",
+          "allowedChanges": [
+            "durationSlots",
+            "segments"
+          ],
+          "durationSlots": 3
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "30000000-0000-4000-8000-000000000001",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "临时任务",
+            "durationSlots": 3,
+            "segments": [
+              {
+                "startSlot": 44,
+                "endSlot": 47
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

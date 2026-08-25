@@ -1,0 +1,101 @@
+{
+  "case": "protected-external-authorized",
+  "request": {
+    "text": "把客户会议移到 15:00",
+    "requestID": "request-golden-protected-external-authorized",
+    "baseFingerprint": "sha256:golden-protected-external-authorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-authorized",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-authorized"
+          },
+          "title": "客户会议",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 56,
+              "endSlot": 58
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "external-authorized",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 60
+        },
+        "authorizationText": "把客户会议移到 15:00",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-external-authorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-external-authorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "external-authorized",
+          "objectType": "externalEvent",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 60
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "external-authorized",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "external-authorized"
+            },
+            "title": "客户会议",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 60,
+                "endSlot": 62
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

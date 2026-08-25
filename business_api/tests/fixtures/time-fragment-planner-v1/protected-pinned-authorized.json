@@ -1,0 +1,105 @@
+{
+  "case": "protected-pinned-authorized",
+  "request": {
+    "text": "移动 A 到 10:00",
+    "requestID": "request-golden-protected-pinned-authorized",
+    "baseFingerprint": "sha256:golden-protected-pinned-authorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "pinned-authorized",
+          "objectType": "internalTask",
+          "domainRef": {
+            "taskId": "task-pinned-authorized",
+            "occurrenceId": "pinned-authorized",
+            "scheduledTaskId": "scheduled-pinned-authorized"
+          },
+          "title": "A",
+          "durationSlots": 1,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 37
+            }
+          ],
+          "isPinned": true,
+          "isCompleted": false
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "move",
+        "targetItemId": "pinned-authorized",
+        "allowedChanges": [
+          "segments"
+        ],
+        "placement": {
+          "anchor": "start",
+          "slot": 40
+        },
+        "authorizationText": "移动 A 到 10:00",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-pinned-authorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-pinned-authorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "pinned-authorized",
+          "objectType": "internalTask",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "move",
+          "allowedChanges": [
+            "segments"
+          ],
+          "placement": {
+            "anchor": "start",
+            "slot": 40
+          }
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "pinned-authorized",
+            "objectType": "internalTask",
+            "domainRef": {
+              "taskId": "task-pinned-authorized",
+              "occurrenceId": "pinned-authorized",
+              "scheduledTaskId": "scheduled-pinned-authorized"
+            },
+            "title": "A",
+            "durationSlots": 1,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 41
+              }
+            ],
+            "isPinned": true,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

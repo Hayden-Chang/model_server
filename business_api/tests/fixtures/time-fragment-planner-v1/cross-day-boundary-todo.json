@@ -1,0 +1,90 @@
+{
+  "case": "cross-day-boundary-todo",
+  "request": {
+    "text": "在当天结束处新增任务",
+    "requestID": "request-golden-cross-day-boundary-todo",
+    "baseFingerprint": "sha256:golden-cross-day-boundary-todo-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": []
+    },
+    "now": "2026-08-24T23:45:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "add",
+        "title": "跨日边界任务",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 96
+        },
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [
+    "10000000-0000-4000-8000-000000000006"
+  ],
+  "expectedResponse": {
+    "requestID": "request-golden-cross-day-boundary-todo",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-cross-day-boundary-todo-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "add",
+          "title": "跨日边界任务",
+          "durationSlots": 2,
+          "placement": {
+            "anchor": "start",
+            "slot": 96
+          },
+          "priority": null,
+          "inputOrder": 0,
+          "temporaryId": "10000000-0000-4000-8000-000000000006"
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "10000000-0000-4000-8000-000000000006",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "跨日边界任务",
+            "durationSlots": 2,
+            "segments": [],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": false,
+      "attempts": 1,
+      "issues": [
+        {
+          "source": "model_server",
+          "severity": "error",
+          "code": "INVALID_TIME",
+          "message": "指定的时间锚点不在可排期范围内",
+          "itemId": "10000000-0000-4000-8000-000000000006",
+          "field": "placement.slot"
+        },
+        {
+          "source": "model_server",
+          "severity": "warning",
+          "code": "UNPLACED",
+          "message": "对象「跨日边界任务」在当天剩余空间中无法完整排下",
+          "itemId": "10000000-0000-4000-8000-000000000006",
+          "field": "segments"
+        }
+      ]
+    }
+  }
+}

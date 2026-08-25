@@ -1,0 +1,97 @@
+{
+  "case": "protected-external-change-duration-authorized",
+  "request": {
+    "text": "把客户会议时长改成一小时",
+    "requestID": "request-golden-protected-external-change-duration-authorized",
+    "baseFingerprint": "sha256:golden-protected-external-change-duration-authorized-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": [
+        {
+          "itemId": "external-duration-authorized",
+          "objectType": "externalEvent",
+          "domainRef": {
+            "externalEventId": "external-duration-authorized"
+          },
+          "title": "客户会议",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 40,
+              "endSlot": 42
+            }
+          ],
+          "isAllDay": false,
+          "isFixed": true
+        }
+      ]
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "changeDuration",
+        "targetItemId": "external-duration-authorized",
+        "allowedChanges": [
+          "durationSlots",
+          "segments"
+        ],
+        "durationSlots": 4,
+        "authorizationText": "把客户会议时长改成一小时",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [],
+  "expectedResponse": {
+    "requestID": "request-golden-protected-external-change-duration-authorized",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-protected-external-change-duration-authorized-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "targetItemId": "external-duration-authorized",
+          "objectType": "externalEvent",
+          "priority": null,
+          "inputOrder": 0,
+          "type": "changeDuration",
+          "allowedChanges": [
+            "durationSlots",
+            "segments"
+          ],
+          "durationSlots": 4
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "external-duration-authorized",
+            "objectType": "externalEvent",
+            "domainRef": {
+              "externalEventId": "external-duration-authorized"
+            },
+            "title": "客户会议",
+            "durationSlots": 4,
+            "segments": [
+              {
+                "startSlot": 40,
+                "endSlot": 44
+              }
+            ],
+            "isAllDay": false,
+            "isFixed": true
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

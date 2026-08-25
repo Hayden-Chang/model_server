@@ -1,0 +1,70 @@
+{
+  "case": "empty-day-default-duration",
+  "request": {
+    "text": "新增写方案任务",
+    "requestID": "request-golden-empty-day-default-duration",
+    "baseFingerprint": "sha256:golden-empty-day-default-duration-base",
+    "currentPlan": {
+      "date": "2026-08-24",
+      "items": []
+    },
+    "now": "2026-08-24T08:00:00+08:00"
+  },
+  "modelOutput": {
+    "operations": [
+      {
+        "type": "add",
+        "title": "写方案",
+        "inputOrder": 0
+      }
+    ]
+  },
+  "injectedUUIDs": [
+    "10000000-0000-4000-8000-000000000001"
+  ],
+  "expectedResponse": {
+    "requestID": "request-golden-empty-day-default-duration",
+    "proposal": {
+      "baseFingerprint": "sha256:golden-empty-day-default-duration-base",
+      "algorithmVersion": "time-fragment-planner-v1",
+      "deletedOccurrenceIDs": [],
+      "deletedExternalEventIDs": [],
+      "operations": [
+        {
+          "type": "add",
+          "title": "写方案",
+          "durationSlots": 2,
+          "placement": null,
+          "priority": null,
+          "inputOrder": 0,
+          "temporaryId": "10000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "candidatePlan": {
+        "date": "2026-08-24",
+        "items": [
+          {
+            "itemId": "10000000-0000-4000-8000-000000000001",
+            "objectType": "internalTask",
+            "domainRef": null,
+            "title": "写方案",
+            "durationSlots": 2,
+            "segments": [
+              {
+                "startSlot": 32,
+                "endSlot": 34
+              }
+            ],
+            "isPinned": false,
+            "isCompleted": false
+          }
+        ]
+      }
+    },
+    "validation": {
+      "valid": true,
+      "attempts": 1,
+      "issues": []
+    }
+  }
+}

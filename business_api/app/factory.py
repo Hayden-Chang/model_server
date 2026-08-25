@@ -5,16 +5,26 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-
-from .contracts import ModelMetadata, RunRequest, RunResponse
+from .contracts import (
+    ModelMetadata,
+    RunRequest,
+    RunResponse,
+    TimeFragmentGuestRequest,
+    TimeFragmentGuestResponse,
+    TimeFragmentPlanRequestV2,
+    TimeFragmentPlanResponseV2,
+)
+from .guest_auth import GuestTokenCodec, GuestTokenError
 from .model_client import (
     LiteLLMClient,
     ModelGatewayResponseError,
     ModelGatewayUnavailable,
+    ModelOutput,
 )
 from .pipelines import get_pipeline
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .settings import Settings
+from .time_fragment_service import TimeFragmentInputTooLarge, execute_time_fragment_plan
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -23,6 +33,10 @@ REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
     app = FastAPI(title="Model Server Business API", version="1.0.0")
     client = model_client or LiteLLMClient(settings)
+    guest_tokens = GuestTokenCodec(
+        settings.time_fragment_token_secret.get_secret_value(),
+        settings.time_fragment_token_ttl_seconds,
+    )
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
@@ -42,40 +56,37 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-    @app.get("/health/live")
-    async def live() -> dict[str, str]:
-        return {"status": "ok"}
+    async def require_time_fragment_guest(
+        authorization: str | None = Header(default=None),
+    ) -> str:
+        if authorization is None or not authorization.startswith("Bearer "):
+            raise _guest_unauthorized()
+        try:
+            return guest_tokens.verify(authorization.removeprefix("Bearer "))
+        except GuestTokenError as error:
+            raise _guest_unauthorized() from error
 
-    @app.get("/health/ready")
-    async def ready() -> JSONResponse:
-        is_ready = await client.is_ready()
-        status_code = status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE
-        return JSONResponse(status_code=status_code, content={"status": "ready" if is_ready else "not_ready"})
-
-    @app.post(
-        "/v1/pipelines/{pipeline_id}:run",
-        response_model=RunResponse,
-        dependencies=[Depends(require_api_key)],
-    )
-    async def run_pipeline(pipeline_id: str, payload: RunRequest, request: Request) -> RunResponse:
+    async def complete_pipeline(
+        pipeline_id: str,
+        user_input: str,
+    ) -> tuple[str | dict[str, Any], ModelOutput]:
         pipeline = get_pipeline(pipeline_id)
         if pipeline is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "PIPELINE_NOT_FOUND", "message": "unknown pipeline"},
             )
-        if len(payload.input) > settings.max_input_chars:
+        if len(user_input) > settings.max_input_chars:
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail={"code": "INPUT_TOO_LARGE", "message": "input exceeds the configured limit"},
             )
 
         try:
-            output = await client.complete(pipeline, payload.input)
+            output = await client.complete(pipeline, user_input)
             if pipeline.response_schema is None:
-                result: str | dict[str, Any] = process_text(output.content)
-            else:
-                result = process_structured(output.content, pipeline.response_schema)
+                return process_text(output.content), output
+            return process_structured(output.content, pipeline.response_schema), output
         except ModelGatewayUnavailable as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -92,6 +103,63 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
                 detail={"code": "MODEL_OUTPUT_INVALID", "message": str(error)},
             ) from error
 
+    @app.get("/health/live")
+    async def live() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/ready")
+    async def ready() -> JSONResponse:
+        is_ready = await client.is_ready()
+        status_code = status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE
+        return JSONResponse(status_code=status_code, content={"status": "ready" if is_ready else "not_ready"})
+
+    @app.post("/api/auth/guest", response_model=TimeFragmentGuestResponse)
+    async def time_fragment_guest(payload: TimeFragmentGuestRequest) -> TimeFragmentGuestResponse:
+        return TimeFragmentGuestResponse(
+            access_token=guest_tokens.issue(payload.device_id),
+            expires_in=settings.time_fragment_token_ttl_seconds,
+        )
+
+    @app.post(
+        "/api/plan/parse",
+        response_model=TimeFragmentPlanResponseV2,
+        dependencies=[Depends(require_time_fragment_guest)],
+    )
+    async def time_fragment_plan_parse(
+        payload: TimeFragmentPlanRequestV2,
+    ) -> TimeFragmentPlanResponseV2:
+        try:
+            return await execute_time_fragment_plan(
+                client,
+                payload,
+                max_input_chars=settings.max_input_chars,
+            )
+        except TimeFragmentInputTooLarge as error:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "INPUT_TOO_LARGE", "message": "input exceeds the configured limit"},
+            ) from error
+        except ModelGatewayUnavailable as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "MODEL_GATEWAY_UNAVAILABLE", "message": str(error)},
+            ) from error
+        except ModelGatewayResponseError as error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "MODEL_GATEWAY_ERROR", "message": str(error)},
+            ) from error
+
+    @app.post(
+        "/v1/pipelines/{pipeline_id}:run",
+        response_model=RunResponse,
+        dependencies=[Depends(require_api_key)],
+    )
+    async def run_pipeline(pipeline_id: str, payload: RunRequest, request: Request) -> RunResponse:
+        pipeline = get_pipeline(pipeline_id)
+        result, output = await complete_pipeline(pipeline_id, payload.input)
+        assert pipeline is not None
+
         return RunResponse(
             pipeline=pipeline.pipeline_id,
             request_id=request.state.request_id,
@@ -104,3 +172,11 @@ def create_app(settings: Settings, model_client: Any | None = None) -> FastAPI:
         )
 
     return app
+
+
+def _guest_unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "UNAUTHORIZED", "message": "invalid guest bearer token"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
