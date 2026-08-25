@@ -1420,6 +1420,103 @@ def test_non_target_is_locked_while_target_moves_to_requested_start() -> None:
     ]
 
 
+def test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks() -> None:
+    temporary_id = UUID("77777777-7777-4777-8777-777777777777")
+    request = request_with_items(
+        [
+            internal_item("report", "写报告", 3, [(71, 74)]),
+            internal_item("game", "玩游戏", 3, [(74, 77)]),
+            internal_item("pinned", "钉住任务", 2, [(77, 79)], pinned=True),
+            internal_item("shower", "洗澡", 2, [(79, 81)]),
+            external_item("external", "外部会议", 2, [(82, 84)]),
+        ],
+        now="2026-08-24T15:54:00+08:00",
+        text="写完报告之后跑步",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "add",
+                    "title": "跑步",
+                    "durationSlots": 2,
+                    "placement": {"anchor": "start", "slot": 74},
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "report").segments] == [
+        (71, 74)
+    ]
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(74, 76)]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "game").segments] == [
+        (76, 77),
+        (79, 81),
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "pinned").segments] == [
+        (77, 79)
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "shower").segments] == [
+        (81, 82),
+        (84, 85),
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "external").segments] == [
+        (82, 84)
+    ]
+    assert [operation.type for operation in response.proposal.operations] == [
+        "add",
+        "move",
+        "move",
+    ]
+
+
+def test_explicit_add_preserves_following_task_when_existing_gap_is_sufficient() -> None:
+    temporary_id = UUID("88888888-8888-4888-8888-888888888888")
+    request = request_with_items(
+        [
+            internal_item("report", "写报告", 3, [(71, 74)]),
+            internal_item("game", "玩游戏", 2, [(76, 78)]),
+        ],
+        now="2026-08-24T15:54:00+08:00",
+        text="写完报告之后跑步",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "add",
+                    "title": "跑步",
+                    "durationSlots": 2,
+                    "placement": {"anchor": "start", "slot": 74},
+                    "inputOrder": 0,
+                }
+            ]
+        ),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(74, 76)]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(response, "game").segments] == [
+        (76, 78)
+    ]
+    assert [operation.type for operation in response.proposal.operations] == ["add"]
+
+
 def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set() -> None:
     request = request_with_items(
         [
