@@ -92,17 +92,23 @@ def request_payload(
     request_id: str = "app-request-1",
     fingerprint: str = "sha256:private-base",
     items: list[dict[str, Any]] | None = None,
+    date: str = "2026-08-24",
+    now: str = "2026-08-24T08:10:00+08:00",
+    earliest_start_slot: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "text": text,
         "requestID": request_id,
         "baseFingerprint": fingerprint,
         "currentPlan": {
-            "date": "2026-08-24",
+            "date": date,
             "items": [] if items is None else items,
         },
-        "now": "2026-08-24T08:10:00+08:00",
+        "now": now,
     }
+    if earliest_start_slot is not None:
+        payload["earliestStartSlot"] = earliest_start_slot
+    return payload
 
 
 def operations_output(
@@ -281,6 +287,76 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
         "currentPlan": {"date": "2026-08-24", "items": []},
         "now": payload["now"],
     }
+
+
+def test_plan_parse_accepts_future_date_with_app_earliest_slot_in_one_model_call(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient([
+        operations_output([{"type": "add", "title": "明天任务", "inputOrder": 0}])
+    ])
+    payload = request_payload(
+        request_id="app-request-future",
+        date="2026-08-25",
+        earliest_start_slot=36,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"]["valid"] is True
+    assert body["validation"]["attempts"] == 1
+    assert body["proposal"]["candidatePlan"]["date"] == "2026-08-25"
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [
+        {"startSlot": 36, "endSlot": 38}
+    ]
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 36
+
+
+def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
+    fake = FakeModelClient([operations_output([])])
+    payload = request_payload(
+        request_id="app-request-past",
+        date="2026-08-23",
+        earliest_start_slot=36,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "PLANNING_DATE_NOT_ALLOWED"
+    assert fake.calls == []
+
+
+def test_plan_parse_requires_app_earliest_slot_for_future_date(settings: Settings) -> None:
+    fake = FakeModelClient([operations_output([])])
+    payload = request_payload(
+        request_id="app-request-future-missing-start",
+        date="2026-08-25",
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "EARLIEST_START_REQUIRED"
+    assert fake.calls == []
 
 
 def test_plan_parse_change_title_returns_title_only_candidate_without_private_fields(

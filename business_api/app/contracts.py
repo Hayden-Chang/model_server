@@ -299,6 +299,13 @@ class TimeFragmentPlanRequestV2(_TimeFragmentV2Model):
     base_fingerprint: str = Field(alias="baseFingerprint", min_length=1, max_length=500)
     current_plan: TimeFragmentPlanV2 = Field(alias="currentPlan")
     now: str
+    earliest_start_slot: int | None = Field(
+        default=None,
+        alias="earliestStartSlot",
+        ge=0,
+        le=95,
+        strict=True,
+    )
 
     @field_validator("text", "request_id", "base_fingerprint")
     @classmethod
@@ -354,6 +361,13 @@ class TimeFragmentModelPlanRequest(_TimeFragmentV2Model):
     text: str
     current_plan: TimeFragmentModelVisiblePlan = Field(alias="currentPlan")
     now: str
+    earliest_start_slot: int | None = Field(
+        default=None,
+        alias="earliestStartSlot",
+        ge=0,
+        le=95,
+        strict=True,
+    )
 
 
 class TimeFragmentPlacement(_TimeFragmentV2Model):

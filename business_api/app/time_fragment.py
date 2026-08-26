@@ -103,6 +103,7 @@ def project_time_fragment_request_for_model(
             items=visible_items,
         ),
         now=request.now,
+        earliestStartSlot=request.earliest_start_slot,
     )
 
 
@@ -138,6 +139,7 @@ class _ScheduleTarget:
     priority: int | None
     input_order: int
     operation_index: int
+    enforces_earliest_start: bool
     cascaded: bool = False
 
 
@@ -376,6 +378,10 @@ def plan_time_fragment(
                 priority=next(iter(priorities), None),
                 input_order=min(operation.input_order for operation in operations),
                 operation_index=min(index for index, _, _ in indexed_operations),
+                enforces_earliest_start=any(
+                    isinstance(operation, TimeFragmentMoveOperation)
+                    for operation in operations
+                ),
             )
         )
 
@@ -406,6 +412,7 @@ def plan_time_fragment(
                 priority=operation.priority,
                 input_order=operation.input_order,
                 operation_index=operation_index,
+                enforces_earliest_start=True,
             )
         )
 
@@ -459,6 +466,7 @@ def plan_time_fragment(
                     priority=None,
                     input_order=next_input_order + offset,
                     operation_index=len(normalized_operations) + offset,
+                    enforces_earliest_start=False,
                     cascaded=True,
                 )
             )
@@ -478,12 +486,28 @@ def plan_time_fragment(
             target.operation_index,
         )
     )
-    earliest_slot = _first_available_slot(request.now)
+    earliest_slot = _first_available_slot(request)
     for target in schedule_targets:
         item = candidate_by_id[target.item_id]
+        target_earliest_slot = earliest_slot if target.enforces_earliest_start else 0
+        placement_precedes_earliest = (
+            target.placement is not None
+            and target.placement_is_explicit
+            and (
+                (
+                    target.placement.anchor == "start"
+                    and target.placement.slot < target_earliest_slot
+                )
+                or (
+                    target.placement.anchor == "end"
+                    and target.placement.slot - item.duration_slots < target_earliest_slot
+                )
+            )
+        )
         if target.placement is not None and (
             (target.placement.anchor == "start" and target.placement.slot == 96)
             or (target.placement.anchor == "end" and target.placement.slot == 0)
+            or placement_precedes_earliest
         ):
             segments: list[TimeFragmentSegmentV2] = []
             _add_issue(
@@ -498,7 +522,7 @@ def plan_time_fragment(
                 occupied,
                 item.duration_slots,
                 placement=target.placement,
-                earliest_slot=earliest_slot,
+                earliest_slot=target_earliest_slot,
                 allow_occupied_anchor=target.cascaded,
             )
         item = item.model_copy(update={"segments": segments}, deep=True)
@@ -573,7 +597,6 @@ def validate_time_fragment_proposal(
         item.item_id: item for item in candidate_items if candidate_counts[item.item_id] == 1
     }
 
-    local_date = datetime.fromisoformat(request.now.replace("Z", "+00:00")).date().isoformat()
     if proposal.base_fingerprint != request.base_fingerprint:
         _add_issue(
             issues,
@@ -581,11 +604,11 @@ def validate_time_fragment_proposal(
             message="proposal 没有原样回显 baseFingerprint",
             field="baseFingerprint",
         )
-    if proposal.candidate_plan.date != request.current_plan.date or proposal.candidate_plan.date != local_date:
+    if proposal.candidate_plan.date != request.current_plan.date:
         _add_issue(
             issues,
             code="CROSS_DAY",
-            message="candidatePlan 日期与请求本地自然日不一致",
+            message="candidatePlan 日期与 currentPlan 日期不一致",
             field="candidatePlan.date",
         )
     if any(count > 1 for count in candidate_counts.values()):
@@ -1148,8 +1171,10 @@ def _evidence_scope_contains_item(evidence: str, item: TimeFragmentPlanItem) -> 
     )
 
 
-def _first_available_slot(now: str) -> int:
-    parsed = datetime.fromisoformat(now.replace("Z", "+00:00"))
+def _first_available_slot(request: TimeFragmentPlanRequestV2) -> int:
+    parsed = datetime.fromisoformat(request.now.replace("Z", "+00:00"))
+    if request.current_plan.date != parsed.date().isoformat():
+        return request.earliest_start_slot or 0
     slot = parsed.hour * 4 + parsed.minute // 15
     if parsed.minute % 15 or parsed.second or parsed.microsecond:
         slot += 1
@@ -1169,7 +1194,7 @@ def _allocate_segments(
             return []
         candidates = range(earliest_slot, 96)
     elif placement.anchor == "start":
-        if placement.slot >= 96 or (
+        if placement.slot < earliest_slot or placement.slot >= 96 or (
             occupied[placement.slot] and not allow_occupied_anchor
         ):
             return []
@@ -1178,7 +1203,7 @@ def _allocate_segments(
         end = placement.slot
         if end <= 0 or occupied[end - 1]:
             return []
-        candidates = range(end - 1, -1, -1)
+        candidates = range(end - 1, earliest_slot - 1, -1)
 
     selected: list[int] = []
     for slot in candidates:

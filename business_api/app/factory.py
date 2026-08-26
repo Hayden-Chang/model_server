@@ -32,7 +32,11 @@ from .observability import TrackedModelClient, aggregate_usage
 from .pipelines import get_pipeline
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .settings import Settings
-from .time_fragment_service import TimeFragmentInputTooLarge, execute_time_fragment_plan
+from .time_fragment_service import (
+    TimeFragmentInputTooLarge,
+    TimeFragmentRequestInvalid,
+    execute_time_fragment_plan,
+)
 from .usage_store import InferenceCapture, UsageStore
 
 
@@ -216,13 +220,35 @@ def create_app(
         started_at = datetime.now(timezone.utc)
         started_clock = time.perf_counter()
         tracker = TrackedModelClient(client)
-        request_content = payload.model_dump(mode="json", by_alias=True)
+        request_content = payload.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
         try:
             response = await execute_time_fragment_plan(
                 tracker,
                 payload,
                 max_input_chars=settings.max_input_chars,
             )
+        except TimeFragmentRequestInvalid as error:
+            failure = HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"code": error.code, "message": error.message},
+            )
+            persist_inference(
+                request_id=request.state.request_id,
+                device_key=device_key,
+                route="/api/plan/parse",
+                pipeline="time-fragment-plan-v2",
+                started_at=started_at,
+                started_clock=started_clock,
+                status_code=failure.status_code,
+                request_content=request_content,
+                response_content={"detail": failure.detail},
+                tracker=tracker,
+            )
+            raise failure from error
         except TimeFragmentInputTooLarge as error:
             failure = HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
