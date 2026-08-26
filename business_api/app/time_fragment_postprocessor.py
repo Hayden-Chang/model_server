@@ -66,7 +66,11 @@ def build_time_fragment_correction_input(
 ) -> str:
     correction: dict[str, Any] = {
         "instruction": "第一次 operations 未通过结构或语义校验。根据具体 issues 修正，并只返回完整替换后的 operations JSON。",
-        "originalRequest": original_request.model_dump(mode="json", by_alias=True),
+        "originalRequest": original_request.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        ),
         "issues": [
             {
                 "code": issue.code,

@@ -81,6 +81,7 @@ def test_v2_app_contract_covers_full_request_response_and_discriminated_items() 
         "baseFingerprint",
         "currentPlan",
         "now",
+        "earliestStartSlot",
     }
     assert set(response_schema["properties"]) == {"requestID", "proposal", "validation"}
     assert {
@@ -143,6 +144,16 @@ def test_model_visible_projection_never_contains_domain_references_or_envelope_i
         "occurrence-1",
         "external-1",
     ]
+
+
+def test_model_visible_projection_includes_app_future_start_slot() -> None:
+    payload = app_request_payload()
+    payload["earliestStartSlot"] = 36
+    request = TimeFragmentPlanRequestV2.model_validate(payload)
+
+    projection = project_time_fragment_request_for_model(request)
+
+    assert projection.earliest_start_slot == 36
 
 
 @pytest.mark.parametrize(

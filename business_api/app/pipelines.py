@@ -126,7 +126,8 @@ PIPELINES: dict[str, Pipeline] = {
             "quote from the user's text that affirmatively requests the change and names the exact "
             "target or an explicit time range. Never paraphrase authorizationText and never use a "
             "negative or keep-unchanged phrase as authorization. placement slots are 15-minute "
-            "grid indices from 0 through 96. Preserve user ordering in inputOrder and include "
+            "grid indices from 0 through 96. When earliestStartSlot is present, do not place a "
+            "new or explicitly moved task before that slot. Preserve user ordering in inputOrder and include "
             "priority only when the user specified one."
         ),
         temperature=0.0,

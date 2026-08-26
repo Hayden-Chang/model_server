@@ -1,4 +1,6 @@
 import json
+from datetime import date as Date
+from datetime import datetime
 from typing import Any
 
 from .contracts import TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2
@@ -19,17 +21,25 @@ class TimeFragmentInputTooLarge(Exception):
     pass
 
 
+class TimeFragmentRequestInvalid(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 async def execute_time_fragment_plan(
     model_client: Any,
     request: TimeFragmentPlanRequestV2,
     *,
     max_input_chars: int,
 ) -> TimeFragmentPlanResponseV2:
+    _validate_temporal_request(request)
     pipeline = get_pipeline("time-fragment-plan-v2")
     assert pipeline is not None
     model_request = project_time_fragment_request_for_model(request)
     initial_input = json.dumps(
-        model_request.model_dump(mode="json", by_alias=True),
+        model_request.model_dump(mode="json", by_alias=True, exclude_none=True),
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -69,3 +79,18 @@ async def execute_time_fragment_plan(
 def _ensure_input_within_limit(user_input: str, max_input_chars: int) -> None:
     if len(user_input) > max_input_chars:
         raise TimeFragmentInputTooLarge
+
+
+def _validate_temporal_request(request: TimeFragmentPlanRequestV2) -> None:
+    selected_date = Date.fromisoformat(request.current_plan.date)
+    local_date = datetime.fromisoformat(request.now.replace("Z", "+00:00")).date()
+    if selected_date < local_date:
+        raise TimeFragmentRequestInvalid(
+            "PLANNING_DATE_NOT_ALLOWED",
+            "planning date cannot be before today",
+        )
+    if selected_date > local_date and request.earliest_start_slot is None:
+        raise TimeFragmentRequestInvalid(
+            "EARLIEST_START_REQUIRED",
+            "earliestStartSlot is required for a future planning date",
+        )

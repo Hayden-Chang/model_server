@@ -105,18 +105,21 @@ def external_item(
 def request_with_items(
     items: list[dict[str, Any]],
     *,
+    date: str = "2026-08-24",
+    earliest_start_slot: int | None = None,
     now: str = "2026-08-24T08:00:00+08:00",
     text: str = "调整今天的计划",
 ) -> TimeFragmentPlanRequestV2:
-    return TimeFragmentPlanRequestV2.model_validate(
-        {
-            "text": text,
-            "requestID": "request-planner-test",
-            "baseFingerprint": "sha256:planner-base",
-            "currentPlan": {"date": "2026-08-24", "items": items},
-            "now": now,
-        }
-    )
+    payload = {
+        "text": text,
+        "requestID": "request-planner-test",
+        "baseFingerprint": "sha256:planner-base",
+        "currentPlan": {"date": date, "items": items},
+        "now": now,
+    }
+    if earliest_start_slot is not None:
+        payload["earliestStartSlot"] = earliest_start_slot
+    return TimeFragmentPlanRequestV2.model_validate(payload)
 
 
 def model_output(operations: list[dict[str, Any]]) -> TimeFragmentModelOperations:
@@ -436,6 +439,84 @@ def test_empty_day_add_uses_server_uuid_default_30_minutes_and_earliest_remainin
     added = item_by_id(response, str(temporary_id))
     assert added.domain_ref is None
     assert [(segment.start_slot, segment.end_slot) for segment in added.segments] == [(32, 34)]
+
+
+def test_future_candidate_matching_selected_date_is_not_cross_day() -> None:
+    response = plan_time_fragment(
+        request_with_items([], date="2026-08-25"),
+        model_output([]),
+    )
+
+    assert response.validation.valid is True
+    assert "CROSS_DAY" not in issue_codes(response)
+    assert response.proposal is not None
+    assert response.proposal.candidate_plan.date == "2026-08-25"
+
+
+def test_future_add_starts_at_app_supplied_earliest_slot() -> None:
+    temporary_id = UUID("23232323-2323-4232-8232-232323232323")
+    response = plan_time_fragment(
+        request_with_items(
+            [],
+            date="2026-08-25",
+            earliest_start_slot=36,
+        ),
+        model_output([{"type": "add", "title": "未来任务", "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response,
+        str(temporary_id),
+    ).segments] == [(36, 38)]
+
+
+def test_future_earliest_slot_preserves_unchanged_existing_earlier_task() -> None:
+    temporary_id = UUID("25252525-2525-4252-8252-252525252525")
+    response = plan_time_fragment(
+        request_with_items(
+            [internal_item("early-existing", "原有早间任务", 2, [(28, 30)])],
+            date="2026-08-25",
+            earliest_start_slot=36,
+        ),
+        model_output([{"type": "add", "title": "未来任务", "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response,
+        "early-existing",
+    ).segments] == [(28, 30)]
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response,
+        str(temporary_id),
+    ).segments] == [(36, 38)]
+
+
+def test_future_explicit_add_before_app_earliest_slot_is_rejected() -> None:
+    temporary_id = UUID("24242424-2424-4242-8242-242424242424")
+    response = plan_time_fragment(
+        request_with_items(
+            [],
+            date="2026-08-25",
+            earliest_start_slot=36,
+        ),
+        model_output([
+            {
+                "type": "add",
+                "title": "过早任务",
+                "placement": {"anchor": "start", "slot": 32},
+                "inputOrder": 0,
+            }
+        ]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is False
+    assert item_by_id(response, str(temporary_id)).segments == []
+    assert "INVALID_TIME" in issue_codes(response)
 
 
 def test_default_temporary_ids_make_identical_request_and_operations_byte_identical() -> None:
