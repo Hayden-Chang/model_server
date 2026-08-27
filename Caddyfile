@@ -1,9 +1,9 @@
 {
-	default_sni {$PUBLIC_IP}
+	default_sni {$PUBLIC_DOMAIN}
 }
 
-https://{$PUBLIC_IP} {
-	tls /etc/letsencrypt/live/{$PUBLIC_IP}/fullchain.pem /etc/letsencrypt/live/{$PUBLIC_IP}/privkey.pem
+https://{$PUBLIC_DOMAIN} {
+	tls /etc/letsencrypt/live/{$PUBLIC_DOMAIN}/fullchain.pem /etc/letsencrypt/live/{$PUBLIC_DOMAIN}/privkey.pem
 
 	encode zstd gzip
 

@@ -312,7 +312,7 @@ Time Fragment V2 复用模型协议层的 JSON Schema 约束，但采用独立�
 
 | 环境变量 | 使用者 | 作用 |
 | --- | --- | --- |
-| `PUBLIC_IP` | Compose、Caddy、验证脚本 | HTTPS 监听地址和公开请求地址 |
+| `PUBLIC_DOMAIN` | Compose、Caddy、验证脚本 | HTTPS 域名、证书目录和公开请求地址 |
 | `BUSINESS_API_KEY` | Business API | 公网 Pipeline 接口鉴权 |
 | `LITELLM_MASTER_KEY` | Business API、LiteLLM | 内部网关鉴权 |
 | `LLM_MODEL` | LiteLLM | 供应商类型和真实模型名 |

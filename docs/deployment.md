@@ -1,4 +1,4 @@
-# Deployment on an IP address
+# Deployment on a domain
 
 The target server already has Nginx on port 80 and existing APIs on private
 ports. This project uses only the currently free public port 443 and is deployed
@@ -6,9 +6,8 @@ under `/opt/model_server`.
 
 ## HTTPS certificate
 
-Let’s Encrypt IP-address certificates are short-lived (about six days). Certbot
-5.4 or newer can request them with a webroot challenge. Keep Nginx on port 80 and
-add this location to its existing default server block:
+Keep Nginx on port 80 and add this location to its existing default server block
+so Certbot can complete the HTTP-01 webroot challenge:
 
 ```nginx
 location ^~ /.well-known/acme-challenge/ {
@@ -17,15 +16,28 @@ location ^~ /.well-known/acme-challenge/ {
 }
 ```
 
-Then request the certificate (first use `--staging`, then repeat without it):
+After the public A record resolves to this server, test issuance against staging:
 
 ```bash
 sudo mkdir -p /var/www/model-server-acme
 sudo certbot certonly \
-  --preferred-profile shortlived \
+  --dry-run \
+  --non-interactive \
   --webroot \
   --webroot-path /var/www/model-server-acme \
-  --ip-address 47.120.13.5
+  --cert-name api.keeline.xyz \
+  -d api.keeline.xyz
+```
+
+Then request the production certificate:
+
+```bash
+sudo certbot certonly \
+  --non-interactive \
+  --webroot \
+  --webroot-path /var/www/model-server-acme \
+  --cert-name api.keeline.xyz \
+  -d api.keeline.xyz
 ```
 
 Install the deploy hook so Caddy loads the renewed certificate after each
@@ -74,7 +86,7 @@ removing it; `docker compose down` without `--volumes` preserves it.
 ## Production verification
 
 After deployment, run the repository smoke script from `/opt/model_server` with
-`PUBLIC_IP`, `BUSINESS_API_KEY`, and `ADMIN_API_KEY` already present in the
+`PUBLIC_DOMAIN`, `BUSINESS_API_KEY`, and `ADMIN_API_KEY` already present in the
 operator's environment:
 
 ```bash
