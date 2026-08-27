@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-: "${PUBLIC_IP:?PUBLIC_IP is required}"
+: "${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}"
 : "${BUSINESS_API_KEY:?BUSINESS_API_KEY is required}"
 : "${ADMIN_API_KEY:?ADMIN_API_KEY is required}"
 
-base_url="https://${PUBLIC_IP}"
+base_url="https://${PUBLIC_DOMAIN}"
 script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 connect_timeout_seconds=10
 standard_timeout_seconds=30

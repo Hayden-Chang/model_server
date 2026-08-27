@@ -10,7 +10,7 @@ services:
       business-api:
         condition: service_healthy
     environment:
-      PUBLIC_IP: ${PUBLIC_IP:?PUBLIC_IP is required}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
     ports:
       - "443:443"
     volumes:
