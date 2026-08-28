@@ -119,3 +119,29 @@ def test_stale_reservation_is_recovered_after_process_restart(tmp_path: Path) ->
         assert recovered.remaining == 0
     finally:
         restarted_store.close()
+
+
+def test_stale_execution_cannot_finish_a_new_retry_with_the_same_request_id(
+    tmp_path: Path,
+) -> None:
+    database_path = str(tmp_path / "quota.sqlite3")
+    first_store = QuotaStore(database_path, default_limit=1)
+    stale = first_store.reserve("guest_one", "same-request")
+    first_store.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE quota_requests SET updated_at = '2000-01-01T00:00:00Z'"
+        )
+
+    restarted_store = QuotaStore(database_path, default_limit=1)
+    try:
+        retried = restarted_store.reserve("guest_one", "same-request")
+        restarted_store.consume(stale)
+        restarted_store.refund(retried)
+
+        status = restarted_store.status(retried.support_code)
+        assert status is not None
+        assert status.used == 0
+        assert status.remaining == 1
+    finally:
+        restarted_store.close()

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from pathlib import Path
 class QuotaReservation:
     bucket_id: int
     request_id: str
+    reservation_token: str
     support_code: str
     quota_limit: int
     used: int
@@ -76,6 +78,7 @@ class QuotaStore:
                 CREATE TABLE IF NOT EXISTS quota_requests (
                     bucket_id INTEGER NOT NULL REFERENCES quota_buckets(id),
                     request_id TEXT NOT NULL,
+                    reservation_token TEXT NOT NULL,
                     state TEXT NOT NULL CHECK (state IN ('reserved', 'consumed', 'refunded')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -145,18 +148,20 @@ class QuotaStore:
                         )
                     )
 
+                reservation_token = secrets.token_urlsafe(18)
                 if existing is None:
                     self._connection.execute(
                         """INSERT INTO quota_requests (
-                            bucket_id, request_id, state, created_at, updated_at
-                        ) VALUES (?, ?, 'reserved', ?, ?)""",
-                        (bucket_id, request_id, now, now),
+                            bucket_id, request_id, reservation_token, state, created_at, updated_at
+                        ) VALUES (?, ?, ?, 'reserved', ?, ?)""",
+                        (bucket_id, request_id, reservation_token, now, now),
                     )
                 else:
                     self._connection.execute(
-                        """UPDATE quota_requests SET state = 'reserved', updated_at = ?
+                        """UPDATE quota_requests
+                        SET reservation_token = ?, state = 'reserved', updated_at = ?
                         WHERE bucket_id = ? AND request_id = ?""",
-                        (now, bucket_id, request_id),
+                        (reservation_token, now, bucket_id, request_id),
                     )
                 used += 1
                 self._connection.execute(
@@ -167,6 +172,7 @@ class QuotaStore:
                 return QuotaReservation(
                     bucket_id=bucket_id,
                     request_id=request_id,
+                    reservation_token=reservation_token,
                     support_code=support_code,
                     quota_limit=quota_limit,
                     used=used,
@@ -246,8 +252,15 @@ class QuotaStore:
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 """UPDATE quota_requests SET state = ?, updated_at = ?
-                WHERE bucket_id = ? AND request_id = ? AND state = 'reserved'""",
-                (state, now, reservation.bucket_id, reservation.request_id),
+                WHERE bucket_id = ? AND request_id = ?
+                    AND reservation_token = ? AND state = 'reserved'""",
+                (
+                    state,
+                    now,
+                    reservation.bucket_id,
+                    reservation.request_id,
+                    reservation.reservation_token,
+                ),
             )
             if decrement and cursor.rowcount:
                 self._connection.execute(
