@@ -320,6 +320,31 @@ def test_plan_parse_accepts_future_date_with_app_earliest_slot_in_one_model_call
     assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 36
 
 
+def test_plan_parse_honors_app_earliest_slot_for_today(settings: Settings) -> None:
+    fake = FakeModelClient([
+        operations_output([{"type": "add", "title": "当天任务", "inputOrder": 0}])
+    ])
+    payload = request_payload(
+        request_id="app-request-today-start",
+        now="2026-08-24T10:15:59+08:00",
+        earliest_start_slot=48,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["proposal"]["candidatePlan"]["items"][0]["segments"] == [
+        {"startSlot": 48, "endSlot": 50}
+    ]
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 48
+
+
 def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
     fake = FakeModelClient([operations_output([])])
     payload = request_payload(

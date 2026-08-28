@@ -1172,9 +1172,11 @@ def _evidence_scope_contains_item(evidence: str, item: TimeFragmentPlanItem) -> 
 
 
 def _first_available_slot(request: TimeFragmentPlanRequestV2) -> int:
+    if request.earliest_start_slot is not None:
+        return request.earliest_start_slot
     parsed = datetime.fromisoformat(request.now.replace("Z", "+00:00"))
     if request.current_plan.date != parsed.date().isoformat():
-        return request.earliest_start_slot or 0
+        return 0
     slot = parsed.hour * 4 + parsed.minute // 15
     if parsed.minute % 15 or parsed.second or parsed.microsecond:
         slot += 1
