@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import date as Date
 from datetime import datetime
 from typing import Any
@@ -65,7 +66,8 @@ async def execute_time_fragment_plan(
         )
 
     _ensure_input_within_limit(correction_input, max_input_chars)
-    second_output = await model_client.complete(pipeline, correction_input)
+    fallback_pipeline = replace(pipeline, thinking_mode="enabled")
+    second_output = await model_client.complete(fallback_pipeline, correction_input)
     try:
         second_operations = parse_time_fragment_model_operations(second_output.content)
     except TimeFragmentModelOutputInvalid:

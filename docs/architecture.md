@@ -229,8 +229,10 @@ ExternalEvent 标题属于来源事实，不能通过规划接口修改。钉住
 - `deletedOccurrenceIDs` 和 `deletedExternalEventIDs`；
 - 当天完整 `candidatePlan` 及每个已排期对象的完整 `segments`。
 
-模型输出第一次无法解析或语义校验失败时，服务把具体问题放入一次纠错请求；单次
-API 调用最多调用模型两次。第二次可解析但仍有语义错误时，接口仍以 HTTP 200 返回
+首轮模型调用显式关闭 thinking，只提取结构化 operations；任务跨空闲区间形成的
+`segments` 由确定性排程器在本地计算。模型输出第一次无法解析或语义校验失败时，
+服务把具体问题放入一次开启 thinking 的纠错请求；单次 API 调用最多调用模型两次。
+第二次可解析但仍有语义错误时，接口仍以 HTTP 200 返回
 完整第二版 proposal、`attempts: 2` 和结构化 issues，便于 App 展示和继续调整。第二
 次完全无法解析时，以 HTTP 200 返回 `proposal: null`、`attempts: 2` 和
 `PARSE_FAILED`。内容错误不会被伪装成基础设施错误，也不会触发第三次模型调用。

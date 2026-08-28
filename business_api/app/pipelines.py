@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .contracts import TimeFragmentModelOperations
 
@@ -61,6 +61,7 @@ class Pipeline:
     temperature: float
     max_tokens: int
     response_schema: dict[str, Any] | None = None
+    thinking_mode: Literal["enabled", "disabled"] | None = None
 
     def messages(self, user_input: str) -> list[dict[str, str]]:
         system_prompt = self.system_prompt
@@ -133,6 +134,7 @@ PIPELINES: dict[str, Pipeline] = {
         temperature=0.0,
         max_tokens=20_000,
         response_schema=TIME_FRAGMENT_OPERATIONS_SCHEMA,
+        thinking_mode="disabled",
     ),
 }
 

@@ -27,6 +27,7 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
 
     assert pipeline is not None
     assert pipeline.max_tokens == 20_000
+    assert pipeline.thinking_mode == "disabled"
 
 
 @dataclass
@@ -282,6 +283,7 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
     assert len(fake.calls) == 1
     pipeline, first_input = fake.calls[0]
     assert pipeline.pipeline_id == "time-fragment-plan-v2"
+    assert pipeline.thinking_mode == "disabled"
     assert json.loads(first_input) == {
         "text": payload["text"],
         "currentPlan": {"date": "2026-08-24", "items": []},
@@ -509,6 +511,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
     assert response.status_code == 200
     assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
     assert len(fake.calls) == 2
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
     first_input = json.loads(fake.calls[0][1])
     correction = json.loads(fake.calls[1][1])
     assert correction["originalRequest"] == first_input
@@ -740,6 +743,7 @@ def test_two_unparseable_outputs_return_parse_failed_and_never_make_a_third_call
     assert correction["issues"] == [{"code": "PARSE_FAILED", "message": "模型输出不是有效 JSON"}]
     assert "firstCandidate" not in correction
     assert len(fake.calls) == 2
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
 
 
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(
