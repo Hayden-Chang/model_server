@@ -88,13 +88,17 @@ returns a `PlanProposal`. The proposal is authoritative and contains the echoed
 `baseFingerprint`, `algorithmVersion`, normalized `operations`, explicit delete
 sets, and the complete `candidatePlan` with time segments.
 
-The service calls the model once for a valid result, or once more with concrete
-validation issues as a correction request. A parseable second result that is
-still semantically invalid is returned with HTTP 200 as a complete proposal and
-structured issues. A second result that cannot be parsed is returned with HTTP
-200 as `proposal: null` and `PARSE_FAILED`. Authentication, request-size,
-request-shape, and model-infrastructure failures use HTTP 401, 413, 422, 502,
-and 503 as applicable.
+The first model call explicitly disables thinking and only extracts structured
+operations; the deterministic planner computes any split time segments locally.
+Tasks that no longer fit or whose requested time has already passed remain in
+the candidate with empty `segments` and warning issues; these normal scheduling
+outcomes never trigger correction. If parsing or error-level semantic validation
+fails, the service enables thinking for one correction request containing only
+error issues. A parseable second result that is still semantically invalid is
+returned with HTTP 200 as a complete proposal and structured issues. A second
+result that cannot be parsed is returned with HTTP 200 as `proposal: null` and
+`PARSE_FAILED`. Authentication, request-size, request-shape, and
+model-infrastructure failures use HTTP 401, 413, 422, 502, and 503 as applicable.
 
 There is no application-layer request-rate limiter and this route does not
 return an application-generated 429. The current guest token identifies one

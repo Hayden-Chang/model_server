@@ -45,6 +45,8 @@ class LiteLLMClient:
             "temperature": pipeline.temperature,
             "max_tokens": pipeline.max_tokens,
         }
+        if pipeline.thinking_mode is not None:
+            payload["thinking"] = {"type": pipeline.thinking_mode}
         if pipeline.response_schema is not None:
             if self._settings.structured_output_mode == "json_schema":
                 payload["response_format"] = {
@@ -92,4 +94,3 @@ class LiteLLMClient:
     def _authorization_header(self) -> dict[str, str]:
         key = self._settings.litellm_master_key.get_secret_value()
         return {"Authorization": f"Bearer {key}"}
-

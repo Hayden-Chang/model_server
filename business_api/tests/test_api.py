@@ -1,11 +1,13 @@
-from dataclasses import dataclass, field
+import asyncio
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.factory import create_app
-from app.model_client import ModelGatewayUnavailable, ModelOutput
+from app.model_client import LiteLLMClient, ModelGatewayUnavailable, ModelOutput
+from app.pipelines import get_pipeline
 from app.settings import Settings
 
 
@@ -124,7 +126,71 @@ def test_text_pipeline_assembles_server_owned_parameters(settings: Settings) -> 
     assert user_input == "hello"
     assert pipeline.temperature == 0.2
     assert pipeline.max_tokens == 2_000
+    assert pipeline.thinking_mode is None
     assert pipeline.messages(user_input)[0]["role"] == "system"
+
+
+@pytest.mark.parametrize(
+    ("pipeline_id", "thinking_override", "expected_thinking"),
+    [
+        ("general-text-v1", None, None),
+        ("time-fragment-plan-v2", None, {"type": "disabled"}),
+        ("time-fragment-plan-v2", "enabled", {"type": "enabled"}),
+    ],
+)
+def test_litellm_client_forwards_pipeline_thinking_mode(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    pipeline_id: str,
+    thinking_override: str | None,
+    expected_thinking: dict[str, str] | None,
+) -> None:
+    class StubResponse:
+        status_code = 200
+        is_success = True
+
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return {
+                "choices": [{"message": {"content": '{"operations":[]}'}}],
+                "model": "provider/model-a",
+                "usage": None,
+            }
+
+    class RecordingAsyncClient:
+        request_json: dict[str, Any] | None = None
+
+        async def __aenter__(self) -> "RecordingAsyncClient":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(
+            self,
+            _: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> StubResponse:
+            assert headers["Authorization"].startswith("Bearer ")
+            self.request_json = json
+            return StubResponse()
+
+    recorder = RecordingAsyncClient()
+    monkeypatch.setattr(
+        "app.model_client.httpx.AsyncClient",
+        lambda **_: recorder,
+    )
+    pipeline = get_pipeline(pipeline_id)
+    assert pipeline is not None
+    if thinking_override is not None:
+        pipeline = replace(pipeline, thinking_mode=thinking_override)
+
+    asyncio.run(LiteLLMClient(settings).complete(pipeline, "test input"))
+
+    assert recorder.request_json is not None
+    assert recorder.request_json.get("thinking") == expected_thinking
 
 
 def test_structured_pipeline_validates_and_returns_object(settings: Settings) -> None:

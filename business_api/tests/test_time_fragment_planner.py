@@ -441,6 +441,25 @@ def test_empty_day_add_uses_server_uuid_default_30_minutes_and_earliest_remainin
     assert [(segment.start_slot, segment.end_slot) for segment in added.segments] == [(32, 34)]
 
 
+def test_today_add_starts_at_app_supplied_earliest_slot() -> None:
+    temporary_id = UUID("26262626-2626-4262-8262-262626262626")
+    response = plan_time_fragment(
+        request_with_items(
+            [],
+            earliest_start_slot=48,
+            now="2026-08-24T10:15:59+08:00",
+        ),
+        model_output([{"type": "add", "title": "当天任务", "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response,
+        str(temporary_id),
+    ).segments] == [(48, 50)]
+
+
 def test_future_candidate_matching_selected_date_is_not_cross_day() -> None:
     response = plan_time_fragment(
         request_with_items([], date="2026-08-25"),

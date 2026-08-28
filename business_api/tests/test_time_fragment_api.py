@@ -27,6 +27,7 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
 
     assert pipeline is not None
     assert pipeline.max_tokens == 20_000
+    assert pipeline.thinking_mode == "disabled"
 
 
 @dataclass
@@ -282,6 +283,7 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
     assert len(fake.calls) == 1
     pipeline, first_input = fake.calls[0]
     assert pipeline.pipeline_id == "time-fragment-plan-v2"
+    assert pipeline.thinking_mode == "disabled"
     assert json.loads(first_input) == {
         "text": payload["text"],
         "currentPlan": {"date": "2026-08-24", "items": []},
@@ -318,6 +320,31 @@ def test_plan_parse_accepts_future_date_with_app_earliest_slot_in_one_model_call
     ]
     assert len(fake.calls) == 1
     assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 36
+
+
+def test_plan_parse_honors_app_earliest_slot_for_today(settings: Settings) -> None:
+    fake = FakeModelClient([
+        operations_output([{"type": "add", "title": "当天任务", "inputOrder": 0}])
+    ])
+    payload = request_payload(
+        request_id="app-request-today-start",
+        now="2026-08-24T10:15:59+08:00",
+        earliest_start_slot=48,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["proposal"]["candidatePlan"]["items"][0]["segments"] == [
+        {"startSlot": 48, "endSlot": 50}
+    ]
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 48
 
 
 def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
@@ -484,6 +511,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
     assert response.status_code == 200
     assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
     assert len(fake.calls) == 2
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
     first_input = json.loads(fake.calls[0][1])
     correction = json.loads(fake.calls[1][1])
     assert correction["originalRequest"] == first_input
@@ -503,6 +531,94 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         assert payload["requestID"] not in serialized
         assert payload["baseFingerprint"] not in serialized
         assert "status" not in recursive_keys(json.loads(serialized))
+
+
+def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_correction(
+    settings: Settings,
+) -> None:
+    operations = [
+        {
+            "type": "add",
+            "title": f"任务 {index + 1}",
+            "durationSlots": 4,
+            **(
+                {"placement": {"anchor": "start", "slot": 48}}
+                if index == 0
+                else {}
+            ),
+            "inputOrder": index,
+        }
+        for index in range(14)
+    ]
+    fake = FakeModelClient([operations_output(operations)])
+    payload = request_payload(
+        text="安排以下 14 个任务，其中一个指定在已经过去的时间",
+        request_id="app-request-normal-unplaced",
+        now="2026-08-24T13:32:13+08:00",
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post("/api/plan/parse", headers=guest_headers(client), json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"]["valid"] is True
+    assert body["validation"]["attempts"] == 1
+    assert len(body["proposal"]["operations"]) == 14
+    assert len(body["proposal"]["candidatePlan"]["items"]) == 14
+    assert sum(not item["segments"] for item in body["proposal"]["candidatePlan"]["items"]) == 4
+    assert {
+        (issue["code"], issue["severity"])
+        for issue in body["validation"]["issues"]
+    } == {("INVALID_TIME", "warning"), ("UNPLACED", "warning")}
+    assert len(fake.calls) == 1
+
+
+def test_semantic_correction_excludes_normal_unplaced_warnings(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient(
+        [
+            operations_output(
+                [
+                    {
+                        "type": "move",
+                        "targetItemId": "missing-item",
+                        "allowedChanges": ["segments"],
+                        "inputOrder": 0,
+                    },
+                    {
+                        "type": "add",
+                        "title": "已错过时间的任务",
+                        "durationSlots": 2,
+                        "placement": {"anchor": "start", "slot": 32},
+                        "inputOrder": 1,
+                    },
+                ]
+            ),
+            operations_output([]),
+        ]
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(items=[internal_item()]),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    correction = json.loads(fake.calls[1][1])
+    assert correction["issues"] == [
+        {
+            "code": "UNKNOWN_TARGET",
+            "message": "操作引用的 itemId 不存在于 currentPlan",
+            "itemId": "missing-item",
+            "field": "targetItemId",
+        }
+    ]
+    assert len(fake.calls) == 2
 
 
 def test_observability_aggregates_two_model_calls_for_guest_device(settings: Settings) -> None:
@@ -715,6 +831,7 @@ def test_two_unparseable_outputs_return_parse_failed_and_never_make_a_third_call
     assert correction["issues"] == [{"code": "PARSE_FAILED", "message": "模型输出不是有效 JSON"}]
     assert "firstCandidate" not in correction
     assert len(fake.calls) == 2
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
 
 
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(
