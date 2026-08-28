@@ -1,5 +1,7 @@
 import json
+import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -899,6 +901,179 @@ def test_plan_parse_does_not_rate_limit_eleven_guest_requests(settings: Settings
     assert [response.status_code for response in responses] == [200] * 11
     assert all(response.json()["validation"]["attempts"] == 1 for response in responses)
     assert len(fake.calls) == 11
+
+
+def test_plan_parse_enforces_installation_quota_and_admin_can_reset_it(
+    settings: Settings,
+) -> None:
+    limited_settings = settings.model_copy(update={"time_fragment_guest_quota_limit": 2})
+    fake = FakeModelClient([operations_output([]) for _ in range(3)])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        headers = guest_headers(client, "time-fragment-ios-quota-device")
+        first = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="quota-request-1"),
+        )
+        second = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="quota-request-2"),
+        )
+        exhausted = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="quota-request-3"),
+        )
+        detail = exhausted.json()["detail"]
+        quota = client.get(
+            f"/admin/time-fragment/quotas/{detail['supportCode']}",
+            headers=admin_headers(),
+        )
+        reset = client.post(
+            f"/admin/time-fragment/quotas/{detail['supportCode']}/reset",
+            headers=admin_headers(),
+        )
+        after_reset = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="quota-request-4"),
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert exhausted.status_code == 429
+    assert detail == {
+        "code": "AI_QUOTA_EXHAUSTED",
+        "message": "本轮内测的 AI 额度已用完，请将支持码发给开发者刷新。",
+        "limit": 2,
+        "remaining": 0,
+        "supportCode": detail["supportCode"],
+    }
+    assert detail["supportCode"].startswith("TF-")
+    assert "quota-device" not in detail["supportCode"]
+    assert quota.json() == {
+        "supportCode": detail["supportCode"],
+        "limit": 2,
+        "used": 2,
+        "remaining": 0,
+    }
+    assert reset.json()["remaining"] == 2
+    assert after_reset.status_code == 200
+    assert len(fake.calls) == 3
+
+
+def test_plan_parse_refunds_gateway_and_unusable_model_failures(settings: Settings) -> None:
+    limited_settings = settings.model_copy(update={"time_fragment_guest_quota_limit": 1})
+    fake = FakeModelClient(
+        [
+            ModelGatewayUnavailable("temporarily unavailable"),
+            raw_output("not-json"),
+            raw_output("still-not-json"),
+            operations_output([]),
+        ]
+    )
+    with TestClient(create_app(limited_settings, fake)) as client:
+        headers = guest_headers(client, "time-fragment-ios-refund-device")
+        gateway_failure = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="refund-request-1"),
+        )
+        unusable_response = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="refund-request-2"),
+        )
+        success = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="refund-request-3"),
+        )
+
+    assert gateway_failure.status_code == 503
+    assert unusable_response.status_code == 200
+    assert unusable_response.json()["proposal"] is None
+    assert success.status_code == 200
+    assert len(fake.calls) == 4
+
+
+def test_duplicate_consumed_request_id_is_rejected_without_another_model_call(
+    settings: Settings,
+) -> None:
+    limited_settings = settings.model_copy(update={"time_fragment_guest_quota_limit": 1})
+    fake = FakeModelClient([operations_output([])])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        headers = guest_headers(client, "time-fragment-ios-duplicate-device")
+        first = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="same-request"),
+        )
+        duplicate = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="same-request"),
+        )
+        new_request = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(request_id="new-request"),
+        )
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "AI_REQUEST_ALREADY_COMPLETED"
+    assert new_request.status_code == 429
+    assert len(fake.calls) == 1
+
+
+def test_quota_admin_reset_all_requires_admin_key(settings: Settings) -> None:
+    limited_settings = settings.model_copy(update={"time_fragment_guest_quota_limit": 1})
+    fake = FakeModelClient([operations_output([]), operations_output([])])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        for device_id in ("time-fragment-ios-reset-device-a", "time-fragment-ios-reset-device-b"):
+            response = client.post(
+                "/api/plan/parse",
+                headers=guest_headers(client, device_id),
+                json=request_payload(request_id=f"request-{device_id[-1]}"),
+            )
+            assert response.status_code == 200
+
+        unauthorized = client.post("/admin/time-fragment/quotas/reset-all")
+        reset_all = client.post(
+            "/admin/time-fragment/quotas/reset-all",
+            headers=admin_headers(),
+        )
+
+    assert unauthorized.status_code == 401
+    assert reset_all.json() == {"refreshedInstallations": 2}
+
+
+def test_quota_and_observability_share_the_persisted_sqlite_volume(
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "usage.sqlite3"
+    persisted_settings = settings.model_copy(update={"usage_db_path": str(database_path)})
+    fake = FakeModelClient([operations_output([])])
+    with TestClient(create_app(persisted_settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client, "time-fragment-ios-persisted-device"),
+            json=request_payload(request_id="persisted-request"),
+        )
+
+    with sqlite3.connect(database_path) as connection:
+        inference_count = connection.execute(
+            "SELECT COUNT(*) FROM inference_requests"
+        ).fetchone()[0]
+        quota_count = connection.execute(
+            "SELECT COUNT(*) FROM quota_requests WHERE state = 'consumed'"
+        ).fetchone()[0]
+
+    assert response.status_code == 200
+    assert inference_count == 1
+    assert quota_count == 1
 
 
 @pytest.mark.parametrize(

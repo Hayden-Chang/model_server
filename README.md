@@ -100,11 +100,19 @@ result that cannot be parsed is returned with HTTP 200 as `proposal: null` and
 `PARSE_FAILED`. Authentication, request-size, request-shape, and
 model-infrastructure failures use HTTP 401, 413, 422, 502, and 503 as applicable.
 
-There is no application-layer request-rate limiter and this route does not
-return an application-generated 429. The current guest token identifies one
-installation; it is not an account, persistent quota, or durable anti-abuse
-boundary. Registration, user sessions, account upgrades, persistent quotas,
-cost accounting, and launch-stage compliance/routing controls are not implemented.
+The route has a persistent per-installation quota of 50 usable AI requests by
+default (`TIME_FRAGMENT_GUEST_QUOTA_LIMIT`). It atomically reserves one use by
+App `requestID` before calling the model. Repeating a completed `requestID` is
+rejected without another quota deduction or model call. Invalid input,
+model-infrastructure failures, and a
+final `proposal: null` response return the reservation; a usable proposal
+consumes it. An exhausted installation receives HTTP 429 with code
+`AI_QUOTA_EXHAUSTED` and an anonymous `TF-....-....` support code.
+
+This is an internal-test control, not an account or a durable anti-abuse
+boundary: deleting/reinstalling the App can create a new installation identity.
+Registration, user sessions, account upgrades, cost accounting, and
+launch-stage compliance/routing controls are not implemented.
 
 ## Observability API
 
@@ -119,13 +127,22 @@ existing Time Fragment guest token, never the original identifier. Without the
 header, generic requests are grouped under `unattributed`. This identifier is
 for analytics only and is not an authentication or quota boundary.
 
-The read-only management endpoints require `ADMIN_API_KEY`, not the client-facing
-business or guest credentials:
+Management endpoints require `ADMIN_API_KEY`, not the client-facing business or
+guest credentials. Observability endpoints are read-only; quota reset endpoints
+mutate only the installation quota ledger:
 
 ```text
 GET /admin/observability/requests?device_id=<installation-id>&start_time=<ISO-8601>&end_time=<ISO-8601>
 GET /admin/observability/summary?device_key=<guest-key>&start_time=<ISO-8601>&end_time=<ISO-8601>
+GET /admin/time-fragment/quotas/<support-code>
+POST /admin/time-fragment/quotas/<support-code>/reset
+POST /admin/time-fragment/quotas/reset-all
 ```
+
+The specific reset starts a fresh 50-use bucket only for the installation that
+reported the support code. The reset-all operation starts fresh buckets lazily
+on each installation's next AI request. Both the quota ledger and observability
+records live in the existing `model-server-usage` SQLite volume.
 
 Open `https://${PUBLIC_IP}/admin/observability` for the browser dashboard. The
 page itself contains no data or credentials. Enter `ADMIN_API_KEY` in the login

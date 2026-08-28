@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from .admin_dashboard import ADMIN_DASHBOARD_HEADERS, ADMIN_DASHBOARD_HTML
 from .contracts import (
@@ -18,6 +18,8 @@ from .contracts import (
     TimeFragmentGuestResponse,
     TimeFragmentPlanRequestV2,
     TimeFragmentPlanResponseV2,
+    TimeFragmentQuotaResetAllResponse,
+    TimeFragmentQuotaStatusResponse,
     UsageRecordListResponse,
     UsageSummaryResponse,
 )
@@ -31,6 +33,14 @@ from .model_client import (
 from .observability import TrackedModelClient, aggregate_usage
 from .pipelines import get_pipeline
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
+from .quota_store import (
+    DuplicateRequestCompleted,
+    DuplicateRequestInProgress,
+    QuotaExceeded,
+    QuotaReservation,
+    QuotaStatus,
+    QuotaStore,
+)
 from .settings import Settings
 from .time_fragment_service import (
     TimeFragmentInputTooLarge,
@@ -42,6 +52,7 @@ from .usage_store import InferenceCapture, UsageStore
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 DEVICE_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
+SUPPORT_CODE_PATTERN = r"^TF-[A-Z2-7]{4}-[A-Z2-7]{4}$"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -49,17 +60,23 @@ def create_app(
     settings: Settings,
     model_client: Any | None = None,
     usage_store: UsageStore | None = None,
+    quota_store: QuotaStore | None = None,
 ) -> FastAPI:
     client = model_client or LiteLLMClient(settings)
     store = usage_store or UsageStore(
         settings.usage_db_path,
         settings.usage_content_retention_days,
     )
+    quotas = quota_store or QuotaStore(
+        settings.usage_db_path,
+        settings.time_fragment_guest_quota_limit,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> Any:
         yield
         store.close()
+        quotas.close()
 
     app = FastAPI(title="Model Server Business API", version="1.0.0", lifespan=lifespan)
     guest_tokens = GuestTokenCodec(
@@ -74,7 +91,7 @@ def create_app(
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
-        if request.url.path.startswith("/admin/observability"):
+        if request.url.path.startswith("/admin/"):
             response.headers["cache-control"] = "no-store"
             response.headers["x-content-type-options"] = "nosniff"
         return response
@@ -225,6 +242,70 @@ def create_app(
             by_alias=True,
             exclude_none=True,
         )
+        reservation: QuotaReservation | None = None
+        try:
+            reservation = quotas.reserve(device_key, payload.request_id)
+        except QuotaExceeded as error:
+            failure = HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=_quota_exhausted_detail(error.quota_status),
+            )
+            persist_inference(
+                request_id=request.state.request_id,
+                device_key=device_key,
+                route="/api/plan/parse",
+                pipeline="time-fragment-plan-v2",
+                started_at=started_at,
+                started_clock=started_clock,
+                status_code=failure.status_code,
+                request_content=request_content,
+                response_content={"detail": failure.detail},
+                tracker=tracker,
+            )
+            raise failure from error
+        except DuplicateRequestInProgress as error:
+            failure = HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "AI_REQUEST_IN_PROGRESS",
+                    "message": "a request with this requestID is already in progress",
+                },
+            )
+            persist_inference(
+                request_id=request.state.request_id,
+                device_key=device_key,
+                route="/api/plan/parse",
+                pipeline="time-fragment-plan-v2",
+                started_at=started_at,
+                started_clock=started_clock,
+                status_code=failure.status_code,
+                request_content=request_content,
+                response_content={"detail": failure.detail},
+                tracker=tracker,
+            )
+            raise failure from error
+        except DuplicateRequestCompleted as error:
+            failure = HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "AI_REQUEST_ALREADY_COMPLETED",
+                    "message": "a request with this requestID has already completed",
+                },
+            )
+            persist_inference(
+                request_id=request.state.request_id,
+                device_key=device_key,
+                route="/api/plan/parse",
+                pipeline="time-fragment-plan-v2",
+                started_at=started_at,
+                started_clock=started_clock,
+                status_code=failure.status_code,
+                request_content=request_content,
+                response_content={"detail": failure.detail},
+                tracker=tracker,
+            )
+            raise failure from error
+        assert reservation is not None
         try:
             response = await execute_time_fragment_plan(
                 tracker,
@@ -232,6 +313,7 @@ def create_app(
                 max_input_chars=settings.max_input_chars,
             )
         except TimeFragmentRequestInvalid as error:
+            quotas.refund(reservation)
             failure = HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"code": error.code, "message": error.message},
@@ -250,6 +332,7 @@ def create_app(
             )
             raise failure from error
         except TimeFragmentInputTooLarge as error:
+            quotas.refund(reservation)
             failure = HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail={"code": "INPUT_TOO_LARGE", "message": "input exceeds the configured limit"},
@@ -268,6 +351,7 @@ def create_app(
             )
             raise failure from error
         except ModelGatewayUnavailable as error:
+            quotas.refund(reservation)
             failure = HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "MODEL_GATEWAY_UNAVAILABLE", "message": str(error)},
@@ -286,6 +370,7 @@ def create_app(
             )
             raise failure from error
         except ModelGatewayResponseError as error:
+            quotas.refund(reservation)
             failure = HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={"code": "MODEL_GATEWAY_ERROR", "message": str(error)},
@@ -303,6 +388,14 @@ def create_app(
                 tracker=tracker,
             )
             raise failure from error
+        except Exception:
+            quotas.refund(reservation)
+            raise
+
+        if response.proposal is None:
+            quotas.refund(reservation)
+        else:
+            quotas.consume(reservation)
 
         persist_inference(
             request_id=request.state.request_id,
@@ -437,6 +530,42 @@ def create_app(
             devices=devices,
         )
 
+    @app.get(
+        "/admin/time-fragment/quotas/{support_code}",
+        response_model=TimeFragmentQuotaStatusResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def get_time_fragment_quota(
+        support_code: Annotated[str, Path(pattern=SUPPORT_CODE_PATTERN)],
+    ) -> TimeFragmentQuotaStatusResponse:
+        quota_status = quotas.status(support_code)
+        if quota_status is None:
+            raise _unknown_support_code()
+        return _quota_status_response(quota_status)
+
+    @app.post(
+        "/admin/time-fragment/quotas/{support_code}/reset",
+        response_model=TimeFragmentQuotaStatusResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def reset_time_fragment_quota(
+        support_code: Annotated[str, Path(pattern=SUPPORT_CODE_PATTERN)],
+    ) -> TimeFragmentQuotaStatusResponse:
+        quota_status = quotas.reset(support_code)
+        if quota_status is None:
+            raise _unknown_support_code()
+        return _quota_status_response(quota_status)
+
+    @app.post(
+        "/admin/time-fragment/quotas/reset-all",
+        response_model=TimeFragmentQuotaResetAllResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def reset_all_time_fragment_quotas() -> TimeFragmentQuotaResetAllResponse:
+        return TimeFragmentQuotaResetAllResponse(
+            refreshed_installations=quotas.reset_all()
+        )
+
     return app
 
 
@@ -454,6 +583,32 @@ def _resolve_device_filter(
             },
         )
     return guest_tokens.device_key(device_id) if device_id is not None else device_key
+
+
+def _quota_exhausted_detail(quota_status: QuotaStatus) -> dict[str, Any]:
+    return {
+        "code": "AI_QUOTA_EXHAUSTED",
+        "message": "本轮内测的 AI 额度已用完，请将支持码发给开发者刷新。",
+        "limit": quota_status.quota_limit,
+        "remaining": quota_status.remaining,
+        "supportCode": quota_status.support_code,
+    }
+
+
+def _quota_status_response(quota_status: QuotaStatus) -> TimeFragmentQuotaStatusResponse:
+    return TimeFragmentQuotaStatusResponse(
+        support_code=quota_status.support_code,
+        limit=quota_status.quota_limit,
+        used=quota_status.used,
+        remaining=quota_status.remaining,
+    )
+
+
+def _unknown_support_code() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "SUPPORT_CODE_NOT_FOUND", "message": "unknown support code"},
+    )
 
 
 def _validate_time_range(start_time: datetime | None, end_time: datetime | None) -> None:
