@@ -117,6 +117,21 @@ class TimeFragmentGuestResponse(BaseModel):
     expires_in: int
 
 
+class TimeFragmentQuotaStatusResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    support_code: str = Field(alias="supportCode")
+    limit: int = Field(ge=1)
+    used: int = Field(ge=0)
+    remaining: int = Field(ge=0)
+
+
+class TimeFragmentQuotaResetAllResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    refreshed_installations: int = Field(alias="refreshedInstallations", ge=0)
+
+
 class TimeFragmentTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

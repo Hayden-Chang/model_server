@@ -66,8 +66,8 @@ install -m 0755 caddy /opt/model_server/caddy/caddy
 ```
 
 Copy `.env.example` to `.env`, replace every placeholder with independent
-secrets/provider settings, including a dedicated `ADMIN_API_KEY` for the
-read-only observability endpoints, then:
+secrets/provider settings, including a dedicated `ADMIN_API_KEY` for
+observability reads and Time Fragment quota resets, then:
 
 ```bash
 cd /opt/model_server
@@ -127,8 +127,9 @@ printed or written to disk. The script prints only the existing non-sensitive
 general Pipeline responses and a concise Time Fragment success summary.
 
 This smoke verifies the currently deployed request path and one real model
-response. It does not prove or provision formal accounts, persistent quotas,
-cost accounting, regional routing, compliance presentation, or additional
-gateway anti-abuse controls. The smoke also queries the observability summary
+response. It does not prove or provision formal accounts, exhaust/reset the
+per-installation quota, perform cost accounting, validate regional routing,
+verify compliance presentation, or test additional gateway anti-abuse controls.
+The smoke also queries the observability summary
 for its Time Fragment device and confirms that the just-completed request and
 reported Token metadata are visible; it does not inspect or print raw content.
