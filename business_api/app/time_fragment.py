@@ -487,33 +487,46 @@ def plan_time_fragment(
         )
     )
     earliest_slot = _first_available_slot(request)
+    current_day_slot = _current_day_slot(request)
     for target in schedule_targets:
         item = candidate_by_id[target.item_id]
         target_earliest_slot = earliest_slot if target.enforces_earliest_start else 0
         placement_precedes_earliest = (
             target.placement is not None
             and target.placement_is_explicit
-            and (
-                (
-                    target.placement.anchor == "start"
-                    and target.placement.slot < target_earliest_slot
-                )
-                or (
-                    target.placement.anchor == "end"
-                    and target.placement.slot - item.duration_slots < target_earliest_slot
-                )
+            and _placement_precedes_slot(
+                target.placement,
+                item.duration_slots,
+                target_earliest_slot,
             )
         )
-        if target.placement is not None and (
+        placement_precedes_current_time = (
+            target.placement is not None
+            and target.placement_is_explicit
+            and current_day_slot is not None
+            and _placement_precedes_slot(
+                target.placement,
+                item.duration_slots,
+                current_day_slot,
+            )
+        )
+        placement_outside_day = target.placement is not None and (
             (target.placement.anchor == "start" and target.placement.slot == 96)
             or (target.placement.anchor == "end" and target.placement.slot == 0)
-            or placement_precedes_earliest
-        ):
+        )
+        if placement_outside_day or placement_precedes_earliest:
             segments: list[TimeFragmentSegmentV2] = []
             _add_issue(
                 issues,
                 code="INVALID_TIME",
-                message="指定的时间锚点不在可排期范围内",
+                message=(
+                    "指定时间早于当前可排期起点，已保留为未排任务"
+                    if placement_precedes_current_time
+                    else "指定的时间锚点不在可排期范围内"
+                ),
+                severity=(
+                    "warning" if placement_precedes_current_time else "error"
+                ),
                 item_id=item.item_id,
                 field="placement.slot",
             )
@@ -1174,13 +1187,28 @@ def _evidence_scope_contains_item(evidence: str, item: TimeFragmentPlanItem) -> 
 def _first_available_slot(request: TimeFragmentPlanRequestV2) -> int:
     if request.earliest_start_slot is not None:
         return request.earliest_start_slot
+    current_day_slot = _current_day_slot(request)
+    return 0 if current_day_slot is None else current_day_slot
+
+
+def _current_day_slot(request: TimeFragmentPlanRequestV2) -> int | None:
     parsed = datetime.fromisoformat(request.now.replace("Z", "+00:00"))
     if request.current_plan.date != parsed.date().isoformat():
-        return 0
+        return None
     slot = parsed.hour * 4 + parsed.minute // 15
     if parsed.minute % 15 or parsed.second or parsed.microsecond:
         slot += 1
     return min(slot, 96)
+
+
+def _placement_precedes_slot(
+    placement: TimeFragmentPlacement,
+    duration_slots: int,
+    earliest_slot: int,
+) -> bool:
+    if placement.anchor == "start":
+        return placement.slot < earliest_slot
+    return placement.slot - duration_slots < earliest_slot
 
 
 def _allocate_segments(

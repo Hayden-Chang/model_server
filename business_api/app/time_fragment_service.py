@@ -59,9 +59,16 @@ async def execute_time_fragment_plan(
         first_response = plan_time_fragment(request, first_operations, attempts=1)
         if first_response.validation.valid:
             return first_response
+        correction_issues = [
+            issue
+            for issue in first_response.validation.issues
+            if issue.severity == "error"
+        ]
+        if not correction_issues:
+            return first_response
         correction_input = build_time_fragment_correction_input(
             model_request,
-            first_response.validation.issues,
+            correction_issues,
             first_response,
         )
 

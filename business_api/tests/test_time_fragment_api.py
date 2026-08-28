@@ -533,6 +533,94 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         assert "status" not in recursive_keys(json.loads(serialized))
 
 
+def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_correction(
+    settings: Settings,
+) -> None:
+    operations = [
+        {
+            "type": "add",
+            "title": f"任务 {index + 1}",
+            "durationSlots": 4,
+            **(
+                {"placement": {"anchor": "start", "slot": 48}}
+                if index == 0
+                else {}
+            ),
+            "inputOrder": index,
+        }
+        for index in range(14)
+    ]
+    fake = FakeModelClient([operations_output(operations)])
+    payload = request_payload(
+        text="安排以下 14 个任务，其中一个指定在已经过去的时间",
+        request_id="app-request-normal-unplaced",
+        now="2026-08-24T13:32:13+08:00",
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post("/api/plan/parse", headers=guest_headers(client), json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"]["valid"] is True
+    assert body["validation"]["attempts"] == 1
+    assert len(body["proposal"]["operations"]) == 14
+    assert len(body["proposal"]["candidatePlan"]["items"]) == 14
+    assert sum(not item["segments"] for item in body["proposal"]["candidatePlan"]["items"]) == 4
+    assert {
+        (issue["code"], issue["severity"])
+        for issue in body["validation"]["issues"]
+    } == {("INVALID_TIME", "warning"), ("UNPLACED", "warning")}
+    assert len(fake.calls) == 1
+
+
+def test_semantic_correction_excludes_normal_unplaced_warnings(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient(
+        [
+            operations_output(
+                [
+                    {
+                        "type": "move",
+                        "targetItemId": "missing-item",
+                        "allowedChanges": ["segments"],
+                        "inputOrder": 0,
+                    },
+                    {
+                        "type": "add",
+                        "title": "已错过时间的任务",
+                        "durationSlots": 2,
+                        "placement": {"anchor": "start", "slot": 32},
+                        "inputOrder": 1,
+                    },
+                ]
+            ),
+            operations_output([]),
+        ]
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(items=[internal_item()]),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    correction = json.loads(fake.calls[1][1])
+    assert correction["issues"] == [
+        {
+            "code": "UNKNOWN_TARGET",
+            "message": "操作引用的 itemId 不存在于 currentPlan",
+            "itemId": "missing-item",
+            "field": "targetItemId",
+        }
+    ]
+    assert len(fake.calls) == 2
+
+
 def test_observability_aggregates_two_model_calls_for_guest_device(settings: Settings) -> None:
     device_id = "time-fragment-observed-device-1234"
     unknown_move = {
