@@ -24,13 +24,18 @@ def solve_slot_allocations(
     occupied: Sequence[bool],
     targets: Sequence[SlotAllocationTarget],
 ) -> dict[str, list[int]] | None:
-    """Allocate one day globally while preserving target admission order.
+    """Allocate one day with a deterministic fast path and CP-SAT fallback.
 
-    Each target is admitted only when it can coexist with all higher-ranked
-    targets. Once admission is fixed, CP-SAT keeps higher-ranked work near its
-    preferred edge. ``None`` means the solver could not produce a reliable
-    answer and lets the caller fall back to its deterministic allocator.
+    Greedy allocation handles the common fully feasible case. When it cannot
+    place every target, CP-SAT admits each target only when it can coexist with
+    all higher-ranked targets and globally reassigns their slots. ``None`` means
+    CP-SAT could not produce a reliable answer within its budget and lets the
+    caller retain the existing deterministic result.
     """
+
+    greedy_assignments = _greedy_assignments(occupied, targets)
+    if greedy_assignments is not None:
+        return greedy_assignments
 
     deadline = monotonic() + _TOTAL_SOLVER_SECONDS
     admitted: dict[str, bool] = {}
@@ -51,6 +56,9 @@ def solve_slot_allocations(
         admitted.update(decisions)
 
     selected = [target for target in targets if admitted.get(target.item_id, False)]
+    greedy_assignments = _greedy_assignments(occupied, selected)
+    if greedy_assignments is not None:
+        return greedy_assignments
     remaining_seconds = deadline - monotonic()
     if remaining_seconds <= 0:
         return None
@@ -205,6 +213,30 @@ def _required_anchor_slot(target: SlotAllocationTarget) -> int | None:
     if target.anchor == "start":
         return target.anchor_slot
     return target.anchor_slot - 1 if target.anchor_slot is not None else None
+
+
+def _greedy_assignments(
+    occupied: Sequence[bool],
+    targets: Sequence[SlotAllocationTarget],
+) -> dict[str, list[int]] | None:
+    current_occupied = list(occupied)
+    assignments: dict[str, list[int]] = {}
+    for target in targets:
+        allowed_slots = _allowed_slots(current_occupied, target)
+        if target.anchor == "end":
+            allowed_slots.reverse()
+        if target.anchor is not None and target.require_anchor:
+            anchor_slot = _required_anchor_slot(target)
+            if anchor_slot not in allowed_slots:
+                return None
+        selected_slots = allowed_slots[: target.duration_slots]
+        if len(selected_slots) != target.duration_slots:
+            return None
+        selected_slots.sort()
+        assignments[target.item_id] = selected_slots
+        for slot in selected_slots:
+            current_occupied[slot] = True
+    return assignments
 
 
 def _allowed_slots(
