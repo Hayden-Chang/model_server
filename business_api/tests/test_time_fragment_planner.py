@@ -2028,7 +2028,7 @@ def test_priority_then_input_order_controls_competing_placement(
     assert "UNPLACED" in issue_codes(response)
 
 
-def test_priority_labels_without_relation_preserve_model_scores() -> None:
+def test_complete_priority_labels_without_relation_use_natural_precedence() -> None:
     ids: Iterator[UUID] = iter(
         [
             UUID("45454545-4545-4454-8454-454545454545"),
@@ -2038,6 +2038,98 @@ def test_priority_labels_without_relation_preserve_model_scores() -> None:
     request = request_with_items(
         [external_item("fixed", "固定占用", 62, [(34, 96)])],
         text="任务甲，a1，30 分钟\n任务乙，b1，30 分钟",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {"type": "add", "title": "任务甲", "priority": 1, "inputOrder": 0},
+            {"type": "add", "title": "任务乙", "priority": 2, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items if item.segments] == ["任务甲"]
+
+
+def test_priority_labels_kept_in_model_titles_are_stripped_and_control_precedence() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("89898989-8989-4989-8989-898989898989"),
+            UUID("90909090-9090-4090-8090-909090909090"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="08:00 任务甲，a1，30 分钟\n任务乙，b1，30 分钟",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {
+                "type": "add",
+                "title": "任务甲，a1",
+                "placement": {"anchor": "start", "slot": 32},
+                "authorizationText": "08:00 任务甲，a1",
+                "priority": 1,
+                "inputOrder": 0,
+            },
+            {"type": "add", "title": "任务乙，b1", "priority": 2, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items] == ["任务甲", "任务乙"]
+    assert [item.title for item in new_items if item.segments] == ["任务甲"]
+    assert [(segment.start_slot, segment.end_slot) for segment in new_items[0].segments] == [
+        (32, 34)
+    ]
+
+
+def test_explicit_priority_relation_overrides_natural_label_precedence() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("67676767-6767-4767-8767-676767676767"),
+            UUID("78787878-7878-4787-8787-787878787878"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="任务甲，a1，30 分钟\n任务乙，b1，30 分钟\nB 大于 A",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {"type": "add", "title": "任务甲", "priority": 2, "inputOrder": 0},
+            {"type": "add", "title": "任务乙", "priority": 1, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items if item.segments] == ["任务乙"]
+
+
+def test_incomplete_priority_labels_preserve_model_scores() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("12121212-1212-4212-8212-121212121212"),
+            UUID("34343434-3434-4434-8434-343434343434"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="任务甲，a1，30 分钟\n任务乙，30 分钟",
     )
 
     response = plan_time_fragment(

@@ -945,13 +945,16 @@ def _normalize_operations(
         operation_data = operation.model_dump(mode="json", by_alias=True)
         if isinstance(operation, TimeFragmentModelAddOperation):
             operation_data.pop("authorizationText", None)
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            if title_label is not None:
+                operation_data["title"] = title_label[0]
             if operation_index in requested_add_priorities:
                 operation_data["priority"] = requested_add_priorities[operation_index]
             if (
                 operation.placement is not None
                 and not _add_placement_is_authorized(
                     request_text,
-                    operation.title,
+                    operation_data["title"],
                     operation.authorization_text,
                 )
             ):
@@ -1014,8 +1017,6 @@ def _requested_add_priority_scores(
         group_values,
         number_values,
     )
-    if not group_relations and not number_relations:
-        return {}
 
     group_order = _priority_token_order(group_values, group_relations)
     number_order = _priority_token_order(number_values, number_relations)
@@ -1026,8 +1027,8 @@ def _requested_add_priority_scores(
 
     def precedence_key(group: str, number: int) -> tuple[int, int]:
         return (
-            group_position[group] if group_relations else 0,
-            number_position[number] if number_relations else 0,
+            group_position[group],
+            number_position[number],
         )
 
     ordered_keys = sorted({
@@ -1045,6 +1046,9 @@ def _requested_add_priority_scores(
 
 
 def _priority_label_for_title(request_text: str, title: str) -> tuple[str, int] | None:
+    title_label = _priority_label_in_model_title(request_text, title)
+    if title_label is not None:
+        return title_label[1], title_label[2]
     for line in request_text.splitlines():
         title_index = line.find(title)
         if title_index == -1:
@@ -1057,6 +1061,19 @@ def _priority_label_for_title(request_text: str, title: str) -> tuple[str, int] 
         if match is not None:
             return match.group(1).upper(), int(match.group(2))
     return None
+
+
+def _priority_label_in_model_title(
+    request_text: str,
+    title: str,
+) -> tuple[str, str, int] | None:
+    match = re.match(
+        r"^(.+?)\s*[，,]\s*([A-Za-z]+)\s*[-_.]?\s*(\d+)\s*$",
+        title,
+    )
+    if match is None or not any(title in line for line in request_text.splitlines()):
+        return None
+    return match.group(1).strip(), match.group(2).upper(), int(match.group(3))
 
 
 def _priority_relations(

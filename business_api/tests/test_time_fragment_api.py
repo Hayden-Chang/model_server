@@ -457,6 +457,99 @@ def test_global_start_uses_requested_priority_instead_of_model_derived_add_place
     ]
 
 
+def test_complete_priority_labels_use_natural_order_without_relation(
+    settings: Settings,
+) -> None:
+    request_text = (
+        "•  [ ] 检查空调，b1，15 分\n"
+        "•  [ ] 把窗帘弄好，b2，15 分\n"
+        "•  [ ] 把投影幕布扔掉，b3，15 分\n"
+        "•  [ ] 把钥匙放下，b4，15 分\n"
+        "•  [ ] 再洗一遍衣，a1，30 分钟\n"
+        "•  [ ] 晾衣服，c1，30 分\n"
+        "•  [ ] 去我那里拿钥匙，a2，15分钟\n"
+        "•  [ ] 买二手床，a3，30 分钟\n"
+        "•  [ ] 搬床垫，a4，15 分钟\n"
+        "•  [ ] 去拿蟑螂胶饵，a5，15 分钟"
+    )
+    model_tasks = [
+        ("检查空调", 1),
+        ("把窗帘弄好", 1),
+        ("把投影幕布扔掉", 1),
+        ("把钥匙放下", 1),
+        ("再洗一遍衣", 2),
+        ("晾衣服", 2),
+        ("去我那里拿钥匙", 1),
+        ("买二手床", 2),
+        ("搬床垫", 1),
+        ("去拿蟑螂胶饵", 1),
+    ]
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": title,
+                "durationSlots": duration_slots,
+                "authorizationText": line.strip(),
+                "inputOrder": input_order,
+            }
+            for input_order, ((title, duration_slots), line) in enumerate(
+                zip(model_tasks, request_text.splitlines(), strict=True)
+            )
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-natural-priority-order",
+        now="2026-09-01T18:59:05+08:00",
+        date="2026-09-01",
+        earliest_start_slot=76,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert [
+        (operation["title"], operation["priority"])
+        for operation in body["proposal"]["operations"]
+    ] == [
+        ("检查空调", 5),
+        ("把窗帘弄好", 4),
+        ("把投影幕布扔掉", 3),
+        ("把钥匙放下", 2),
+        ("再洗一遍衣", 10),
+        ("晾衣服", 1),
+        ("去我那里拿钥匙", 9),
+        ("买二手床", 8),
+        ("搬床垫", 7),
+        ("去拿蟑螂胶饵", 6),
+    ]
+    scheduled = sorted(
+        body["proposal"]["candidatePlan"]["items"],
+        key=lambda item: item["segments"][0]["startSlot"],
+    )
+    assert [item["title"] for item in scheduled] == [
+        "再洗一遍衣",
+        "去我那里拿钥匙",
+        "买二手床",
+        "搬床垫",
+        "去拿蟑螂胶饵",
+        "检查空调",
+        "把窗帘弄好",
+        "把投影幕布扔掉",
+        "把钥匙放下",
+        "晾衣服",
+    ]
+
+
 def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
     fake = FakeModelClient([operations_output([])])
     payload = request_payload(
