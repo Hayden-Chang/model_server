@@ -186,6 +186,10 @@ def test_v2_model_schema_and_pipeline_expose_only_structured_operations() -> Non
     assert "temporaryId" not in operation_property_names
     assert "status" not in operation_property_names
     assert "status" not in pipeline.system_prompt.lower()
+    assert "larger positive priority score means higher priority" in pipeline.system_prompt
+    assert "include placement only when the user states an exact clock time for that individual task" in (
+        pipeline.system_prompt
+    )
     assert get_pipeline("time-fragment-plan-v1") is not None
 
 

@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,6 +40,12 @@ TIME_FRAGMENT_PLANNER_VERSION = "time-fragment-planner-v1"
 _TEMPORARY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL,
     "https://timefragment.app/time-fragment-plan-v2/temporary-id",
+)
+_EXACT_CLOCK_PATTERN = re.compile(
+    r"(?<!\d)(?:(?:[01]?\d|2[0-3])[:：][0-5]\d|24[:：]00)(?!\d)"
+    r"|(?<![零〇一二两三四五六七八九十\d])"
+    r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
+    r"|(?:[01]?\d|2[0-3]|24))\s*点"
 )
 
 
@@ -164,6 +171,7 @@ def plan_time_fragment(
     normalized_operations = _normalize_operations(
         model_output,
         base_index,
+        request_text=request.text,
         request_id=request.request_id,
         existing_item_ids=set(base_counts),
         uuid_factory=uuid_factory,
@@ -922,15 +930,32 @@ def _normalize_operations(
     model_output: TimeFragmentModelOperations,
     base_index: dict[str, TimeFragmentPlanItem],
     *,
+    request_text: str,
     request_id: str,
     existing_item_ids: set[str],
     uuid_factory: Callable[[], UUID] | None,
 ) -> list[TimeFragmentOperation]:
     used_ids = set(existing_item_ids)
     normalized: list[TimeFragmentOperation] = []
+    requested_add_priorities = _requested_add_priority_scores(
+        request_text,
+        model_output.operations,
+    )
     for operation_index, operation in enumerate(model_output.operations):
         operation_data = operation.model_dump(mode="json", by_alias=True)
         if isinstance(operation, TimeFragmentModelAddOperation):
+            operation_data.pop("authorizationText", None)
+            if operation_index in requested_add_priorities:
+                operation_data["priority"] = requested_add_priorities[operation_index]
+            if (
+                operation.placement is not None
+                and not _add_placement_is_authorized(
+                    request_text,
+                    operation.title,
+                    operation.authorization_text,
+                )
+            ):
+                operation_data["placement"] = None
             collision_index = 0
             temporary_id = _next_temporary_id(
                 request_id=request_id,
@@ -962,6 +987,128 @@ def _normalize_operations(
         }[operation.type]
         normalized.append(operation_type.model_validate(operation_data))
     return normalized
+
+
+def _requested_add_priority_scores(
+    request_text: str,
+    operations: list[TimeFragmentModelOperation],
+) -> dict[int, int]:
+    add_operation_count = sum(
+        isinstance(operation, TimeFragmentModelAddOperation)
+        for operation in operations
+    )
+    labeled_operations: list[tuple[int, str, int]] = []
+    for operation_index, operation in enumerate(operations):
+        if not isinstance(operation, TimeFragmentModelAddOperation):
+            continue
+        label = _priority_label_for_title(request_text, operation.title)
+        if label is not None:
+            labeled_operations.append((operation_index, *label))
+    if len(labeled_operations) < 2 or len(labeled_operations) != add_operation_count:
+        return {}
+
+    group_values = {group for _, group, _ in labeled_operations}
+    number_values = {number for _, _, number in labeled_operations}
+    group_relations, number_relations = _priority_relations(
+        request_text,
+        group_values,
+        number_values,
+    )
+    if not group_relations and not number_relations:
+        return {}
+
+    group_order = _priority_token_order(group_values, group_relations)
+    number_order = _priority_token_order(number_values, number_relations)
+    if group_order is None or number_order is None:
+        return {}
+    group_position = {value: index for index, value in enumerate(group_order)}
+    number_position = {value: index for index, value in enumerate(number_order)}
+
+    def precedence_key(group: str, number: int) -> tuple[int, int]:
+        return (
+            group_position[group] if group_relations else 0,
+            number_position[number] if number_relations else 0,
+        )
+
+    ordered_keys = sorted({
+        precedence_key(group, number)
+        for _, group, number in labeled_operations
+    })
+    score_by_key = {
+        key: len(ordered_keys) - index
+        for index, key in enumerate(ordered_keys)
+    }
+    return {
+        operation_index: score_by_key[precedence_key(group, number)]
+        for operation_index, group, number in labeled_operations
+    }
+
+
+def _priority_label_for_title(request_text: str, title: str) -> tuple[str, int] | None:
+    for line in request_text.splitlines():
+        title_index = line.find(title)
+        if title_index == -1:
+            continue
+        suffix = line[title_index + len(title) :]
+        match = re.match(
+            r"\s*[，,]\s*([A-Za-z]+)\s*[-_.]?\s*(\d+)\s*(?=[，,]|$)",
+            suffix,
+        )
+        if match is not None:
+            return match.group(1).upper(), int(match.group(2))
+    return None
+
+
+def _priority_relations(
+    request_text: str,
+    group_values: set[str],
+    number_values: set[int],
+) -> tuple[set[tuple[str, str]], set[tuple[int, int]]]:
+    normalized = (
+        request_text.replace("大于", ">")
+        .replace("高于", ">")
+        .replace("优先于", ">")
+        .replace("＞", ">")
+    )
+    group_relations: set[tuple[str, str]] = set()
+    number_relations: set[tuple[int, int]] = set()
+    for match in re.finditer(
+        r"(?=\b([A-Za-z]+|\d+)\s*>\s*([A-Za-z]+|\d+)\b)",
+        normalized,
+    ):
+        higher, lower = match.group(1), match.group(2)
+        if higher.isalpha() and lower.isalpha():
+            relation = (higher.upper(), lower.upper())
+            if relation[0] in group_values and relation[1] in group_values:
+                group_relations.add(relation)
+        elif higher.isdigit() and lower.isdigit():
+            relation = (int(higher), int(lower))
+            if relation[0] in number_values and relation[1] in number_values:
+                number_relations.add(relation)
+    return group_relations, number_relations
+
+
+def _priority_token_order(
+    values: set[str] | set[int],
+    relations: set[tuple[str, str]] | set[tuple[int, int]],
+) -> list[str] | list[int] | None:
+    outgoing = {value: set() for value in values}
+    indegree = {value: 0 for value in values}
+    for higher, lower in relations:
+        if lower not in outgoing[higher]:
+            outgoing[higher].add(lower)
+            indegree[lower] += 1
+    available = sorted(value for value, degree in indegree.items() if degree == 0)
+    ordered = []
+    while available:
+        value = available.pop(0)
+        ordered.append(value)
+        for lower in sorted(outgoing[value]):
+            indegree[lower] -= 1
+            if indegree[lower] == 0:
+                available.append(lower)
+                available.sort()
+    return ordered if len(ordered) == len(values) else None
 
 
 def _next_temporary_id(
@@ -1059,7 +1206,29 @@ def _has_explicit_time_reference(text: str) -> bool:
         for marker in ("上午", "中午", "下午", "晚上", "傍晚", "凌晨", "早上", "清晨", ":", "：")
     ):
         return True
-    return any(f"{number}点" in text for number in "零一二三四五六七八九十两0123456789")
+    return _has_exact_clock_reference(text)
+
+
+def _has_exact_clock_reference(text: str) -> bool:
+    return _EXACT_CLOCK_PATTERN.search(text) is not None
+
+
+def _add_placement_is_authorized(
+    request_text: str,
+    title: str,
+    authorization_text: str | None,
+) -> bool:
+    if authorization_text is None:
+        return False
+    evidence = authorization_text.strip()
+    if not evidence or evidence not in request_text or title not in evidence:
+        return False
+    if any(delimiter in evidence for delimiter in "。；;！!？?\n"):
+        return False
+    clause = _clause_containing(request_text, evidence)
+    if any(marker in clause for marker in ("不要", "别", "无需", "不许", "不能", "禁止")):
+        return False
+    return _has_exact_clock_reference(evidence)
 
 
 def _operation_is_explicitly_requested(

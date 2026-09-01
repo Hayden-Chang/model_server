@@ -128,8 +128,13 @@ PIPELINES: dict[str, Pipeline] = {
             "target or an explicit time range. Never paraphrase authorizationText and never use a "
             "negative or keep-unchanged phrase as authorization. placement slots are 15-minute "
             "grid indices from 0 through 96. When earliestStartSlot is present, do not place a "
-            "new or explicitly moved task before that slot. Preserve user ordering in inputOrder and include "
-            "priority only when the user specified one."
+            "new or explicitly moved task before that slot. For add, include placement only when the user "
+            "states an exact clock time for that individual task, and include authorizationText as the "
+            "shortest exact quote containing both the task title and that time. A global earliestStartSlot, "
+            "relative ordering, or priority rule does not authorize per-task placement. Preserve source "
+            "appearance in inputOrder. Include priority only when the user specified one. priority is a "
+            "positive score: a larger positive priority score means higher priority. Encode every requested "
+            "precedence level in that score; equally ranked tasks use inputOrder."
         ),
         temperature=0.0,
         max_tokens=20_000,
