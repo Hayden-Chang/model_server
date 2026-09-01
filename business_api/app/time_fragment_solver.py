@@ -7,7 +7,8 @@ from ortools.sat.python import cp_model
 
 _DAY_SLOT_COUNT = 96
 _ADMISSION_BATCH_SIZE = 30
-_TOTAL_SOLVER_SECONDS = 0.25
+_MAX_SOLVE_SECONDS = 0.25
+_TOTAL_SOLVER_SECONDS = 0.9
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,7 @@ def _solve_admission_batch(
     remaining_seconds = deadline - monotonic()
     if remaining_seconds <= 0:
         return "unknown", {}
-    solver = _new_solver(max_time_seconds=min(0.1, remaining_seconds))
+    solver = _new_solver(max_time_seconds=min(_MAX_SOLVE_SECONDS, remaining_seconds))
     status = solver.solve(model)
     if status != cp_model.OPTIMAL:
         return "unknown", {}
@@ -184,7 +185,7 @@ def _solve_required_targets(
     remaining_seconds = deadline - monotonic()
     if remaining_seconds <= 0:
         return "unknown", {}
-    solver = _new_solver(max_time_seconds=min(0.1, remaining_seconds))
+    solver = _new_solver(max_time_seconds=min(_MAX_SOLVE_SECONDS, remaining_seconds))
     status = solver.solve(model)
     if status == cp_model.UNKNOWN:
         return "unknown", {}
