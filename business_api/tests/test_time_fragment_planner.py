@@ -1988,6 +1988,69 @@ def test_priority_then_input_order_controls_competing_placement(
     assert "UNPLACED" in issue_codes(response)
 
 
+def test_global_solver_reassigns_anchored_tasks_instead_of_false_unplaced() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("77777777-7777-4777-8777-777777777777"),
+            UUID("88888888-8888-4888-8888-888888888888"),
+        ]
+    )
+    request = request_with_items([external_item("fixed", "固定占用", 60, [(36, 96)])])
+
+    response = plan_time_fragment(
+        request,
+        model_output(
+            [
+                {
+                    "type": "add",
+                    "title": "从八点开始",
+                    "durationSlots": 2,
+                    "placement": {"anchor": "start", "slot": 32},
+                    "inputOrder": 0,
+                },
+                {
+                    "type": "add",
+                    "title": "八点四十五前结束",
+                    "durationSlots": 2,
+                    "placement": {"anchor": "end", "slot": 35},
+                    "inputOrder": 1,
+                },
+            ]
+        ),
+        uuid_factory=lambda: next(ids),
+    )
+
+    first = item_by_id(response, "77777777-7777-4777-8777-777777777777")
+    second = item_by_id(response, "88888888-8888-4888-8888-888888888888")
+    assert [(segment.start_slot, segment.end_slot) for segment in first.segments] == [
+        (32, 33),
+        (35, 36),
+    ]
+    assert [(segment.start_slot, segment.end_slot) for segment in second.segments] == [(33, 35)]
+    assert response.validation.valid is True
+    assert "UNPLACED" not in issue_codes(response)
+
+
+def test_solver_timeout_falls_back_to_deterministic_allocator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_id = UUID("99999999-9999-4999-8999-999999999999")
+    monkeypatch.setattr("app.time_fragment.solve_slot_allocations", lambda *_: None)
+
+    response = plan_time_fragment(
+        request_with_items([]),
+        model_output([{"type": "add", "title": "回退任务", "durationSlots": 2, "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(32, 34)]
+    assert response.validation.valid is True
+    assert "UNPLACED" not in issue_codes(response)
+
+
 def test_insufficient_capacity_returns_no_partial_segments_and_remains_valid() -> None:
     temporary_id = UUID("55555555-5555-4555-8555-555555555555")
     request = request_with_items([external_item("fixed", "固定占用", 63, [(33, 96)])])

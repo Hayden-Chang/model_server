@@ -32,6 +32,7 @@ from .contracts import (
     TimeFragmentValidationIssue,
 )
 from .postprocessors import ModelOutputInvalid
+from .time_fragment_solver import SlotAllocationTarget, solve_slot_allocations
 
 
 TIME_FRAGMENT_PLANNER_VERSION = "time-fragment-planner-v1"
@@ -488,6 +489,8 @@ def plan_time_fragment(
     )
     earliest_slot = _first_available_slot(request)
     current_day_slot = _current_day_slot(request)
+    invalid_target_ids: set[str] = set()
+    solver_targets: list[SlotAllocationTarget] = []
     for target in schedule_targets:
         item = candidate_by_id[target.item_id]
         target_earliest_slot = earliest_slot if target.enforces_earliest_start else 0
@@ -515,7 +518,7 @@ def plan_time_fragment(
             or (target.placement.anchor == "end" and target.placement.slot == 0)
         )
         if placement_outside_day or placement_precedes_earliest:
-            segments: list[TimeFragmentSegmentV2] = []
+            invalid_target_ids.add(target.item_id)
             _add_issue(
                 issues,
                 code="INVALID_TIME",
@@ -530,7 +533,25 @@ def plan_time_fragment(
                 item_id=item.item_id,
                 field="placement.slot",
             )
-        else:
+            continue
+        solver_targets.append(
+            SlotAllocationTarget(
+                item_id=target.item_id,
+                duration_slots=item.duration_slots,
+                earliest_slot=target_earliest_slot,
+                anchor=target.placement.anchor if target.placement is not None else None,
+                anchor_slot=target.placement.slot if target.placement is not None else None,
+                require_anchor=not target.cascaded,
+            )
+        )
+
+    solved_slots = solve_slot_allocations(occupied, solver_targets)
+    for target in schedule_targets:
+        item = candidate_by_id[target.item_id]
+        target_earliest_slot = earliest_slot if target.enforces_earliest_start else 0
+        if target.item_id in invalid_target_ids:
+            segments: list[TimeFragmentSegmentV2] = []
+        elif solved_slots is None:
             segments = _allocate_segments(
                 occupied,
                 item.duration_slots,
@@ -538,6 +559,9 @@ def plan_time_fragment(
                 earliest_slot=target_earliest_slot,
                 allow_occupied_anchor=target.cascaded,
             )
+        else:
+            selected_slots = solved_slots.get(target.item_id, [])
+            segments = _slots_to_segments(selected_slots) if selected_slots else []
         item = item.model_copy(update={"segments": segments}, deep=True)
         _replace_item(candidate_items, item)
         candidate_by_id[item.item_id] = item
