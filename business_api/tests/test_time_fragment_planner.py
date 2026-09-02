@@ -1820,6 +1820,40 @@ def test_non_clock_text_does_not_authorize_add_placement(request_text: str) -> N
     ] == [(32, 34)]
 
 
+@pytest.mark.parametrize(
+    ("request_text", "model_slot"),
+    (
+        ("不要在 10:00 安排写方案", 40),
+        ("10:00 安排写方案", 44),
+    ),
+)
+def test_missing_model_authorization_cannot_enable_negative_or_mismatched_add_placement(
+    request_text: str,
+    model_slot: int,
+) -> None:
+    temporary_id = UUID("45454545-4545-4454-8454-454545454545")
+    response = plan_time_fragment(
+        request_with_items([], text=request_text),
+        model_output([
+            {
+                "type": "add",
+                "title": "写方案",
+                "durationSlots": 2,
+                "placement": {"anchor": "start", "slot": model_slot},
+                "inputOrder": 0,
+            }
+        ]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert response.proposal.operations[0].placement is None
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(32, 34)]
+
+
 def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set() -> None:
     request = request_with_items(
         [

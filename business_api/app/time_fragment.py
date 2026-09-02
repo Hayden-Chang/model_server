@@ -47,6 +47,31 @@ _EXACT_CLOCK_PATTERN = re.compile(
     r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
     r"|(?:[01]?\d|2[0-3]|24))\s*点"
 )
+_CLOCK_PERIODS = (
+    "上午",
+    "中午",
+    "下午",
+    "晚上",
+    "傍晚",
+    "凌晨",
+    "早上",
+    "清晨",
+)
+_CLOCK_NUMBER_SOURCE = (
+    r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
+    r"|(?:[01]?\d|2[0-4]))"
+)
+_CLOCK_TOKEN_SOURCE = (
+    rf"(?:(?:{'|'.join(_CLOCK_PERIODS)})\s*)?"
+    rf"(?:{_CLOCK_NUMBER_SOURCE}\s*点"
+    rf"(?:\s*(?:半|一刻|三刻|[零〇一二两三四五六七八九十\d]{{1,3}})\s*分?)?"
+    r"|(?:[01]?\d|2[0-3]|24)[:：][0-5]\d)"
+)
+_CLOCK_TOKEN_PATTERN = re.compile(_CLOCK_TOKEN_SOURCE)
+_CLOCK_RANGE_PATTERN = re.compile(
+    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*(?:到|至|[-—~～])\s*"
+    rf"(?P<end>{_CLOCK_TOKEN_SOURCE})"
+)
 
 
 def validate_plan_for_request(plan: TimeFragmentPlanResponse, now: str) -> None:
@@ -941,6 +966,10 @@ def _normalize_operations(
         request_text,
         model_output.operations,
     )
+    requested_add_timings = _requested_add_time_constraints(
+        request_text,
+        model_output.operations,
+    )
     for operation_index, operation in enumerate(model_output.operations):
         operation_data = operation.model_dump(mode="json", by_alias=True)
         if isinstance(operation, TimeFragmentModelAddOperation):
@@ -950,7 +979,13 @@ def _normalize_operations(
                 operation_data["title"] = title_label[0]
             if operation_index in requested_add_priorities:
                 operation_data["priority"] = requested_add_priorities[operation_index]
-            if (
+            requested_timing = requested_add_timings.get(operation_index)
+            if requested_timing is not None:
+                placement, duration_slots = requested_timing
+                operation_data["placement"] = placement
+                if duration_slots is not None:
+                    operation_data["durationSlots"] = duration_slots
+            elif (
                 operation.placement is not None
                 and not _add_placement_is_authorized(
                     request_text,
@@ -990,6 +1025,169 @@ def _normalize_operations(
         }[operation.type]
         normalized.append(operation_type.model_validate(operation_data))
     return normalized
+
+
+def _requested_add_time_constraints(
+    request_text: str,
+    operations: list[TimeFragmentModelOperation],
+) -> dict[int, tuple[TimeFragmentPlacement, int | None]]:
+    add_operations = [
+        (index, operation)
+        for index, operation in enumerate(operations)
+        if isinstance(operation, TimeFragmentModelAddOperation)
+    ]
+    constraints: dict[int, tuple[TimeFragmentPlacement, int | None]] = {}
+    previous_range_end: int | None = None
+
+    for line in request_text.splitlines():
+        range_match = _CLOCK_RANGE_PATTERN.search(line)
+        parsed_range = (
+            _parse_clock_range(range_match, previous_range_end)
+            if range_match is not None
+            else None
+        )
+        if parsed_range is not None:
+            previous_range_end = parsed_range[1]
+
+        matching_operations = []
+        for operation_index, operation in add_operations:
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            title = title_label[0] if title_label is not None else operation.title
+            if title in line:
+                matching_operations.append((operation_index, operation))
+        if len(matching_operations) != 1 or any(
+            marker in line for marker in ("不要", "别", "无需", "不许", "不能", "禁止")
+        ):
+            continue
+
+        operation_index, operation = matching_operations[0]
+        if parsed_range is not None:
+            start_minutes, end_minutes = parsed_range
+            if start_minutes % 15 == 0 and end_minutes % 15 == 0:
+                constraints[operation_index] = (
+                    TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
+                    (end_minutes - start_minutes) // 15,
+                )
+            continue
+
+        token_match = _CLOCK_TOKEN_PATTERN.search(line)
+        if token_match is None or operation.placement is None:
+            continue
+        parsed_clock = _parse_clock_token(token_match.group(0))
+        if parsed_clock is None or parsed_clock[0] % 15 != 0:
+            continue
+        if operation.placement.slot == parsed_clock[0] // 15:
+            constraints[operation_index] = (operation.placement, None)
+
+    return constraints
+
+
+def _parse_clock_range(
+    match: re.Match[str],
+    previous_range_end: int | None,
+) -> tuple[int, int] | None:
+    start = _parse_clock_token(match.group("start"))
+    if start is None:
+        return None
+    start_minutes, start_period = start
+    end = _parse_clock_token(match.group("end"), inherited_period=start_period)
+    if end is None:
+        return None
+    end_minutes, end_period = end
+
+    if (
+        start_period is None
+        and previous_range_end is not None
+        and start_minutes < previous_range_end
+        and start_minutes + 12 * 60 < 24 * 60
+    ):
+        start_minutes += 12 * 60
+        if end_period is None and end_minutes < 12 * 60:
+            end_minutes += 12 * 60
+    if (
+        end_minutes <= start_minutes
+        and end_period is None
+        and end_minutes + 12 * 60 <= 24 * 60
+    ):
+        end_minutes += 12 * 60
+    if not 0 <= start_minutes < end_minutes <= 24 * 60:
+        return None
+    return start_minutes, end_minutes
+
+
+def _parse_clock_token(
+    token: str,
+    *,
+    inherited_period: str | None = None,
+) -> tuple[int, str | None] | None:
+    normalized = re.sub(r"\s+", "", token)
+    period = next((value for value in _CLOCK_PERIODS if normalized.startswith(value)), None)
+    if period is not None:
+        normalized = normalized[len(period) :]
+    effective_period = period or inherited_period
+
+    if ":" in normalized or "：" in normalized:
+        hour_text, minute_text = re.split("[:：]", normalized, maxsplit=1)
+        hour, minute = int(hour_text), int(minute_text)
+    elif "点" in normalized:
+        hour_text, minute_text = normalized.split("点", maxsplit=1)
+        hour = _parse_chinese_clock_number(hour_text)
+        if hour is None:
+            return None
+        minute_text = minute_text.removesuffix("分")
+        if not minute_text:
+            minute = 0
+        elif minute_text == "半":
+            minute = 30
+        elif minute_text == "一刻":
+            minute = 15
+        elif minute_text == "三刻":
+            minute = 45
+        else:
+            parsed_minute = _parse_chinese_clock_number(minute_text)
+            if parsed_minute is None:
+                return None
+            minute = parsed_minute
+    else:
+        return None
+
+    if not 0 <= hour <= 24 or not 0 <= minute < 60 or hour == 24 and minute != 0:
+        return None
+    if effective_period in {"下午", "晚上", "傍晚"} and 1 <= hour < 12:
+        hour += 12
+    elif effective_period == "中午" and 1 <= hour <= 5:
+        hour += 12
+    elif effective_period in {"凌晨", "上午", "早上", "清晨"} and hour == 12:
+        hour = 0
+    return hour * 60 + minute, period
+
+
+def _parse_chinese_clock_number(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if "十" in value:
+        tens_text, ones_text = value.split("十", maxsplit=1)
+        tens = 1 if not tens_text else digits.get(tens_text)
+        ones = 0 if not ones_text else digits.get(ones_text)
+        return None if tens is None or ones is None else tens * 10 + ones
+    parsed_digits = [digits.get(character) for character in value]
+    if not parsed_digits or any(digit is None for digit in parsed_digits):
+        return None
+    return int("".join(str(digit) for digit in parsed_digits))
 
 
 def _requested_add_priority_scores(

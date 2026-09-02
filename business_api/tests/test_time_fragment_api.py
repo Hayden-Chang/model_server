@@ -550,6 +550,88 @@ def test_complete_priority_labels_use_natural_order_without_relation(
     ]
 
 
+def test_explicit_chinese_time_ranges_override_missing_model_authorization_and_duration(
+    settings: Settings,
+) -> None:
+    request_text = (
+        "八点四十五到九点四五地铁\n"
+        "九点四十五到十点背单词\n"
+        "十点到十二点项目收尾\n"
+        "十二点到十二点三十看书\n"
+        "十二点三十到十四点吃饭休息\n"
+        "下午两点到五点做短视频\n"
+        "五点到七点，待定"
+    )
+    model_tasks = [
+        ("地铁", 4, 35),
+        ("背单词", 2, 39),
+        ("项目收尾", 8, 40),
+        ("看书", 2, 48),
+        ("吃饭休息", 6, 50),
+        ("做短视频", 12, 56),
+        ("待定", 8, 68),
+    ]
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": title,
+                "durationSlots": duration_slots,
+                "placement": {"anchor": "start", "slot": start_slot},
+                "inputOrder": input_order,
+            }
+            for input_order, (title, duration_slots, start_slot) in enumerate(model_tasks)
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-explicit-chinese-time-ranges",
+        now="2026-09-01T20:53:52+08:00",
+        date="2026-09-02",
+        earliest_start_slot=0,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert [
+        (
+            operation["title"],
+            operation["durationSlots"],
+            operation["placement"],
+        )
+        for operation in body["proposal"]["operations"]
+    ] == [
+        ("地铁", 4, {"anchor": "start", "slot": 35}),
+        ("背单词", 1, {"anchor": "start", "slot": 39}),
+        ("项目收尾", 8, {"anchor": "start", "slot": 40}),
+        ("看书", 2, {"anchor": "start", "slot": 48}),
+        ("吃饭休息", 6, {"anchor": "start", "slot": 50}),
+        ("做短视频", 12, {"anchor": "start", "slot": 56}),
+        ("待定", 8, {"anchor": "start", "slot": 68}),
+    ]
+    assert [
+        (item["title"], item["segments"])
+        for item in body["proposal"]["candidatePlan"]["items"]
+    ] == [
+        ("地铁", [{"startSlot": 35, "endSlot": 39}]),
+        ("背单词", [{"startSlot": 39, "endSlot": 40}]),
+        ("项目收尾", [{"startSlot": 40, "endSlot": 48}]),
+        ("看书", [{"startSlot": 48, "endSlot": 50}]),
+        ("吃饭休息", [{"startSlot": 50, "endSlot": 56}]),
+        ("做短视频", [{"startSlot": 56, "endSlot": 68}]),
+        ("待定", [{"startSlot": 68, "endSlot": 76}]),
+    ]
+
+
 def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
     fake = FakeModelClient([operations_output([])])
     payload = request_payload(
