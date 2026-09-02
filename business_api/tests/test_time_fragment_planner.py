@@ -521,12 +521,14 @@ def test_future_explicit_add_before_app_earliest_slot_is_rejected() -> None:
             [],
             date="2026-08-25",
             earliest_start_slot=36,
+            text="08:00 过早任务",
         ),
         model_output([
             {
                 "type": "add",
                 "title": "过早任务",
                 "placement": {"anchor": "start", "slot": 32},
+                "authorizationText": "08:00 过早任务",
                 "inputOrder": 0,
             }
         ]),
@@ -1754,7 +1756,8 @@ def test_explicit_time_after_relation_keeps_model_anchor() -> None:
     request = request_with_items(
         [internal_item("report", "写报告", 3, [(71, 74)])],
         now="2026-08-24T15:54:00+08:00",
-        text="写完报告之后，21:00 跑步",
+        text="从 16:00 开始\n写完报告之后，21:00 跑步",
+        earliest_start_slot=64,
     )
 
     response = plan_time_fragment(
@@ -1766,6 +1769,7 @@ def test_explicit_time_after_relation_keeps_model_anchor() -> None:
                     "title": "跑步",
                     "durationSlots": 2,
                     "placement": {"anchor": "start", "slot": 84},
+                    "authorizationText": "21:00 跑步",
                     "inputOrder": 0,
                 }
             ]
@@ -1774,10 +1778,80 @@ def test_explicit_time_after_relation_keeps_model_anchor() -> None:
     )
 
     assert response.validation.valid is True
+    placement = response.proposal.operations[0].placement
+    assert placement is not None
+    assert (placement.anchor, placement.slot) == ("start", 84)
+    assert contains_key(
+        response.proposal.model_dump(mode="json", by_alias=True),
+        "authorizationText",
+    ) is False
     assert [
         (segment.start_slot, segment.end_slot)
         for segment in item_by_id(response, str(temporary_id)).segments
     ] == [(84, 86)]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    ("任务：写方案", "29点 写方案", "二十五点 写方案"),
+)
+def test_non_clock_text_does_not_authorize_add_placement(request_text: str) -> None:
+    temporary_id = UUID("34343434-3434-4434-8434-343434343434")
+    response = plan_time_fragment(
+        request_with_items([], text=request_text),
+        model_output([
+            {
+                "type": "add",
+                "title": "写方案",
+                "durationSlots": 2,
+                "placement": {"anchor": "start", "slot": 40},
+                "authorizationText": request_text,
+                "inputOrder": 0,
+            }
+        ]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert response.proposal.operations[0].placement is None
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(32, 34)]
+
+
+@pytest.mark.parametrize(
+    ("request_text", "model_slot"),
+    (
+        ("不要在 10:00 安排写方案", 40),
+        ("10:00 安排写方案", 44),
+    ),
+)
+def test_missing_model_authorization_cannot_enable_negative_or_mismatched_add_placement(
+    request_text: str,
+    model_slot: int,
+) -> None:
+    temporary_id = UUID("45454545-4545-4454-8454-454545454545")
+    response = plan_time_fragment(
+        request_with_items([], text=request_text),
+        model_output([
+            {
+                "type": "add",
+                "title": "写方案",
+                "durationSlots": 2,
+                "placement": {"anchor": "start", "slot": model_slot},
+                "inputOrder": 0,
+            }
+        ]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert response.proposal.operations[0].placement is None
+    assert [
+        (segment.start_slot, segment.end_slot)
+        for segment in item_by_id(response, str(temporary_id)).segments
+    ] == [(32, 34)]
 
 
 def test_delete_operations_drive_typed_explicit_sets_and_exact_candidate_id_set() -> None:
@@ -1988,6 +2062,125 @@ def test_priority_then_input_order_controls_competing_placement(
     assert "UNPLACED" in issue_codes(response)
 
 
+def test_complete_priority_labels_without_relation_use_natural_precedence() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("45454545-4545-4454-8454-454545454545"),
+            UUID("56565656-5656-4565-8565-565656565656"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="任务甲，a1，30 分钟\n任务乙，b1，30 分钟",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {"type": "add", "title": "任务甲", "priority": 1, "inputOrder": 0},
+            {"type": "add", "title": "任务乙", "priority": 2, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items if item.segments] == ["任务甲"]
+
+
+def test_priority_labels_kept_in_model_titles_are_stripped_and_control_precedence() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("89898989-8989-4989-8989-898989898989"),
+            UUID("90909090-9090-4090-8090-909090909090"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="08:00 任务甲，a1，30 分钟\n任务乙，b1，30 分钟",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {
+                "type": "add",
+                "title": "任务甲，a1",
+                "placement": {"anchor": "start", "slot": 32},
+                "authorizationText": "08:00 任务甲，a1",
+                "priority": 1,
+                "inputOrder": 0,
+            },
+            {"type": "add", "title": "任务乙，b1", "priority": 2, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items] == ["任务甲", "任务乙"]
+    assert [item.title for item in new_items if item.segments] == ["任务甲"]
+    assert [(segment.start_slot, segment.end_slot) for segment in new_items[0].segments] == [
+        (32, 34)
+    ]
+
+
+def test_explicit_priority_relation_overrides_natural_label_precedence() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("67676767-6767-4767-8767-676767676767"),
+            UUID("78787878-7878-4787-8787-787878787878"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="任务甲，a1，30 分钟\n任务乙，b1，30 分钟\nB 大于 A",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {"type": "add", "title": "任务甲", "priority": 2, "inputOrder": 0},
+            {"type": "add", "title": "任务乙", "priority": 1, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items if item.segments] == ["任务乙"]
+
+
+def test_incomplete_priority_labels_preserve_model_scores() -> None:
+    ids: Iterator[UUID] = iter(
+        [
+            UUID("12121212-1212-4212-8212-121212121212"),
+            UUID("34343434-3434-4434-8434-343434343434"),
+        ]
+    )
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 62, [(34, 96)])],
+        text="任务甲，a1，30 分钟\n任务乙，30 分钟",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([
+            {"type": "add", "title": "任务甲", "priority": 1, "inputOrder": 0},
+            {"type": "add", "title": "任务乙", "priority": 2, "inputOrder": 1},
+        ]),
+        uuid_factory=lambda: next(ids),
+    )
+
+    new_items = [
+        item for item in response.proposal.candidate_plan.items if item.domain_ref is None  # type: ignore[union-attr]
+    ]
+    assert [item.title for item in new_items if item.segments] == ["任务乙"]
+
+
 def test_global_solver_reassigns_anchored_tasks_instead_of_false_unplaced() -> None:
     ids: Iterator[UUID] = iter(
         [
@@ -1995,7 +2188,10 @@ def test_global_solver_reassigns_anchored_tasks_instead_of_false_unplaced() -> N
             UUID("88888888-8888-4888-8888-888888888888"),
         ]
     )
-    request = request_with_items([external_item("fixed", "固定占用", 60, [(36, 96)])])
+    request = request_with_items(
+        [external_item("fixed", "固定占用", 60, [(36, 96)])],
+        text="08:00 从八点开始，08:45 八点四十五前结束",
+    )
 
     response = plan_time_fragment(
         request,
@@ -2006,6 +2202,7 @@ def test_global_solver_reassigns_anchored_tasks_instead_of_false_unplaced() -> N
                     "title": "从八点开始",
                     "durationSlots": 2,
                     "placement": {"anchor": "start", "slot": 32},
+                    "authorizationText": "08:00 从八点开始",
                     "inputOrder": 0,
                 },
                 {
@@ -2013,6 +2210,7 @@ def test_global_solver_reassigns_anchored_tasks_instead_of_false_unplaced() -> N
                     "title": "八点四十五前结束",
                     "durationSlots": 2,
                     "placement": {"anchor": "end", "slot": 35},
+                    "authorizationText": "08:45 八点四十五前结束",
                     "inputOrder": 1,
                 },
             ]
@@ -2069,7 +2267,10 @@ def test_insufficient_capacity_returns_no_partial_segments_and_remains_valid() -
 
 def test_end_anchor_is_honored_and_can_span_multiple_free_ranges() -> None:
     temporary_id = UUID("66666666-6666-4666-8666-666666666666")
-    request = request_with_items([internal_item("locked", "锁定", 1, [(42, 43)], pinned=True)])
+    request = request_with_items(
+        [internal_item("locked", "锁定", 1, [(42, 43)], pinned=True)],
+        text="B 在 11:00 前完成",
+    )
 
     response = plan_time_fragment(
         request,
@@ -2080,6 +2281,7 @@ def test_end_anchor_is_honored_and_can_span_multiple_free_ranges() -> None:
                     "title": "B",
                     "durationSlots": 3,
                     "placement": {"anchor": "end", "slot": 44},
+                    "authorizationText": "B 在 11:00 前完成",
                     "inputOrder": 0,
                 }
             ]

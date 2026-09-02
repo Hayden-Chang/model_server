@@ -239,13 +239,18 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
                         "title": "写方案",
                         "durationSlots": 3,
                         "placement": {"anchor": "start", "slot": 40},
+                        "authorizationText": "10:00 写方案",
                         "inputOrder": 0,
                     }
                 ]
             )
         ]
     )
-    payload = request_payload(request_id="app-request-envelope", fingerprint="sha256:base-envelope")
+    payload = request_payload(
+        text="10:00 写方案",
+        request_id="app-request-envelope",
+        fingerprint="sha256:base-envelope",
+    )
     with TestClient(create_app(settings, fake)) as client:
         response = client.post(
             "/api/plan/parse",
@@ -281,6 +286,7 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
             }
         ],
     }
+    assert "authorizationText" not in recursive_keys(body)
     assert "status" not in recursive_keys(body)
     assert len(fake.calls) == 1
     pipeline, first_input = fake.calls[0]
@@ -347,6 +353,283 @@ def test_plan_parse_honors_app_earliest_slot_for_today(settings: Settings) -> No
     ]
     assert len(fake.calls) == 1
     assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 48
+
+
+def test_global_start_uses_requested_priority_instead_of_model_derived_add_placements(
+    settings: Settings,
+) -> None:
+    request_text = (
+        "从 16:00 开始\n"
+        "优先级 A 大于 B，同组 1 大于 2\n"
+        "检查空调，b1，15 分钟\n"
+        "把窗帘弄好，b2，15 分钟\n"
+        "把投影幕布扔掉，b3，15 分钟\n"
+        "把钥匙放下，b4，15 分钟\n"
+        "再洗一遍衣，a1，30 分钟\n"
+        "晾衣服，c1，30 分钟\n"
+        "去我那里拿钥匙，a2，15 分钟\n"
+        "买二手床，a3，30 分钟\n"
+        "搬床垫，a4，15 分钟\n"
+        "去拿蟑螂胶饵，a5，15 分钟"
+    )
+    model_tasks = [
+        ("检查空调", 1, 2, 64),
+        ("把窗帘弄好", 1, 2, 65),
+        ("把投影幕布扔掉", 1, 2, 66),
+        ("把钥匙放下", 1, 2, 67),
+        ("再洗一遍衣", 2, 1, 68),
+        ("晾衣服", 2, None, 70),
+        ("去我那里拿钥匙", 1, 1, 72),
+        ("买二手床", 2, 1, 73),
+        ("搬床垫", 1, 1, 75),
+        ("去拿蟑螂胶饵", 1, 1, 76),
+    ]
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": title,
+                "durationSlots": duration_slots,
+                "placement": {"anchor": "start", "slot": model_slot},
+                "authorizationText": request_text,
+                "priority": priority_rank,
+                "inputOrder": input_order,
+            }
+            for input_order, (title, duration_slots, priority_rank, model_slot) in enumerate(
+                model_tasks
+            )
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-priority-order",
+        now="2026-09-01T15:40:17+08:00",
+        date="2026-09-01",
+        earliest_start_slot=64,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][1])["earliestStartSlot"] == 64
+    assert all(operation["placement"] is None for operation in body["proposal"]["operations"])
+    assert {
+        operation["title"]: operation["priority"]
+        for operation in body["proposal"]["operations"]
+    } == {
+        "再洗一遍衣": 10,
+        "去我那里拿钥匙": 9,
+        "买二手床": 8,
+        "搬床垫": 7,
+        "去拿蟑螂胶饵": 6,
+        "检查空调": 5,
+        "把窗帘弄好": 4,
+        "把投影幕布扔掉": 3,
+        "把钥匙放下": 2,
+        "晾衣服": 1,
+    }
+    scheduled = sorted(
+        body["proposal"]["candidatePlan"]["items"],
+        key=lambda item: item["segments"][0]["startSlot"],
+    )
+    assert [
+        (item["title"], item["segments"])
+        for item in scheduled
+    ] == [
+        ("再洗一遍衣", [{"startSlot": 64, "endSlot": 66}]),
+        ("去我那里拿钥匙", [{"startSlot": 66, "endSlot": 67}]),
+        ("买二手床", [{"startSlot": 67, "endSlot": 69}]),
+        ("搬床垫", [{"startSlot": 69, "endSlot": 70}]),
+        ("去拿蟑螂胶饵", [{"startSlot": 70, "endSlot": 71}]),
+        ("检查空调", [{"startSlot": 71, "endSlot": 72}]),
+        ("把窗帘弄好", [{"startSlot": 72, "endSlot": 73}]),
+        ("把投影幕布扔掉", [{"startSlot": 73, "endSlot": 74}]),
+        ("把钥匙放下", [{"startSlot": 74, "endSlot": 75}]),
+        ("晾衣服", [{"startSlot": 75, "endSlot": 77}]),
+    ]
+
+
+def test_complete_priority_labels_use_natural_order_without_relation(
+    settings: Settings,
+) -> None:
+    request_text = (
+        "•  [ ] 检查空调，b1，15 分\n"
+        "•  [ ] 把窗帘弄好，b2，15 分\n"
+        "•  [ ] 把投影幕布扔掉，b3，15 分\n"
+        "•  [ ] 把钥匙放下，b4，15 分\n"
+        "•  [ ] 再洗一遍衣，a1，30 分钟\n"
+        "•  [ ] 晾衣服，c1，30 分\n"
+        "•  [ ] 去我那里拿钥匙，a2，15分钟\n"
+        "•  [ ] 买二手床，a3，30 分钟\n"
+        "•  [ ] 搬床垫，a4，15 分钟\n"
+        "•  [ ] 去拿蟑螂胶饵，a5，15 分钟"
+    )
+    model_tasks = [
+        ("检查空调", 1),
+        ("把窗帘弄好", 1),
+        ("把投影幕布扔掉", 1),
+        ("把钥匙放下", 1),
+        ("再洗一遍衣", 2),
+        ("晾衣服", 2),
+        ("去我那里拿钥匙", 1),
+        ("买二手床", 2),
+        ("搬床垫", 1),
+        ("去拿蟑螂胶饵", 1),
+    ]
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": title,
+                "durationSlots": duration_slots,
+                "authorizationText": line.strip(),
+                "inputOrder": input_order,
+            }
+            for input_order, ((title, duration_slots), line) in enumerate(
+                zip(model_tasks, request_text.splitlines(), strict=True)
+            )
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-natural-priority-order",
+        now="2026-09-01T18:59:05+08:00",
+        date="2026-09-01",
+        earliest_start_slot=76,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert [
+        (operation["title"], operation["priority"])
+        for operation in body["proposal"]["operations"]
+    ] == [
+        ("检查空调", 5),
+        ("把窗帘弄好", 4),
+        ("把投影幕布扔掉", 3),
+        ("把钥匙放下", 2),
+        ("再洗一遍衣", 10),
+        ("晾衣服", 1),
+        ("去我那里拿钥匙", 9),
+        ("买二手床", 8),
+        ("搬床垫", 7),
+        ("去拿蟑螂胶饵", 6),
+    ]
+    scheduled = sorted(
+        body["proposal"]["candidatePlan"]["items"],
+        key=lambda item: item["segments"][0]["startSlot"],
+    )
+    assert [item["title"] for item in scheduled] == [
+        "再洗一遍衣",
+        "去我那里拿钥匙",
+        "买二手床",
+        "搬床垫",
+        "去拿蟑螂胶饵",
+        "检查空调",
+        "把窗帘弄好",
+        "把投影幕布扔掉",
+        "把钥匙放下",
+        "晾衣服",
+    ]
+
+
+def test_explicit_chinese_time_ranges_override_missing_model_authorization_and_duration(
+    settings: Settings,
+) -> None:
+    request_text = (
+        "八点四十五到九点四五地铁\n"
+        "九点四十五到十点背单词\n"
+        "十点到十二点项目收尾\n"
+        "十二点到十二点三十看书\n"
+        "十二点三十到十四点吃饭休息\n"
+        "下午两点到五点做短视频\n"
+        "五点到七点，待定"
+    )
+    model_tasks = [
+        ("地铁", 4, 35),
+        ("背单词", 2, 39),
+        ("项目收尾", 8, 40),
+        ("看书", 2, 48),
+        ("吃饭休息", 6, 50),
+        ("做短视频", 12, 56),
+        ("待定", 8, 68),
+    ]
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": title,
+                "durationSlots": duration_slots,
+                "placement": {"anchor": "start", "slot": start_slot},
+                "inputOrder": input_order,
+            }
+            for input_order, (title, duration_slots, start_slot) in enumerate(model_tasks)
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-explicit-chinese-time-ranges",
+        now="2026-09-01T20:53:52+08:00",
+        date="2026-09-02",
+        earliest_start_slot=0,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert [
+        (
+            operation["title"],
+            operation["durationSlots"],
+            operation["placement"],
+        )
+        for operation in body["proposal"]["operations"]
+    ] == [
+        ("地铁", 4, {"anchor": "start", "slot": 35}),
+        ("背单词", 1, {"anchor": "start", "slot": 39}),
+        ("项目收尾", 8, {"anchor": "start", "slot": 40}),
+        ("看书", 2, {"anchor": "start", "slot": 48}),
+        ("吃饭休息", 6, {"anchor": "start", "slot": 50}),
+        ("做短视频", 12, {"anchor": "start", "slot": 56}),
+        ("待定", 8, {"anchor": "start", "slot": 68}),
+    ]
+    assert [
+        (item["title"], item["segments"])
+        for item in body["proposal"]["candidatePlan"]["items"]
+    ] == [
+        ("地铁", [{"startSlot": 35, "endSlot": 39}]),
+        ("背单词", [{"startSlot": 39, "endSlot": 40}]),
+        ("项目收尾", [{"startSlot": 40, "endSlot": 48}]),
+        ("看书", [{"startSlot": 48, "endSlot": 50}]),
+        ("吃饭休息", [{"startSlot": 50, "endSlot": 56}]),
+        ("做短视频", [{"startSlot": 56, "endSlot": 68}]),
+        ("待定", [{"startSlot": 68, "endSlot": 76}]),
+    ]
 
 
 def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -> None:
@@ -544,7 +827,10 @@ def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_corre
             "title": f"任务 {index + 1}",
             "durationSlots": 4,
             **(
-                {"placement": {"anchor": "start", "slot": 48}}
+                {
+                    "placement": {"anchor": "start", "slot": 48},
+                    "authorizationText": "12:00 安排任务 1",
+                }
                 if index == 0
                 else {}
             ),
@@ -554,7 +840,7 @@ def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_corre
     ]
     fake = FakeModelClient([operations_output(operations)])
     payload = request_payload(
-        text="安排以下 14 个任务，其中一个指定在已经过去的时间",
+        text="12:00 安排任务 1，并安排以下 14 个任务",
         request_id="app-request-normal-unplaced",
         now="2026-08-24T13:32:13+08:00",
     )
@@ -594,6 +880,7 @@ def test_semantic_correction_excludes_normal_unplaced_warnings(
                         "title": "已错过时间的任务",
                         "durationSlots": 2,
                         "placement": {"anchor": "start", "slot": 32},
+                        "authorizationText": "08:00 安排已错过时间的任务",
                         "inputOrder": 1,
                     },
                 ]
@@ -606,7 +893,10 @@ def test_semantic_correction_excludes_normal_unplaced_warnings(
         response = client.post(
             "/api/plan/parse",
             headers=guest_headers(client),
-            json=request_payload(items=[internal_item()]),
+            json=request_payload(
+                text="08:00 安排已错过时间的任务，另外移动不存在任务",
+                items=[internal_item()],
+            ),
         )
 
     assert response.status_code == 200

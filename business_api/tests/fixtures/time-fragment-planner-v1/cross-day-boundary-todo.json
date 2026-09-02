@@ -1,7 +1,7 @@
 {
   "case": "cross-day-boundary-todo",
   "request": {
-    "text": "在当天结束处新增任务",
+    "text": "24:00 安排跨日边界任务",
     "requestID": "request-golden-cross-day-boundary-todo",
     "baseFingerprint": "sha256:golden-cross-day-boundary-todo-base",
     "currentPlan": {
@@ -20,6 +20,7 @@
           "anchor": "start",
           "slot": 96
         },
+        "authorizationText": "24:00 安排跨日边界任务",
         "inputOrder": 0
       }
     ]

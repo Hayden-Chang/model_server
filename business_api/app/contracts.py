@@ -396,7 +396,12 @@ TimeFragmentObjectType = Literal["internalTask", "externalEvent"]
 class _TimeFragmentExistingModelOperation(_TimeFragmentV2Model):
     target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
     object_type: TimeFragmentObjectType | None = Field(default=None, alias="objectType")
-    priority: int | None = Field(default=None, strict=True)
+    priority: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Positive score; larger values have higher priority.",
+    )
     input_order: int = Field(alias="inputOrder", ge=0, strict=True)
     authorization_text: str | None = Field(
         default=None,
@@ -406,12 +411,17 @@ class _TimeFragmentExistingModelOperation(_TimeFragmentV2Model):
     )
 
 
-class TimeFragmentModelAddOperation(_TimeFragmentV2Model):
+class _TimeFragmentAddOperation(_TimeFragmentV2Model):
     type: Literal["add"]
     title: str = Field(min_length=1, max_length=500)
     duration_slots: int = Field(default=2, alias="durationSlots", ge=1, le=96, strict=True)
     placement: TimeFragmentPlacement | None = None
-    priority: int | None = Field(default=None, strict=True)
+    priority: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Positive score; larger values have higher priority.",
+    )
     input_order: int = Field(alias="inputOrder", ge=0, strict=True)
 
     @field_validator("title")
@@ -420,6 +430,15 @@ class TimeFragmentModelAddOperation(_TimeFragmentV2Model):
         if not value.strip():
             raise ValueError("title must not be blank")
         return value
+
+
+class TimeFragmentModelAddOperation(_TimeFragmentAddOperation):
+    authorization_text: str | None = Field(
+        default=None,
+        alias="authorizationText",
+        min_length=1,
+        max_length=1_000,
+    )
 
 
 class TimeFragmentModelMoveOperation(_TimeFragmentExistingModelOperation):
@@ -521,14 +540,19 @@ class TimeFragmentModelOperations(_TimeFragmentV2Model):
     operations: list[TimeFragmentModelOperation]
 
 
-class TimeFragmentAddOperation(TimeFragmentModelAddOperation):
+class TimeFragmentAddOperation(_TimeFragmentAddOperation):
     temporary_id: UUID = Field(alias="temporaryId")
 
 
 class _TimeFragmentExistingOperation(_TimeFragmentV2Model):
     target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
     object_type: TimeFragmentObjectType | None = Field(default=None, alias="objectType")
-    priority: int | None = Field(default=None, strict=True)
+    priority: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Positive score; larger values have higher priority.",
+    )
     input_order: int = Field(alias="inputOrder", ge=0, strict=True)
 
 

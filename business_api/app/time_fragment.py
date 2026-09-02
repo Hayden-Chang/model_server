@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,6 +40,37 @@ TIME_FRAGMENT_PLANNER_VERSION = "time-fragment-planner-v1"
 _TEMPORARY_ID_NAMESPACE = uuid5(
     NAMESPACE_URL,
     "https://timefragment.app/time-fragment-plan-v2/temporary-id",
+)
+_EXACT_CLOCK_PATTERN = re.compile(
+    r"(?<!\d)(?:(?:[01]?\d|2[0-3])[:：][0-5]\d|24[:：]00)(?!\d)"
+    r"|(?<![零〇一二两三四五六七八九十\d])"
+    r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
+    r"|(?:[01]?\d|2[0-3]|24))\s*点"
+)
+_CLOCK_PERIODS = (
+    "上午",
+    "中午",
+    "下午",
+    "晚上",
+    "傍晚",
+    "凌晨",
+    "早上",
+    "清晨",
+)
+_CLOCK_NUMBER_SOURCE = (
+    r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
+    r"|(?:[01]?\d|2[0-4]))"
+)
+_CLOCK_TOKEN_SOURCE = (
+    rf"(?:(?:{'|'.join(_CLOCK_PERIODS)})\s*)?"
+    rf"(?:{_CLOCK_NUMBER_SOURCE}\s*点"
+    rf"(?:\s*(?:半|一刻|三刻|[零〇一二两三四五六七八九十\d]{{1,3}})\s*分?)?"
+    r"|(?:[01]?\d|2[0-3]|24)[:：][0-5]\d)"
+)
+_CLOCK_TOKEN_PATTERN = re.compile(_CLOCK_TOKEN_SOURCE)
+_CLOCK_RANGE_PATTERN = re.compile(
+    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*(?:到|至|[-—~～])\s*"
+    rf"(?P<end>{_CLOCK_TOKEN_SOURCE})"
 )
 
 
@@ -164,6 +196,7 @@ def plan_time_fragment(
     normalized_operations = _normalize_operations(
         model_output,
         base_index,
+        request_text=request.text,
         request_id=request.request_id,
         existing_item_ids=set(base_counts),
         uuid_factory=uuid_factory,
@@ -922,15 +955,45 @@ def _normalize_operations(
     model_output: TimeFragmentModelOperations,
     base_index: dict[str, TimeFragmentPlanItem],
     *,
+    request_text: str,
     request_id: str,
     existing_item_ids: set[str],
     uuid_factory: Callable[[], UUID] | None,
 ) -> list[TimeFragmentOperation]:
     used_ids = set(existing_item_ids)
     normalized: list[TimeFragmentOperation] = []
+    requested_add_priorities = _requested_add_priority_scores(
+        request_text,
+        model_output.operations,
+    )
+    requested_add_timings = _requested_add_time_constraints(
+        request_text,
+        model_output.operations,
+    )
     for operation_index, operation in enumerate(model_output.operations):
         operation_data = operation.model_dump(mode="json", by_alias=True)
         if isinstance(operation, TimeFragmentModelAddOperation):
+            operation_data.pop("authorizationText", None)
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            if title_label is not None:
+                operation_data["title"] = title_label[0]
+            if operation_index in requested_add_priorities:
+                operation_data["priority"] = requested_add_priorities[operation_index]
+            requested_timing = requested_add_timings.get(operation_index)
+            if requested_timing is not None:
+                placement, duration_slots = requested_timing
+                operation_data["placement"] = placement
+                if duration_slots is not None:
+                    operation_data["durationSlots"] = duration_slots
+            elif (
+                operation.placement is not None
+                and not _add_placement_is_authorized(
+                    request_text,
+                    operation_data["title"],
+                    operation.authorization_text,
+                )
+            ):
+                operation_data["placement"] = None
             collision_index = 0
             temporary_id = _next_temporary_id(
                 request_id=request_id,
@@ -962,6 +1025,305 @@ def _normalize_operations(
         }[operation.type]
         normalized.append(operation_type.model_validate(operation_data))
     return normalized
+
+
+def _requested_add_time_constraints(
+    request_text: str,
+    operations: list[TimeFragmentModelOperation],
+) -> dict[int, tuple[TimeFragmentPlacement, int | None]]:
+    add_operations = [
+        (index, operation)
+        for index, operation in enumerate(operations)
+        if isinstance(operation, TimeFragmentModelAddOperation)
+    ]
+    constraints: dict[int, tuple[TimeFragmentPlacement, int | None]] = {}
+    previous_range_end: int | None = None
+
+    for line in request_text.splitlines():
+        range_match = _CLOCK_RANGE_PATTERN.search(line)
+        parsed_range = (
+            _parse_clock_range(range_match, previous_range_end)
+            if range_match is not None
+            else None
+        )
+        if parsed_range is not None:
+            previous_range_end = parsed_range[1]
+
+        matching_operations = []
+        for operation_index, operation in add_operations:
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            title = title_label[0] if title_label is not None else operation.title
+            if title in line:
+                matching_operations.append((operation_index, operation))
+        if len(matching_operations) != 1 or any(
+            marker in line for marker in ("不要", "别", "无需", "不许", "不能", "禁止")
+        ):
+            continue
+
+        operation_index, operation = matching_operations[0]
+        if parsed_range is not None:
+            start_minutes, end_minutes = parsed_range
+            if start_minutes % 15 == 0 and end_minutes % 15 == 0:
+                constraints[operation_index] = (
+                    TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
+                    (end_minutes - start_minutes) // 15,
+                )
+            continue
+
+        token_match = _CLOCK_TOKEN_PATTERN.search(line)
+        if token_match is None or operation.placement is None:
+            continue
+        parsed_clock = _parse_clock_token(token_match.group(0))
+        if parsed_clock is None or parsed_clock[0] % 15 != 0:
+            continue
+        if operation.placement.slot == parsed_clock[0] // 15:
+            constraints[operation_index] = (operation.placement, None)
+
+    return constraints
+
+
+def _parse_clock_range(
+    match: re.Match[str],
+    previous_range_end: int | None,
+) -> tuple[int, int] | None:
+    start = _parse_clock_token(match.group("start"))
+    if start is None:
+        return None
+    start_minutes, start_period = start
+    end = _parse_clock_token(match.group("end"), inherited_period=start_period)
+    if end is None:
+        return None
+    end_minutes, end_period = end
+
+    if (
+        start_period is None
+        and previous_range_end is not None
+        and start_minutes < previous_range_end
+        and start_minutes + 12 * 60 < 24 * 60
+    ):
+        start_minutes += 12 * 60
+        if end_period is None and end_minutes < 12 * 60:
+            end_minutes += 12 * 60
+    if (
+        end_minutes <= start_minutes
+        and end_period is None
+        and end_minutes + 12 * 60 <= 24 * 60
+    ):
+        end_minutes += 12 * 60
+    if not 0 <= start_minutes < end_minutes <= 24 * 60:
+        return None
+    return start_minutes, end_minutes
+
+
+def _parse_clock_token(
+    token: str,
+    *,
+    inherited_period: str | None = None,
+) -> tuple[int, str | None] | None:
+    normalized = re.sub(r"\s+", "", token)
+    period = next((value for value in _CLOCK_PERIODS if normalized.startswith(value)), None)
+    if period is not None:
+        normalized = normalized[len(period) :]
+    effective_period = period or inherited_period
+
+    if ":" in normalized or "：" in normalized:
+        hour_text, minute_text = re.split("[:：]", normalized, maxsplit=1)
+        hour, minute = int(hour_text), int(minute_text)
+    elif "点" in normalized:
+        hour_text, minute_text = normalized.split("点", maxsplit=1)
+        hour = _parse_chinese_clock_number(hour_text)
+        if hour is None:
+            return None
+        minute_text = minute_text.removesuffix("分")
+        if not minute_text:
+            minute = 0
+        elif minute_text == "半":
+            minute = 30
+        elif minute_text == "一刻":
+            minute = 15
+        elif minute_text == "三刻":
+            minute = 45
+        else:
+            parsed_minute = _parse_chinese_clock_number(minute_text)
+            if parsed_minute is None:
+                return None
+            minute = parsed_minute
+    else:
+        return None
+
+    if not 0 <= hour <= 24 or not 0 <= minute < 60 or hour == 24 and minute != 0:
+        return None
+    if effective_period in {"下午", "晚上", "傍晚"} and 1 <= hour < 12:
+        hour += 12
+    elif effective_period == "中午" and 1 <= hour <= 5:
+        hour += 12
+    elif effective_period in {"凌晨", "上午", "早上", "清晨"} and hour == 12:
+        hour = 0
+    return hour * 60 + minute, period
+
+
+def _parse_chinese_clock_number(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if "十" in value:
+        tens_text, ones_text = value.split("十", maxsplit=1)
+        tens = 1 if not tens_text else digits.get(tens_text)
+        ones = 0 if not ones_text else digits.get(ones_text)
+        return None if tens is None or ones is None else tens * 10 + ones
+    parsed_digits = [digits.get(character) for character in value]
+    if not parsed_digits or any(digit is None for digit in parsed_digits):
+        return None
+    return int("".join(str(digit) for digit in parsed_digits))
+
+
+def _requested_add_priority_scores(
+    request_text: str,
+    operations: list[TimeFragmentModelOperation],
+) -> dict[int, int]:
+    add_operation_count = sum(
+        isinstance(operation, TimeFragmentModelAddOperation)
+        for operation in operations
+    )
+    labeled_operations: list[tuple[int, str, int]] = []
+    for operation_index, operation in enumerate(operations):
+        if not isinstance(operation, TimeFragmentModelAddOperation):
+            continue
+        label = _priority_label_for_title(request_text, operation.title)
+        if label is not None:
+            labeled_operations.append((operation_index, *label))
+    if len(labeled_operations) < 2 or len(labeled_operations) != add_operation_count:
+        return {}
+
+    group_values = {group for _, group, _ in labeled_operations}
+    number_values = {number for _, _, number in labeled_operations}
+    group_relations, number_relations = _priority_relations(
+        request_text,
+        group_values,
+        number_values,
+    )
+
+    group_order = _priority_token_order(group_values, group_relations)
+    number_order = _priority_token_order(number_values, number_relations)
+    if group_order is None or number_order is None:
+        return {}
+    group_position = {value: index for index, value in enumerate(group_order)}
+    number_position = {value: index for index, value in enumerate(number_order)}
+
+    def precedence_key(group: str, number: int) -> tuple[int, int]:
+        return (
+            group_position[group],
+            number_position[number],
+        )
+
+    ordered_keys = sorted({
+        precedence_key(group, number)
+        for _, group, number in labeled_operations
+    })
+    score_by_key = {
+        key: len(ordered_keys) - index
+        for index, key in enumerate(ordered_keys)
+    }
+    return {
+        operation_index: score_by_key[precedence_key(group, number)]
+        for operation_index, group, number in labeled_operations
+    }
+
+
+def _priority_label_for_title(request_text: str, title: str) -> tuple[str, int] | None:
+    title_label = _priority_label_in_model_title(request_text, title)
+    if title_label is not None:
+        return title_label[1], title_label[2]
+    for line in request_text.splitlines():
+        title_index = line.find(title)
+        if title_index == -1:
+            continue
+        suffix = line[title_index + len(title) :]
+        match = re.match(
+            r"\s*[，,]\s*([A-Za-z]+)\s*[-_.]?\s*(\d+)\s*(?=[，,]|$)",
+            suffix,
+        )
+        if match is not None:
+            return match.group(1).upper(), int(match.group(2))
+    return None
+
+
+def _priority_label_in_model_title(
+    request_text: str,
+    title: str,
+) -> tuple[str, str, int] | None:
+    match = re.match(
+        r"^(.+?)\s*[，,]\s*([A-Za-z]+)\s*[-_.]?\s*(\d+)\s*$",
+        title,
+    )
+    if match is None or not any(title in line for line in request_text.splitlines()):
+        return None
+    return match.group(1).strip(), match.group(2).upper(), int(match.group(3))
+
+
+def _priority_relations(
+    request_text: str,
+    group_values: set[str],
+    number_values: set[int],
+) -> tuple[set[tuple[str, str]], set[tuple[int, int]]]:
+    normalized = (
+        request_text.replace("大于", ">")
+        .replace("高于", ">")
+        .replace("优先于", ">")
+        .replace("＞", ">")
+    )
+    group_relations: set[tuple[str, str]] = set()
+    number_relations: set[tuple[int, int]] = set()
+    for match in re.finditer(
+        r"(?=\b([A-Za-z]+|\d+)\s*>\s*([A-Za-z]+|\d+)\b)",
+        normalized,
+    ):
+        higher, lower = match.group(1), match.group(2)
+        if higher.isalpha() and lower.isalpha():
+            relation = (higher.upper(), lower.upper())
+            if relation[0] in group_values and relation[1] in group_values:
+                group_relations.add(relation)
+        elif higher.isdigit() and lower.isdigit():
+            relation = (int(higher), int(lower))
+            if relation[0] in number_values and relation[1] in number_values:
+                number_relations.add(relation)
+    return group_relations, number_relations
+
+
+def _priority_token_order(
+    values: set[str] | set[int],
+    relations: set[tuple[str, str]] | set[tuple[int, int]],
+) -> list[str] | list[int] | None:
+    outgoing = {value: set() for value in values}
+    indegree = {value: 0 for value in values}
+    for higher, lower in relations:
+        if lower not in outgoing[higher]:
+            outgoing[higher].add(lower)
+            indegree[lower] += 1
+    available = sorted(value for value, degree in indegree.items() if degree == 0)
+    ordered = []
+    while available:
+        value = available.pop(0)
+        ordered.append(value)
+        for lower in sorted(outgoing[value]):
+            indegree[lower] -= 1
+            if indegree[lower] == 0:
+                available.append(lower)
+                available.sort()
+    return ordered if len(ordered) == len(values) else None
 
 
 def _next_temporary_id(
@@ -1059,7 +1421,29 @@ def _has_explicit_time_reference(text: str) -> bool:
         for marker in ("上午", "中午", "下午", "晚上", "傍晚", "凌晨", "早上", "清晨", ":", "：")
     ):
         return True
-    return any(f"{number}点" in text for number in "零一二三四五六七八九十两0123456789")
+    return _has_exact_clock_reference(text)
+
+
+def _has_exact_clock_reference(text: str) -> bool:
+    return _EXACT_CLOCK_PATTERN.search(text) is not None
+
+
+def _add_placement_is_authorized(
+    request_text: str,
+    title: str,
+    authorization_text: str | None,
+) -> bool:
+    if authorization_text is None:
+        return False
+    evidence = authorization_text.strip()
+    if not evidence or evidence not in request_text or title not in evidence:
+        return False
+    if any(delimiter in evidence for delimiter in "。；;！!？?\n"):
+        return False
+    clause = _clause_containing(request_text, evidence)
+    if any(marker in clause for marker in ("不要", "别", "无需", "不许", "不能", "禁止")):
+        return False
+    return _has_exact_clock_reference(evidence)
 
 
 def _operation_is_explicitly_requested(
