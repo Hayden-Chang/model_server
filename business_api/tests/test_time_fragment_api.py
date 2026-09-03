@@ -652,8 +652,12 @@ def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -
     assert fake.calls == []
 
 
-def test_plan_parse_requires_app_earliest_slot_for_future_date(settings: Settings) -> None:
-    fake = FakeModelClient([operations_output([])])
+def test_plan_parse_allows_future_date_without_app_earliest_slot(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient([
+        operations_output([{"type": "add", "title": "明天任务", "inputOrder": 0}])
+    ])
     payload = request_payload(
         request_id="app-request-future-missing-start",
         date="2026-08-25",
@@ -666,9 +670,17 @@ def test_plan_parse_requires_app_earliest_slot_for_future_date(settings: Setting
             json=payload,
         )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "EARLIEST_START_REQUIRED"
-    assert fake.calls == []
+    assert response.status_code == 200
+    assert response.json()["validation"] == {
+        "valid": True,
+        "attempts": 1,
+        "issues": [],
+    }
+    assert response.json()["proposal"]["candidatePlan"]["items"][0]["segments"] == [
+        {"startSlot": 0, "endSlot": 2}
+    ]
+    assert len(fake.calls) == 1
+    assert "earliestStartSlot" not in json.loads(fake.calls[0][1])
 
 
 def test_plan_parse_change_title_returns_title_only_candidate_without_private_fields(

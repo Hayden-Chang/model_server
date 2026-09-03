@@ -98,8 +98,3 @@ def _validate_temporal_request(request: TimeFragmentPlanRequestV2) -> None:
             "PLANNING_DATE_NOT_ALLOWED",
             "planning date cannot be before today",
         )
-    if selected_date > local_date and request.earliest_start_slot is None:
-        raise TimeFragmentRequestInvalid(
-            "EARLIEST_START_REQUIRED",
-            "earliestStartSlot is required for a future planning date",
-        )
