@@ -302,6 +302,7 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
         "text": payload["text"],
         "currentPlan": {"date": "2026-08-24", "items": []},
         "now": payload["now"],
+        "language": "zh-Hans",
     }
 
 
@@ -995,7 +996,7 @@ def test_observability_aggregates_two_model_calls_for_guest_device(settings: Set
     assert response.status_code == 200
     assert records.status_code == 200
     record = records.json()["records"][0]
-    assert record["request_content"] == payload
+    assert record["request_content"] == {**payload, "language": "zh-Hans"}
     assert record["response_content"] == response.json()
     assert record["model_call_count"] == 2
     assert record["usage"] == {
