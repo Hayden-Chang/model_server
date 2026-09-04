@@ -108,6 +108,8 @@ def request_with_items(
     date: str = "2026-08-24",
     earliest_start_slot: int | None = None,
     now: str = "2026-08-24T08:00:00+08:00",
+    time_zone: str | None = None,
+    language: str | None = None,
     text: str = "调整今天的计划",
 ) -> TimeFragmentPlanRequestV2:
     payload = {
@@ -117,6 +119,10 @@ def request_with_items(
         "currentPlan": {"date": date, "items": items},
         "now": now,
     }
+    if time_zone is not None:
+        payload["timeZone"] = time_zone
+    if language is not None:
+        payload["language"] = language
     if earliest_start_slot is not None:
         payload["earliestStartSlot"] = earliest_start_slot
     return TimeFragmentPlanRequestV2.model_validate(payload)
@@ -458,6 +464,43 @@ def test_today_add_starts_at_app_supplied_earliest_slot() -> None:
         response,
         str(temporary_id),
     ).segments] == [(48, 50)]
+
+
+def test_utc_now_uses_iana_timezone_to_find_current_local_day_slot() -> None:
+    temporary_id = UUID("29292929-2929-4292-8292-292929292929")
+    response = plan_time_fragment(
+        request_with_items(
+            [],
+            date="2026-08-25",
+            now="2026-08-24T16:10:00Z",
+            time_zone="Asia/Shanghai",
+        ),
+        model_output([{"type": "add", "title": "凌晨任务", "inputOrder": 0}]),
+        uuid_factory=lambda: temporary_id,
+    )
+
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response,
+        str(temporary_id),
+    ).segments] == [(1, 3)]
+
+
+def test_validation_issue_content_uses_requested_english_language() -> None:
+    request = request_with_items(
+        [external_item("all-day", "Conference", 96, [(0, 96)])],
+        language="en",
+        text="Add writing",
+    )
+
+    response = plan_time_fragment(
+        request,
+        model_output([{"type": "add", "title": "Writing", "inputOrder": 0}]),
+    )
+
+    assert response.validation.issues[0].message == (
+        'The item "Writing" cannot fit in the remaining time today.'
+    )
 
 
 def test_future_candidate_matching_selected_date_is_not_cross_day() -> None:

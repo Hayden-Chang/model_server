@@ -134,7 +134,11 @@ PIPELINES: dict[str, Pipeline] = {
             "relative ordering, or priority rule does not authorize per-task placement. Preserve source "
             "appearance in inputOrder. Include priority only when the user specified one. priority is a "
             "positive score: a larger positive priority score means higher priority. Encode every requested "
-            "precedence level in that score; equally ranked tasks use inputOrder."
+            "precedence level in that score; equally ranked tasks use inputOrder. now is already "
+            "converted to the user's local wall-clock time and includes its UTC offset; timeZone is "
+            "the user's IANA time zone when available. language is zh-Hans or en. Preserve task "
+            "names supplied by the user; when a title must be generated, use Simplified Chinese for "
+            "zh-Hans and English for en."
         ),
         temperature=0.0,
         max_tokens=20_000,

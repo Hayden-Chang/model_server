@@ -135,7 +135,9 @@ def project_time_fragment_request_for_model(
             date=request.current_plan.date,
             items=visible_items,
         ),
-        now=request.now,
+        now=request.local_now.isoformat(),
+        timeZone=request.time_zone,
+        language=request.language,
         earliestStartSlot=request.earliest_start_slot,
     )
 
@@ -144,8 +146,15 @@ def build_time_fragment_parse_failed_response(
     request_id: str,
     *,
     attempts: Literal[1, 2],
-    message: str = "大模型返回的调整内容无法解析",
+    language: Literal["zh-Hans", "en"] = "zh-Hans",
+    message: str | None = None,
 ) -> TimeFragmentPlanResponseV2:
+    if message is None:
+        message = (
+            "大模型返回的调整内容无法解析"
+            if language == "zh-Hans"
+            else "The AI response could not be parsed."
+        )
     return TimeFragmentPlanResponseV2(
         requestID=request_id,
         proposal=None,
@@ -640,7 +649,7 @@ def plan_time_fragment(
         ),
     )
     issues.extend(validate_time_fragment_proposal(request, proposal))
-    issues = _deduplicate_issues(issues)
+    issues = _localized_issues(_deduplicate_issues(issues), request.language)
     validation = TimeFragmentValidation(
         valid=not any(issue.severity == "error" for issue in issues),
         attempts=attempts,
@@ -1600,13 +1609,108 @@ def _first_available_slot(request: TimeFragmentPlanRequestV2) -> int:
 
 
 def _current_day_slot(request: TimeFragmentPlanRequestV2) -> int | None:
-    parsed = datetime.fromisoformat(request.now.replace("Z", "+00:00"))
+    parsed = request.local_now
     if request.current_plan.date != parsed.date().isoformat():
         return None
     slot = parsed.hour * 4 + parsed.minute // 15
     if parsed.minute % 15 or parsed.second or parsed.microsecond:
         slot += 1
     return min(slot, 96)
+
+
+_ENGLISH_ISSUE_MESSAGES = {
+    "currentPlan 包含重复 itemId": "currentPlan contains duplicate itemId values.",
+    "操作引用的 itemId 不存在于 currentPlan": (
+        "An operation references an itemId that is not in currentPlan."
+    ),
+    "同一目标存在重复或互相矛盾的操作": (
+        "The same target has duplicate or conflicting operations."
+    ),
+    "同一目标的操作包含冲突的 priority": (
+        "Operations for the same target contain conflicting priority values."
+    ),
+    "操作 objectType 与 currentPlan 目标不匹配": (
+        "The operation objectType does not match the currentPlan target."
+    ),
+    "指定时间早于当前可排期起点，已保留为未排任务": (
+        "The requested time is earlier than the current scheduling boundary, "
+        "so the item remains unscheduled."
+    ),
+    "指定的时间锚点不在可排期范围内": (
+        "The requested time anchor is outside the schedulable range."
+    ),
+    "proposal 没有原样回显 baseFingerprint": (
+        "The proposal did not preserve baseFingerprint."
+    ),
+    "candidatePlan 日期与 currentPlan 日期不一致": (
+        "The candidatePlan date does not match the currentPlan date."
+    ),
+    "candidatePlan 包含重复 itemId": (
+        "candidatePlan contains duplicate itemId values."
+    ),
+    "显式删除集合与 delete operations 不一致": (
+        "The explicit deletion sets do not match the delete operations."
+    ),
+    "candidatePlan ID 集合不等于基线减删除再加新增 ID": (
+        "The candidatePlan ID set does not match the baseline after deletions and additions."
+    ),
+    "candidatePlan 改变了已有对象的 objectType": (
+        "candidatePlan changed an existing item's objectType."
+    ),
+    "candidatePlan 修改了 operation 未授权的字段": (
+        "candidatePlan changed a field that the operation did not authorize."
+    ),
+    "candidatePlan 时长与 changeDuration operation 不一致": (
+        "The candidatePlan duration does not match the changeDuration operation."
+    ),
+    "candidatePlan 标题与 changeTitle operation 不一致": (
+        "The candidatePlan title does not match the changeTitle operation."
+    ),
+    "新增项必须是 domainRef 为空的 internalTask": (
+        "A new item must be an internalTask with an empty domainRef."
+    ),
+    "新增项标题与 add operation 不一致": (
+        "The new item title does not match the add operation."
+    ),
+    "新增项时长与 add operation 不一致": (
+        "The new item duration does not match the add operation."
+    ),
+    "新增项不能伪造只读事实": "A new item cannot forge read-only facts.",
+    "对象时间片总时长与 durationSlots 不一致": (
+        "The item's total segment duration does not match durationSlots."
+    ),
+    "candidatePlan 中的时间片发生重叠": "Segments overlap in candidatePlan.",
+    "排期结果没有遵守用户指定的时间锚点": (
+        "The schedule does not honor the user's requested time anchor."
+    ),
+}
+
+
+def _localized_issues(
+    issues: list[TimeFragmentValidationIssue],
+    language: Literal["zh-Hans", "en"],
+) -> list[TimeFragmentValidationIssue]:
+    if language == "zh-Hans":
+        return issues
+    result = []
+    for issue in issues:
+        message = _ENGLISH_ISSUE_MESSAGES.get(issue.message)
+        if message is None and issue.message.startswith("用户没有明确授权修改受保护对象「"):
+            title = issue.message.removeprefix(
+                "用户没有明确授权修改受保护对象「"
+            ).removesuffix("」")
+            message = (
+                f'The user did not explicitly authorize changes to the protected item "{title}".'
+            )
+        elif message is None and issue.message.startswith("对象「") and issue.message.endswith(
+            "」在当天剩余空间中无法完整排下"
+        ):
+            title = issue.message.removeprefix("对象「").removesuffix(
+                "」在当天剩余空间中无法完整排下"
+            )
+            message = f'The item "{title}" cannot fit in the remaining time today.'
+        result.append(issue.model_copy(update={"message": message or issue.message}))
+    return result
 
 
 def _placement_precedes_slot(

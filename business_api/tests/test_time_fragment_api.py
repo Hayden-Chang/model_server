@@ -97,6 +97,8 @@ def request_payload(
     items: list[dict[str, Any]] | None = None,
     date: str = "2026-08-24",
     now: str = "2026-08-24T08:10:00+08:00",
+    time_zone: str | None = None,
+    language: str | None = None,
     earliest_start_slot: int | None = None,
 ) -> dict[str, Any]:
     payload = {
@@ -109,6 +111,10 @@ def request_payload(
         },
         "now": now,
     }
+    if time_zone is not None:
+        payload["timeZone"] = time_zone
+    if language is not None:
+        payload["language"] = language
     if earliest_start_slot is not None:
         payload["earliestStartSlot"] = earliest_start_slot
     return payload
@@ -638,6 +644,29 @@ def test_plan_parse_rejects_past_date_before_calling_model(settings: Settings) -
         request_id="app-request-past",
         date="2026-08-23",
         earliest_start_slot=36,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "PLANNING_DATE_NOT_ALLOWED"
+    assert fake.calls == []
+
+
+def test_plan_parse_uses_iana_timezone_when_utc_now_is_next_local_day(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient([operations_output([])])
+    payload = request_payload(
+        request_id="app-request-time-zone-boundary",
+        date="2026-08-24",
+        now="2026-08-24T16:10:00Z",
+        time_zone="Asia/Shanghai",
     )
 
     with TestClient(create_app(settings, fake)) as client:

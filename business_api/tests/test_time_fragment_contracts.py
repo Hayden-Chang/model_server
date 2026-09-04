@@ -52,7 +52,9 @@ def app_request_payload() -> dict[str, Any]:
                 },
             ],
         },
-        "now": "2026-08-24T08:10:00+08:00",
+        "now": "2026-08-24T00:10:00Z",
+        "timeZone": "Asia/Shanghai",
+        "language": "zh-Hans",
     }
 
 
@@ -81,6 +83,8 @@ def test_v2_app_contract_covers_full_request_response_and_discriminated_items() 
         "baseFingerprint",
         "currentPlan",
         "now",
+        "timeZone",
+        "language",
         "earliestStartSlot",
     }
     assert set(response_schema["properties"]) == {"requestID", "proposal", "validation"}
@@ -144,6 +148,59 @@ def test_model_visible_projection_never_contains_domain_references_or_envelope_i
         "occurrence-1",
         "external-1",
     ]
+    assert projection.now == "2026-08-24T08:10:00+08:00"
+    assert projection.time_zone == "Asia/Shanghai"
+    assert projection.language == "zh-Hans"
+
+
+def test_v2_request_rejects_invalid_iana_timezone_and_unsupported_language() -> None:
+    invalid_time_zone = app_request_payload()
+    invalid_time_zone["timeZone"] = "GMT+8"
+    with pytest.raises(ValidationError):
+        TimeFragmentPlanRequestV2.model_validate(invalid_time_zone)
+
+    invalid_language = app_request_payload()
+    invalid_language["language"] = "fr"
+    with pytest.raises(ValidationError):
+        TimeFragmentPlanRequestV2.model_validate(invalid_language)
+
+
+def test_v2_request_keeps_legacy_offset_clients_compatible() -> None:
+    payload = app_request_payload()
+    payload.pop("timeZone")
+    payload.pop("language")
+    payload["now"] = "2026-08-24T08:10:00+08:00"
+
+    request = TimeFragmentPlanRequestV2.model_validate(payload)
+
+    assert request.time_zone is None
+    assert request.language == "zh-Hans"
+    assert request.local_now.isoformat() == "2026-08-24T08:10:00+08:00"
+
+
+def test_v2_request_iana_timezone_applies_daylight_saving_offset() -> None:
+    summer_payload = app_request_payload()
+    summer_payload["now"] = "2026-07-01T12:00:00Z"
+    summer_payload["timeZone"] = "America/Los_Angeles"
+    winter_payload = app_request_payload()
+    winter_payload["now"] = "2026-01-01T12:00:00Z"
+    winter_payload["timeZone"] = "America/Los_Angeles"
+
+    summer = TimeFragmentPlanRequestV2.model_validate(summer_payload)
+    winter = TimeFragmentPlanRequestV2.model_validate(winter_payload)
+
+    assert summer.local_now.isoformat() == "2026-07-01T05:00:00-07:00"
+    assert winter.local_now.isoformat() == "2026-01-01T04:00:00-08:00"
+
+
+def test_parse_failure_uses_requested_english_language() -> None:
+    response = build_time_fragment_parse_failed_response(
+        "request-english",
+        attempts=2,
+        language="en",
+    )
+
+    assert response.validation.issues[0].message == "The AI response could not be parsed."
 
 
 def test_model_visible_projection_includes_app_future_start_slot() -> None:
