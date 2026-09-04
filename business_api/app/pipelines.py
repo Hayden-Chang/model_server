@@ -132,7 +132,12 @@ PIPELINES: dict[str, Pipeline] = {
             "states an exact clock time for that individual task, and include authorizationText as the "
             "shortest exact quote containing both the task title and that time. A global earliestStartSlot, "
             "relative ordering, or priority rule does not authorize per-task placement. Preserve source "
-            "appearance in inputOrder. Include priority only when the user specified one. priority is a "
+            "appearance in inputOrder. For a chronological sequence of clocked actions, the next clock "
+            "may end the current action. Endpoint phrases such as 出地铁 and 到家 describe the preceding "
+            "journey and are not separate adds; 下班 followed by 到家 is one 下班回家 add. Preserve gaps "
+            "after endpoint phrases, keep an otherwise unbounded 吃饭 at the default 2 slots, and round "
+            "each stated boundary to the nearest 15-minute slot. Explicit time ranges take precedence. "
+            "Include priority only when the user specified one. priority is a "
             "positive score: a larger positive priority score means higher priority. Encode every requested "
             "precedence level in that score; equally ranked tasks use inputOrder."
         ),
