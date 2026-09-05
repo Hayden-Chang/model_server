@@ -1,7 +1,6 @@
 import json
 from dataclasses import replace
 from datetime import date as Date
-from datetime import datetime
 from typing import Any
 
 from .contracts import TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2
@@ -81,6 +80,7 @@ async def execute_time_fragment_plan(
         return build_time_fragment_parse_failed_response(
             request.request_id,
             attempts=2,
+            language=request.language,
         )
     return plan_time_fragment(request, second_operations, attempts=2)
 
@@ -92,9 +92,13 @@ def _ensure_input_within_limit(user_input: str, max_input_chars: int) -> None:
 
 def _validate_temporal_request(request: TimeFragmentPlanRequestV2) -> None:
     selected_date = Date.fromisoformat(request.current_plan.date)
-    local_date = datetime.fromisoformat(request.now.replace("Z", "+00:00")).date()
+    local_date = request.local_now.date()
     if selected_date < local_date:
         raise TimeFragmentRequestInvalid(
             "PLANNING_DATE_NOT_ALLOWED",
-            "planning date cannot be before today",
+            (
+                "规划日期不能早于今天"
+                if request.language == "zh-Hans"
+                else "Planning date cannot be before today."
+            ),
         )

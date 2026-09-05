@@ -2,6 +2,7 @@ from datetime import date as Date
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -314,6 +315,8 @@ class TimeFragmentPlanRequestV2(_TimeFragmentV2Model):
     base_fingerprint: str = Field(alias="baseFingerprint", min_length=1, max_length=500)
     current_plan: TimeFragmentPlanV2 = Field(alias="currentPlan")
     now: str
+    time_zone: str | None = Field(default=None, alias="timeZone")
+    language: Literal["zh-Hans", "en"] = "zh-Hans"
     earliest_start_slot: int | None = Field(
         default=None,
         alias="earliestStartSlot",
@@ -339,6 +342,24 @@ class TimeFragmentPlanRequestV2(_TimeFragmentV2Model):
         if parsed.tzinfo is None:
             raise ValueError("now must include a timezone offset")
         return value
+
+    @field_validator("time_zone")
+    @classmethod
+    def time_zone_must_be_iana_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError) as error:
+            raise ValueError("timeZone must be a valid IANA time zone identifier") from error
+        return value
+
+    @property
+    def local_now(self) -> datetime:
+        parsed = datetime.fromisoformat(self.now.replace("Z", "+00:00"))
+        if self.time_zone is None:
+            return parsed
+        return parsed.astimezone(ZoneInfo(self.time_zone))
 
 
 class TimeFragmentModelVisibleInternalTask(_TimeFragmentV2Model):
@@ -376,6 +397,8 @@ class TimeFragmentModelPlanRequest(_TimeFragmentV2Model):
     text: str
     current_plan: TimeFragmentModelVisiblePlan = Field(alias="currentPlan")
     now: str
+    time_zone: str | None = Field(default=None, alias="timeZone")
+    language: Literal["zh-Hans", "en"]
     earliest_start_slot: int | None = Field(
         default=None,
         alias="earliestStartSlot",
