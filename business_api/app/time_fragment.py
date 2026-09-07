@@ -69,9 +69,17 @@ _CLOCK_TOKEN_SOURCE = (
 )
 _CLOCK_TOKEN_PATTERN = re.compile(_CLOCK_TOKEN_SOURCE)
 _CLOCK_RANGE_PATTERN = re.compile(
-    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*(?:到|至|[-—~～])\s*"
+    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*\\?(?:到|至|[-–—~～])\s*"
     rf"(?P<end>{_CLOCK_TOKEN_SOURCE})"
 )
+_CONTINUOUS_TIMEPOINT_SEPARATOR_PATTERN = re.compile(r"[，,。；;！？!?\n]+")
+_CONTINUOUS_TIMEPOINT_END_MARKERS = {
+    "出地铁": "坐地铁",
+    "到家": "下班",
+}
+_CONTINUOUS_TIMEPOINT_COMBINED_TITLES = {
+    ("下班", "到家"): "下班回家",
+}
 
 
 def validate_plan_for_request(plan: TimeFragmentPlanResponse, now: str) -> None:
@@ -189,6 +197,17 @@ def plan_time_fragment(
     candidate. Structural model-output failures are handled by WP3 with
     ``build_time_fragment_parse_failed_response``.
     """
+
+    continuous_timepoint_adds = _continuous_timepoint_add_operations(request.text)
+    if (
+        continuous_timepoint_adds is not None
+        and model_output.operations
+        and all(
+            isinstance(operation, TimeFragmentModelAddOperation)
+            for operation in model_output.operations
+        )
+    ):
+        model_output = TimeFragmentModelOperations(operations=continuous_timepoint_adds)
 
     base_items = [item.model_copy(deep=True) for item in request.current_plan.items]
     base_counts = Counter(item.item_id for item in base_items)
@@ -1036,18 +1055,78 @@ def _requested_add_time_constraints(
         for index, operation in enumerate(operations)
         if isinstance(operation, TimeFragmentModelAddOperation)
     ]
+    continuous_timepoint_adds = _continuous_timepoint_add_operations(request_text)
+    if (
+        continuous_timepoint_adds is not None
+        and len(add_operations) == len(operations) == len(continuous_timepoint_adds)
+        and all(
+            operation.title == requested_operation.title
+            and operation.input_order == requested_operation.input_order
+            for (_, operation), requested_operation in zip(
+                add_operations,
+                continuous_timepoint_adds,
+                strict=True,
+            )
+        )
+    ):
+        return {
+            operation_index: (
+                requested_operation.placement,
+                requested_operation.duration_slots,
+            )
+            for (operation_index, _), requested_operation in zip(
+                add_operations,
+                continuous_timepoint_adds,
+                strict=True,
+            )
+            if requested_operation.placement is not None
+        }
+
     constraints: dict[int, tuple[TimeFragmentPlacement, int | None]] = {}
     previous_range_end: int | None = None
 
-    for line in request_text.splitlines():
-        range_match = _CLOCK_RANGE_PATTERN.search(line)
-        parsed_range = (
-            _parse_clock_range(range_match, previous_range_end)
-            if range_match is not None
-            else None
+    range_matches = list(_CLOCK_RANGE_PATTERN.finditer(request_text))
+    for range_index, range_match in enumerate(range_matches):
+        parsed_range = _parse_clock_range(range_match, previous_range_end)
+        if parsed_range is None:
+            continue
+        previous_range_end = parsed_range[1]
+
+        window_end = (
+            range_matches[range_index + 1].start()
+            if range_index + 1 < len(range_matches)
+            else len(request_text)
         )
-        if parsed_range is not None:
-            previous_range_end = parsed_range[1]
+        title_window = request_text[range_match.end() : window_end]
+        matching_operations = []
+        for operation_index, operation in add_operations:
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            title = title_label[0] if title_label is not None else operation.title
+            if title in title_window:
+                matching_operations.append((operation_index, title))
+        if len(matching_operations) != 1:
+            continue
+
+        operation_index, title = matching_operations[0]
+        clause_start = max(
+            request_text.rfind(separator, 0, range_match.start())
+            for separator in ("，", ",", "。", "；", ";", "！", "!", "？", "?", "\n")
+        ) + 1
+        title_end = range_match.end() + title_window.index(title) + len(title)
+        evidence = request_text[clause_start:title_end]
+        if any(marker in evidence for marker in ("不要", "别", "无需", "不许", "不能", "禁止")):
+            continue
+
+        start_minutes, end_minutes = parsed_range
+        if start_minutes % 15 == 0 and end_minutes % 15 == 0:
+            constraints[operation_index] = (
+                TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
+                (end_minutes - start_minutes) // 15,
+            )
+
+    for line in request_text.splitlines():
+        if _CLOCK_RANGE_PATTERN.search(line) is not None:
+            continue
 
         matching_operations = []
         for operation_index, operation in add_operations:
@@ -1061,15 +1140,6 @@ def _requested_add_time_constraints(
             continue
 
         operation_index, operation = matching_operations[0]
-        if parsed_range is not None:
-            start_minutes, end_minutes = parsed_range
-            if start_minutes % 15 == 0 and end_minutes % 15 == 0:
-                constraints[operation_index] = (
-                    TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
-                    (end_minutes - start_minutes) // 15,
-                )
-            continue
-
         token_match = _CLOCK_TOKEN_PATTERN.search(line)
         if token_match is None or operation.placement is None:
             continue
@@ -1080,6 +1150,93 @@ def _requested_add_time_constraints(
             constraints[operation_index] = (operation.placement, None)
 
     return constraints
+
+
+def _continuous_timepoint_add_operations(
+    request_text: str,
+) -> list[TimeFragmentModelAddOperation] | None:
+    if _CLOCK_RANGE_PATTERN.search(request_text) or any(
+        marker in request_text for marker in ("不要", "别", "无需", "不许", "不能", "禁止")
+    ):
+        return None
+
+    clauses = [
+        clause.strip()
+        for clause in _CONTINUOUS_TIMEPOINT_SEPARATOR_PATTERN.split(request_text)
+        if clause.strip()
+    ]
+    if len(clauses) < 3:
+        return None
+
+    points: list[tuple[int, str]] = []
+    previous_minutes: int | None = None
+    for clause in clauses:
+        token_matches = list(_CLOCK_TOKEN_PATTERN.finditer(clause))
+        if len(token_matches) != 1 or token_matches[0].start() != 0:
+            return None
+        token_match = token_matches[0]
+        action = clause[token_match.end() :].strip()
+        parsed_clock = _parse_clock_token(token_match.group(0))
+        if not action or parsed_clock is None:
+            return None
+
+        minutes, period = parsed_clock
+        if previous_minutes is not None:
+            if period is None and minutes <= previous_minutes:
+                minutes += 12 * 60
+            if minutes <= previous_minutes:
+                return None
+        if not 0 <= minutes <= 24 * 60:
+            return None
+        points.append((minutes, action))
+        previous_minutes = minutes
+
+    if points[-1][1] not in _CONTINUOUS_TIMEPOINT_END_MARKERS:
+        return None
+    for point_index, (_, action) in enumerate(points):
+        expected_previous_action = _CONTINUOUS_TIMEPOINT_END_MARKERS.get(action)
+        if expected_previous_action is not None and (
+            point_index == 0 or points[point_index - 1][1] != expected_previous_action
+        ):
+            return None
+
+    operations: list[TimeFragmentModelAddOperation] = []
+    previous_end_slot: int | None = None
+    for point_index, (start_minutes, action) in enumerate(points[:-1]):
+        if action in _CONTINUOUS_TIMEPOINT_END_MARKERS:
+            continue
+        end_minutes, next_action = points[point_index + 1]
+        if action == "吃饭":
+            end_minutes = min(end_minutes, start_minutes + 30)
+        start_slot = _round_minutes_to_slot(start_minutes)
+        end_slot = _round_minutes_to_slot(end_minutes)
+        if (
+            start_slot >= end_slot
+            or end_slot > 96
+            or (
+                previous_end_slot is not None
+                and start_slot < previous_end_slot
+            )
+        ):
+            return None
+        title = _CONTINUOUS_TIMEPOINT_COMBINED_TITLES.get(
+            (action, next_action),
+            action,
+        )
+        operations.append(TimeFragmentModelAddOperation(
+            type="add",
+            title=title,
+            duration_slots=end_slot - start_slot,
+            placement=TimeFragmentPlacement(anchor="start", slot=start_slot),
+            input_order=len(operations),
+        ))
+        previous_end_slot = end_slot
+
+    return operations or None
+
+
+def _round_minutes_to_slot(minutes: int) -> int:
+    return (minutes + 7) // 15
 
 
 def _parse_clock_range(
