@@ -1141,7 +1141,13 @@ def test_semantic_correction_excludes_normal_unplaced_warnings(
                     ),
                 ]
             ),
-            operations_output([]),
+            operations_output([
+                model_add(
+                    "已错过时间的任务", "08:00 安排已错过时间的任务",
+                    duration_slots=2, start_time="08:00",
+                    start_evidence="08:00 安排已错过时间的任务", input_order=1,
+                ),
+            ]),
         ]
     )
 
@@ -1156,7 +1162,14 @@ def test_semantic_correction_excludes_normal_unplaced_warnings(
         )
 
     assert response.status_code == 200
-    assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    body = response.json()
+    assert body["validation"]["valid"] is True
+    assert body["validation"]["attempts"] == 2
+    assert {(issue["code"], issue["severity"]) for issue in body["validation"]["issues"]} == {
+        ("INVALID_TIME", "warning"), ("UNPLACED", "warning"),
+    }
+    assert body["proposal"]["candidatePlan"]["items"][-1]["title"] == "已错过时间的任务"
+    assert body["proposal"]["candidatePlan"]["items"][-1]["segments"] == []
     correction = json.loads(fake.calls[1][1])
     assert correction["issues"] == [
         {

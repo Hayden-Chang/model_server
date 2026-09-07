@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .contracts import TimeFragmentModelOperations
+from .contracts import TimeFragmentExtractedOperations
 
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
@@ -50,7 +50,7 @@ TIME_FRAGMENT_PLAN_SCHEMA: dict[str, Any] = {
 
 TIME_FRAGMENT_OPERATIONS_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    **TimeFragmentModelOperations.model_json_schema(by_alias=True),
+    **TimeFragmentExtractedOperations.model_json_schema(by_alias=True),
 }
 
 
@@ -126,19 +126,29 @@ PIPELINES: dict[str, Pipeline] = {
             "completed, or external-event target, include authorizationText as the shortest exact "
             "quote from the user's text that affirmatively requests the change and names the exact "
             "target or an explicit time range. Never paraphrase authorizationText and never use a "
-            "negative or keep-unchanged phrase as authorization. placement slots are 15-minute "
-            "grid indices from 0 through 96. When earliestStartSlot is present, do not place a "
-            "new or explicitly moved task before that slot. For add, include placement only when the user "
-            "states an exact clock time for that individual task, and include authorizationText as the "
-            "shortest exact quote containing both the task title and that time. A global earliestStartSlot, "
-            "relative ordering, or priority rule does not authorize per-task placement. Preserve source "
-            "appearance in inputOrder. An explicit start-to-end range sets both placement and durationSlots; "
+            "negative or keep-unchanged phrase as authorization. Existing move placement slots are "
+            "15-minute grid indices from midnight on currentPlan.date: HH:mm maps to floor((HH*60+mm+7)/15). "
+            "For add, never output placement or authorizationText. Always include sourceText as an exact "
+            "task quote and timeConstraint explicitly as null or an object. The display title may summarize "
+            "or combine source actions and need not occur verbatim in sourceText. A timed object requires "
+            "startTime, endTime, startEvidence, endEvidence; an absent boundary and its evidence are both null. "
+            "Use local 24-hour HH:mm clocks on currentPlan.date at their original minute precision, not slots; "
+            "each non-null clock needs an exact original quote containing that one clock. startEvidence "
+            "must refer to the task's sourceText; endEvidence may quote the next action or journey endpoint. "
+            "Resolve omitted AM/PM from the whole narrative, not from now. For example 8:50 起床 is 08:50; "
+            "12点午饭 followed by 1点上班 means 12:00 then 13:00. Midnight after 23:00 is 24:00, never noon "
+            "or 00:00 on the same date. A global earliestStartSlot, "
+            "relative ordering, or priority rule does not authorize a per-task timeConstraint. "
+            "Use null only when no affirmative task clock is stated; do not omit explicit clocks or tasks. "
+            "Preserve source "
+            "appearance in inputOrder. An explicit start-to-end range supplies both time boundaries; "
             "handle every range independently even when multiple tasks share one line or only punctuation "
             "separates them. For a chronological sequence of clocked actions, the next clock "
             "may end the current action. Endpoint phrases such as 出地铁 and 到家 describe the preceding "
             "journey and are not separate adds; 下班 followed by 到家 is one 下班回家 add. Preserve gaps "
-            "after endpoint phrases, keep an otherwise unbounded 吃饭 at the default 2 slots, and round "
-            "each stated boundary to the nearest 15-minute slot. Explicit time ranges take precedence. "
+            "after endpoint phrases, keep an otherwise unbounded 吃饭 at the default 2 slots. "
+            "The service will round each stated boundary to the nearest 15-minute slot and compute range "
+            "duration, overriding durationSlots. Explicit time ranges take precedence. "
             "Include priority only when the user specified one. priority is a "
             "positive score: a larger positive priority score means higher priority. Encode every requested "
             "precedence level in that score; equally ranked tasks use inputOrder."

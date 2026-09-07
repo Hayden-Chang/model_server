@@ -187,7 +187,7 @@ def test_v2_model_schema_and_pipeline_expose_only_structured_operations() -> Non
     assert "status" not in operation_property_names
     assert "status" not in pipeline.system_prompt.lower()
     assert "larger positive priority score means higher priority" in pipeline.system_prompt
-    assert "include placement only when the user states an exact clock time for that individual task" in (
+    assert "For add, never output placement or authorizationText" in (
         pipeline.system_prompt
     )
     assert "handle every range independently even when multiple tasks share one line" in (
@@ -195,6 +195,14 @@ def test_v2_model_schema_and_pipeline_expose_only_structured_operations() -> Non
     )
     assert "Endpoint phrases such as 出地铁 and 到家" in pipeline.system_prompt
     assert "round each stated boundary to the nearest 15-minute slot" in pipeline.system_prompt
+    add_schema = TIME_FRAGMENT_OPERATIONS_SCHEMA["$defs"]["TimeFragmentExtractedAddOperation"]
+    assert {"sourceText", "timeConstraint"} <= set(add_schema["required"])
+    assert "placement" not in add_schema["properties"]
+    assert "authorizationText" not in add_schema["properties"]
+    clock_schema = TIME_FRAGMENT_OPERATIONS_SCHEMA["$defs"]["TimeFragmentClockConstraint"]
+    assert set(clock_schema["required"]) == {
+        "startTime", "endTime", "startEvidence", "endEvidence",
+    }
     assert get_pipeline("time-fragment-plan-v1") is not None
 
 

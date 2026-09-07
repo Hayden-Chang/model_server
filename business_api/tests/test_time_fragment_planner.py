@@ -1824,10 +1824,9 @@ def test_non_clock_text_does_not_authorize_add_placement(request_text: str) -> N
     ("request_text", "model_slot"),
     (
         ("不要在 10:00 安排写方案", 40),
-        ("10:00 安排写方案", 44),
     ),
 )
-def test_missing_model_authorization_cannot_enable_negative_or_mismatched_add_placement(
+def test_legacy_negative_time_does_not_authorize_add_placement(
     request_text: str,
     model_slot: int,
 ) -> None:
