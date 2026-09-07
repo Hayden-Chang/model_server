@@ -69,7 +69,7 @@ _CLOCK_TOKEN_SOURCE = (
 )
 _CLOCK_TOKEN_PATTERN = re.compile(_CLOCK_TOKEN_SOURCE)
 _CLOCK_RANGE_PATTERN = re.compile(
-    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*(?:到|至|[-—~～])\s*"
+    rf"(?P<start>{_CLOCK_TOKEN_SOURCE})\s*\\?(?:到|至|[-–—~～])\s*"
     rf"(?P<end>{_CLOCK_TOKEN_SOURCE})"
 )
 _CONTINUOUS_TIMEPOINT_SEPARATOR_PATTERN = re.compile(r"[，,。；;！？!?\n]+")
@@ -1085,15 +1085,48 @@ def _requested_add_time_constraints(
     constraints: dict[int, tuple[TimeFragmentPlacement, int | None]] = {}
     previous_range_end: int | None = None
 
-    for line in request_text.splitlines():
-        range_match = _CLOCK_RANGE_PATTERN.search(line)
-        parsed_range = (
-            _parse_clock_range(range_match, previous_range_end)
-            if range_match is not None
-            else None
+    range_matches = list(_CLOCK_RANGE_PATTERN.finditer(request_text))
+    for range_index, range_match in enumerate(range_matches):
+        parsed_range = _parse_clock_range(range_match, previous_range_end)
+        if parsed_range is None:
+            continue
+        previous_range_end = parsed_range[1]
+
+        window_end = (
+            range_matches[range_index + 1].start()
+            if range_index + 1 < len(range_matches)
+            else len(request_text)
         )
-        if parsed_range is not None:
-            previous_range_end = parsed_range[1]
+        title_window = request_text[range_match.end() : window_end]
+        matching_operations = []
+        for operation_index, operation in add_operations:
+            title_label = _priority_label_in_model_title(request_text, operation.title)
+            title = title_label[0] if title_label is not None else operation.title
+            if title in title_window:
+                matching_operations.append((operation_index, title))
+        if len(matching_operations) != 1:
+            continue
+
+        operation_index, title = matching_operations[0]
+        clause_start = max(
+            request_text.rfind(separator, 0, range_match.start())
+            for separator in ("，", ",", "。", "；", ";", "！", "!", "？", "?", "\n")
+        ) + 1
+        title_end = range_match.end() + title_window.index(title) + len(title)
+        evidence = request_text[clause_start:title_end]
+        if any(marker in evidence for marker in ("不要", "别", "无需", "不许", "不能", "禁止")):
+            continue
+
+        start_minutes, end_minutes = parsed_range
+        if start_minutes % 15 == 0 and end_minutes % 15 == 0:
+            constraints[operation_index] = (
+                TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
+                (end_minutes - start_minutes) // 15,
+            )
+
+    for line in request_text.splitlines():
+        if _CLOCK_RANGE_PATTERN.search(line) is not None:
+            continue
 
         matching_operations = []
         for operation_index, operation in add_operations:
@@ -1107,15 +1140,6 @@ def _requested_add_time_constraints(
             continue
 
         operation_index, operation = matching_operations[0]
-        if parsed_range is not None:
-            start_minutes, end_minutes = parsed_range
-            if start_minutes % 15 == 0 and end_minutes % 15 == 0:
-                constraints[operation_index] = (
-                    TimeFragmentPlacement(anchor="start", slot=start_minutes // 15),
-                    (end_minutes - start_minutes) // 15,
-                )
-            continue
-
         token_match = _CLOCK_TOKEN_PATTERN.search(line)
         if token_match is None or operation.placement is None:
             continue

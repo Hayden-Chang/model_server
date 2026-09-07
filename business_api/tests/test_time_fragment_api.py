@@ -632,6 +632,123 @@ def test_explicit_chinese_time_ranges_override_missing_model_authorization_and_d
     ]
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    (
+        (
+            "11:30~12:00 打王者，12:00~13:00吃午饭。"
+            "下午 1 点到 2 点休息，2 点到 6 点逛街，6 点到 8 点 KTV。"
+        ),
+        (
+            "11:30～12:00 打王者\n12:00至13:00吃午饭\n"
+            "下午 1 点—2 点休息\n2 点–6 点逛街\n6 点-8 点 KTV"
+        ),
+        (
+            r"11:30\~12:00 打王者，12:00\~13:00吃午饭。"
+            "下午 1 点到 2 点休息，2 点到 6 点逛街，6 点到 8 点 KTV。"
+        ),
+    ),
+)
+def test_inline_explicit_time_ranges_preserve_each_requested_interval(
+    settings: Settings,
+    user_text: str,
+) -> None:
+    request_text = f"从 11:15 开始\n{user_text}"
+    fake = FakeModelClient([
+        operations_output([
+            {"type": "add", "title": title, "inputOrder": input_order}
+            for input_order, title in enumerate([
+                "打王者",
+                "吃午饭",
+                "休息",
+                "逛街",
+                "KTV",
+            ])
+        ])
+    ])
+    payload = request_payload(
+        text=request_text,
+        request_id="app-request-inline-explicit-time-ranges",
+        now="2026-09-07T11:10:00+08:00",
+        date="2026-09-07",
+        earliest_start_slot=45,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert [
+        (
+            operation["title"],
+            operation["durationSlots"],
+            operation["placement"],
+        )
+        for operation in body["proposal"]["operations"]
+    ] == [
+        ("打王者", 2, {"anchor": "start", "slot": 46}),
+        ("吃午饭", 4, {"anchor": "start", "slot": 48}),
+        ("休息", 4, {"anchor": "start", "slot": 52}),
+        ("逛街", 16, {"anchor": "start", "slot": 56}),
+        ("KTV", 8, {"anchor": "start", "slot": 72}),
+    ]
+    assert [
+        (item["title"], item["segments"])
+        for item in body["proposal"]["candidatePlan"]["items"]
+    ] == [
+        ("打王者", [{"startSlot": 46, "endSlot": 48}]),
+        ("吃午饭", [{"startSlot": 48, "endSlot": 52}]),
+        ("休息", [{"startSlot": 52, "endSlot": 56}]),
+        ("逛街", [{"startSlot": 56, "endSlot": 72}]),
+        ("KTV", [{"startSlot": 72, "endSlot": 80}]),
+    ]
+
+
+def test_inline_explicit_time_range_does_not_authorize_a_negated_add(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient([
+        operations_output([
+            {
+                "type": "add",
+                "title": "打王者",
+                "durationSlots": 2,
+                "placement": {"anchor": "start", "slot": 46},
+                "inputOrder": 0,
+            }
+        ])
+    ])
+    payload = request_payload(
+        text="从 11:15 开始\n不要在 11:30~12:00 打王者。",
+        request_id="app-request-negated-inline-explicit-time-range",
+        now="2026-09-07T11:10:00+08:00",
+        date="2026-09-07",
+        earliest_start_slot=45,
+    )
+
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert body["proposal"]["operations"][0]["placement"] is None
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [
+        {"startSlot": 45, "endSlot": 47}
+    ]
+
+
 def test_continuous_chinese_timepoints_round_and_return_only_intended_intervals(
     settings: Settings,
 ) -> None:
