@@ -34,7 +34,7 @@ from .contracts import (
     TimeFragmentValidationIssue,
 )
 from .postprocessors import ModelOutputInvalid
-from .time_fragment_solver import SlotAllocationTarget, solve_slot_allocations
+from .time_fragment_solver import SlotAllocationRelation, SlotAllocationTarget, relations_hold, solve_slot_allocations
 
 
 TIME_FRAGMENT_PLANNER_VERSION = "time-fragment-planner-v1"
@@ -201,14 +201,21 @@ def plan_time_fragment(
 
     extracted_clocks = isinstance(model_output, TimeFragmentExtractedOperations)
     clock_errors: dict[int, str] = {}
+    relation_indexes: list[tuple[int, int, bool]] = []
+    relation_errors: list[str] = []
     if extracted_clocks:
         from .time_fragment_clocks import compile_time_fragment_clocks
+        from .time_fragment_relations import compile_temporal_relations
 
+        extracted_output = model_output
         model_output, clock_errors = compile_time_fragment_clocks(
             model_output,
             request.text,
             existing_items=request.current_plan.items,
             earliest_start_slot=request.earliest_start_slot,
+        )
+        model_output, relation_indexes, relation_errors = compile_temporal_relations(
+            extracted_output, model_output, request.text,
         )
     continuous_timepoint_adds = (
         None if extracted_clocks else _continuous_timepoint_add_operations(request.text)
@@ -240,12 +247,19 @@ def plan_time_fragment(
         base_items,
         normalized_operations,
     )
+    relations = [
+        SlotAllocationRelation(str(normalized_operations[before].temporary_id),
+                               str(normalized_operations[after].temporary_id), adjacent)
+        for before, after, adjacent in relation_indexes
+    ]
     has_clear_after_insertion = any(
         isinstance(operation, TimeFragmentAddOperation)
         and _clear_after_insertion_slot(request.text, operation.title, base_items) is not None
         for operation in normalized_operations
     )
     issues: list[TimeFragmentValidationIssue] = []
+    for message in relation_errors:
+        _add_issue(issues, code="INVALID_OPERATION", message=message, field="temporalRelations")
     invalid_clock_ids: set[str] = set()
     for index, message in clock_errors.items():
         item_id = None
@@ -569,6 +583,7 @@ def plan_time_fragment(
     earliest_slot = _first_available_slot(request)
     current_day_slot = _current_day_slot(request)
     invalid_target_ids: set[str] = set()
+    day_end_ids: set[str] = set()
     solver_targets: list[SlotAllocationTarget] = []
     for target in schedule_targets:
         item = candidate_by_id[target.item_id]
@@ -602,6 +617,8 @@ def plan_time_fragment(
             and target.placement.anchor == "start"
             and target.placement.slot == 96
         )
+        if midnight_unplaced_add:
+            day_end_ids.add(target.item_id)
         if placement_outside_day or placement_precedes_earliest:
             invalid_target_ids.add(target.item_id)
             _add_issue(
@@ -632,7 +649,13 @@ def plan_time_fragment(
             )
         )
 
-    solved_slots = solve_slot_allocations(occupied, solver_targets)
+    active_relations = [relation for relation in relations if relation.after_id not in day_end_ids]
+    solved_slots = (
+        solve_slot_allocations(occupied, solver_targets, active_relations)
+        if active_relations else solve_slot_allocations(occupied, solver_targets)
+    )
+    if active_relations and solved_slots is None:
+        _add_issue(issues, code="INVALID_OPERATION", message="未能在时间预算内求出满足先后关系的方案，请重新调整", field="temporalRelations")
     for target in schedule_targets:
         item = candidate_by_id[target.item_id]
         target_earliest_slot = earliest_slot if target.enforces_earliest_start else 0
@@ -694,6 +717,15 @@ def plan_time_fragment(
         ),
     )
     issues.extend(validate_time_fragment_proposal(request, proposal))
+    assignments = {
+        item.item_id: [slot for segment in item.segments for slot in range(segment.start_slot, segment.end_slot)]
+        for item in candidate_items
+    }
+    # A 24:00 add stays a Todo, but its known boundary still ends the preceding day.
+    assignments.update({item_id: [96] for item_id in day_end_ids
+                        if any(relation.after_id == item_id and assignments.get(relation.before_id) for relation in relations)})
+    if not relations_hold(assignments, relations):
+        _add_issue(issues, code="INVALID_OPERATION", message="方案没有满足活动之间的先后或连续关系", field="temporalRelations")
     issues = _deduplicate_issues(issues)
     validation = TimeFragmentValidation(
         valid=not any(issue.severity == "error" for issue in issues),

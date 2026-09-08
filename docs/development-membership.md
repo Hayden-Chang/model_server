@@ -8,4 +8,4 @@ Membership and quota records share the existing SQLite persistence volume. Migra
 
 The iOS fragment reward is applied locally only to newly completed tasks: 2 for a confirmed development member and 1 otherwise. It never retroactively doubles the wallet or rewards the same completion again. Release builds hide the development switch and do not grant this local test multiplier.
 
-Deployment is pending the puzzle production feature's merge into Time Fragment main, then validation of the final combined candidate and enrollment of the isolated test installation.
+Deploy only alongside an iOS candidate that includes the merged production puzzle feature. Validate the combined source and enroll only the intended isolated test installation.

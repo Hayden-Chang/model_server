@@ -1,0 +1,536 @@
+[
+  {
+    "operationID": "00000000-0000-0000-0000-000000000001",
+    "deviceID": "00000000-0000-0000-0000-000000000002",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000003",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "task.create",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "task": {
+        "id": "00000000-0000-0000-0000-000000000004",
+        "title": "example",
+        "note": "example",
+        "estimatedDurationSlots": 1,
+        "repeatRule": "none",
+        "repeatForWeeks": 2,
+        "repeatWeekdays": [],
+        "isPinned": false,
+        "colorHex": "#AABBCC",
+        "createdAt": "2026-09-08T10:00:00.000Z",
+        "updatedAt": "2026-09-08T10:00:00.000Z"
+      },
+      "occurrence": {
+        "id": "00000000-0000-0000-0000-000000000005",
+        "taskID": "00000000-0000-0000-0000-000000000006",
+        "occurrenceDate": "2026-09-08",
+        "unscheduledDate": "2026-09-08",
+        "isAllDay": false,
+        "continuationSourceOccurrenceID": "00000000-0000-0000-0000-000000000007",
+        "orderKey": "example",
+        "status": "todo",
+        "completedAt": "2026-09-08T10:00:00.000Z",
+        "overrides": {
+          "title": "example",
+          "note": "example",
+          "estimatedDurationSlots": 1,
+          "repeatRule": "none",
+          "repeatForWeeks": 2,
+          "repeatWeekdays": [],
+          "isPinned": false
+        }
+      }
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000008",
+    "deviceID": "00000000-0000-0000-0000-000000000009",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000000a",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "task.patchOccurrence",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "occurrenceID": "00000000-0000-0000-0000-00000000000b",
+      "scope": "only",
+      "patch": {
+        "title": "example"
+      },
+      "affectedOccurrenceIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000000c",
+    "deviceID": "00000000-0000-0000-0000-00000000000d",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000000e",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "task.setCompletion",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "occurrenceID": "00000000-0000-0000-0000-00000000000f",
+      "targetStatus": "todo",
+      "completedAt": "2026-09-08T10:00:00.000Z"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000010",
+    "deviceID": "00000000-0000-0000-0000-000000000011",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000012",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "task.deleteOccurrences",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scope": "only",
+      "occurrenceIDs": [],
+      "scheduledTaskIDs": [],
+      "orphanTaskIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000013",
+    "deviceID": "00000000-0000-0000-0000-000000000014",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000015",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "task.clearCompleted",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "occurrenceIDs": [],
+      "scheduledTaskIDs": [],
+      "orphanTaskIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000016",
+    "deviceID": "00000000-0000-0000-0000-000000000017",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000018",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.createAndPlace",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "task": {
+        "id": "00000000-0000-0000-0000-000000000019",
+        "title": "example",
+        "note": "example",
+        "estimatedDurationSlots": 1,
+        "repeatRule": "none",
+        "repeatForWeeks": 2,
+        "repeatWeekdays": [],
+        "isPinned": false,
+        "colorHex": "#AABBCC",
+        "createdAt": "2026-09-08T10:00:00.000Z",
+        "updatedAt": "2026-09-08T10:00:00.000Z"
+      },
+      "occurrences": [],
+      "scheduledTask": {
+        "id": "00000000-0000-0000-0000-00000000001a",
+        "taskOccurrenceID": "00000000-0000-0000-0000-00000000001b",
+        "date": "2026-09-08",
+        "startSlot": -96,
+        "plannedDurationSlots": 1,
+        "segments": []
+      }
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000001c",
+    "deviceID": "00000000-0000-0000-0000-00000000001d",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000001e",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.place",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-00000000001f",
+      "date": "2026-09-08",
+      "startSlot": -96,
+      "segmentIDs": [],
+      "occurrenceID": "00000000-0000-0000-0000-000000000001"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000020",
+    "deviceID": "00000000-0000-0000-0000-000000000021",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000022",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.reschedule",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-000000000023",
+      "date": "2026-09-08",
+      "startSlot": -96,
+      "segmentIDs": [],
+      "occurrenceID": "00000000-0000-0000-0000-000000000001"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000024",
+    "deviceID": "00000000-0000-0000-0000-000000000025",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000026",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.move",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-000000000027",
+      "date": "2026-09-08",
+      "startSlot": -96,
+      "segmentIDs": [],
+      "occurrenceID": "00000000-0000-0000-0000-000000000001"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000028",
+    "deviceID": "00000000-0000-0000-0000-000000000029",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000002a",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.patch",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-00000000002b",
+      "patch": {
+        "date": "2026-09-08"
+      },
+      "segmentIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000002c",
+    "deviceID": "00000000-0000-0000-0000-00000000002d",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000002e",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.setPositions",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "positions": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000002f",
+    "deviceID": "00000000-0000-0000-0000-000000000030",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000031",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.resizeAndResolveOverflow",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-000000000032",
+      "targetDurationSlots": 1,
+      "overflowDecision": "cancel",
+      "results": [],
+      "returnedOccurrenceIDs": [],
+      "deletedScheduledTaskIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000033",
+    "deviceID": "00000000-0000-0000-0000-000000000034",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000035",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "schedule.returnToTodo",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "scheduledTaskID": "00000000-0000-0000-0000-000000000036",
+      "occurrenceID": "00000000-0000-0000-0000-000000000037",
+      "targetStatus": "todo"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000038",
+    "deviceID": "00000000-0000-0000-0000-000000000039",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000003a",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "calendar.applyImportBatch",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "batchID": "00000000-0000-0000-0000-00000000003b",
+      "events": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000003c",
+    "deviceID": "00000000-0000-0000-0000-00000000003d",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000003e",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "focus.start",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "session": {
+        "id": "00000000-0000-0000-0000-00000000003f",
+        "scheduledTaskID": "00000000-0000-0000-0000-000000000040",
+        "plannedDurationSlots": 1,
+        "startedAt": "2026-09-08T10:00:00.000Z",
+        "remainingSecondsAtAnchor": 0,
+        "anchorAt": "2026-09-08T10:00:00.000Z",
+        "pausedAt": "2026-09-08T10:00:00.000Z",
+        "endedAt": "2026-09-08T10:00:00.000Z",
+        "status": "running"
+      }
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000041",
+    "deviceID": "00000000-0000-0000-0000-000000000042",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000043",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "focus.pause",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "sessionID": "00000000-0000-0000-0000-000000000044",
+      "expectedStatus": "running",
+      "targetStatus": "paused",
+      "remainingSecondsAtAnchor": 0,
+      "anchorAt": "2026-09-08T10:00:00.000Z"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000045",
+    "deviceID": "00000000-0000-0000-0000-000000000046",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000047",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "focus.resume",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "sessionID": "00000000-0000-0000-0000-000000000048",
+      "expectedStatus": "paused",
+      "targetStatus": "running",
+      "remainingSecondsAtAnchor": 0,
+      "anchorAt": "2026-09-08T10:00:00.000Z"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000049",
+    "deviceID": "00000000-0000-0000-0000-00000000004a",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000004b",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "focus.end",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "sessionID": "00000000-0000-0000-0000-00000000004c",
+      "expectedStatus": "running",
+      "targetStatus": "ended",
+      "endedAt": "2026-09-08T10:00:00.000Z"
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-00000000004d",
+    "deviceID": "00000000-0000-0000-0000-00000000004e",
+    "syncSpaceID": "00000000-0000-0000-0000-00000000004f",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "focus.complete",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "sessionID": "00000000-0000-0000-0000-000000000050",
+      "expectedStatus": "running",
+      "targetStatus": "completed",
+      "endedAt": "2026-09-08T10:00:00.000Z",
+      "completedOccurrenceIDs": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "operationID": "00000000-0000-0000-0000-000000000051",
+    "deviceID": "00000000-0000-0000-0000-000000000052",
+    "syncSpaceID": "00000000-0000-0000-0000-000000000053",
+    "generation": 1,
+    "baseRevision": 0,
+    "baseStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemaVersion": 1,
+    "algorithmVersion": "schedule-v1",
+    "kind": "state.undoPatch",
+    "effectiveAt": "2026-09-08T10:00:00.000Z",
+    "preconditions": {
+      "entityFingerprints": {},
+      "readSet": [],
+      "readSetFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "payload": {
+      "changes": []
+    },
+    "clientResultStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+]

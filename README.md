@@ -1,6 +1,11 @@
 # Model Server
 
-An API-first LLM service with three runtime containers and an embedded SQLite
+This repository owns DayMosaic's backend code. The account and sync service lives
+in [supabase/](supabase/README.md) and deploys to managed Supabase independently of
+the AI service. Its database migrations, protocol contracts, tests and deletion
+worker are maintained here; client login and sync coordination belong in the App.
+
+The API-first LLM service uses three runtime containers and an embedded SQLite
 observability store:
 
 1. **Caddy** exposes the single public HTTPS port (`443`).
@@ -15,7 +20,15 @@ the private Docker Compose network.
 Current component boundaries, repository layout, request flow, extension points,
 and known limitations are documented in [architecture.md](docs/architecture.md).
 
-## Public API
+## Account and sync service
+
+See [the service guide](supabase/README.md) for the RPC contract, local tests and
+deployment procedure. The existing Supabase project and its applied migration
+versions are retained when moving the source into this repository. Database
+migrations are deployed separately from Docker Compose. Real email delivery
+still requires custom SMTP; deletion/maintenance scheduling is not yet hosted.
+
+## AI public API
 
 ```text
 POST /v1/pipelines/general-text-v1:run
@@ -125,8 +138,10 @@ consumes it. An exhausted installation receives HTTP 429 with code
 
 This is an internal-test control, not an account or a durable anti-abuse
 boundary: deleting/reinstalling the App can create a new installation identity.
-Registration, user sessions, account upgrades, cost accounting, and
-launch-stage compliance/routing controls are not implemented.
+Supabase account sessions and device synchronization are implemented separately
+under `supabase/`. Connecting those accounts to the AI route, guest upgrades,
+account cost accounting, and launch-stage compliance/routing controls are not
+implemented.
 
 ## Observability API
 

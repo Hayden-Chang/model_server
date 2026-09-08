@@ -1,0 +1,95 @@
+[
+  {
+    "name": "empty",
+    "state": {
+      "schemaVersion": 1,
+      "tasks": [],
+      "occurrences": [],
+      "scheduledTasks": [],
+      "externalEvents": [],
+      "focusSessions": [],
+      "activeFocusSessionID": null
+    },
+    "canonical": "{\"activeFocusSessionID\":null,\"externalEvents\":[],\"focusSessions\":[],\"occurrences\":[],\"scheduledTasks\":[],\"schemaVersion\":1,\"tasks\":[]}",
+    "hash": "sha256:132062710a9ac1aead93207332d07c1fae7f657b8b44a751e36573ca9395c9ad"
+  },
+  {
+    "name": "outside-day-partial-duration-weak-focus-reference",
+    "state": {
+      "schemaVersion": 1,
+      "tasks": [
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "title": "读书 📚",
+          "note": "quote \" and newline\n",
+          "estimatedDurationSlots": 120,
+          "repeatRule": "weekly",
+          "repeatForWeeks": 4,
+          "repeatWeekdays": [
+            1,
+            3,
+            5
+          ],
+          "isPinned": false,
+          "colorHex": "#AABBCC",
+          "createdAt": "2026-09-08T10:00:00.000Z",
+          "updatedAt": "2026-09-08T10:00:00.000Z"
+        }
+      ],
+      "occurrences": [
+        {
+          "id": "00000000-0000-0000-0000-000000000002",
+          "taskID": "00000000-0000-0000-0000-000000000001",
+          "occurrenceDate": "2026-09-08",
+          "unscheduledDate": "2026-09-09",
+          "isAllDay": true,
+          "continuationSourceOccurrenceID": null,
+          "orderKey": "0:0000000000000000:00000000-0000-0000-0000-000000000002",
+          "status": "scheduled",
+          "completedAt": null,
+          "overrides": null
+        }
+      ],
+      "scheduledTasks": [
+        {
+          "id": "00000000-0000-0000-0000-000000000003",
+          "taskOccurrenceID": "00000000-0000-0000-0000-000000000002",
+          "date": "2026-09-08",
+          "startSlot": -2,
+          "plannedDurationSlots": 120,
+          "segments": [
+            {
+              "id": "00000000-0000-0000-0000-000000000004",
+              "scheduledTaskID": "00000000-0000-0000-0000-000000000003",
+              "startSlot": -2,
+              "endSlot": 1
+            },
+            {
+              "id": "00000000-0000-0000-0000-000000000005",
+              "scheduledTaskID": "00000000-0000-0000-0000-000000000003",
+              "startSlot": 94,
+              "endSlot": 98
+            }
+          ]
+        }
+      ],
+      "externalEvents": [],
+      "focusSessions": [
+        {
+          "id": "00000000-0000-0000-0000-000000000006",
+          "scheduledTaskID": "00000000-0000-0000-0000-000000000099",
+          "plannedDurationSlots": 2,
+          "startedAt": "2026-09-08T10:00:00.000Z",
+          "remainingSecondsAtAnchor": 1200,
+          "anchorAt": "2026-09-08T10:00:00.000Z",
+          "pausedAt": null,
+          "endedAt": null,
+          "status": "running"
+        }
+      ],
+      "activeFocusSessionID": "00000000-0000-0000-0000-000000000006"
+    },
+    "canonical": "{\"activeFocusSessionID\":\"00000000-0000-0000-0000-000000000006\",\"externalEvents\":[],\"focusSessions\":[{\"anchorAt\":\"2026-09-08T10:00:00.000Z\",\"endedAt\":null,\"id\":\"00000000-0000-0000-0000-000000000006\",\"pausedAt\":null,\"plannedDurationSlots\":2,\"remainingSecondsAtAnchor\":1200,\"scheduledTaskID\":\"00000000-0000-0000-0000-000000000099\",\"startedAt\":\"2026-09-08T10:00:00.000Z\",\"status\":\"running\"}],\"occurrences\":[{\"completedAt\":null,\"continuationSourceOccurrenceID\":null,\"id\":\"00000000-0000-0000-0000-000000000002\",\"isAllDay\":true,\"occurrenceDate\":\"2026-09-08\",\"orderKey\":\"0:0000000000000000:00000000-0000-0000-0000-000000000002\",\"overrides\":null,\"status\":\"scheduled\",\"taskID\":\"00000000-0000-0000-0000-000000000001\",\"unscheduledDate\":\"2026-09-09\"}],\"scheduledTasks\":[{\"date\":\"2026-09-08\",\"id\":\"00000000-0000-0000-0000-000000000003\",\"plannedDurationSlots\":120,\"segments\":[{\"endSlot\":1,\"id\":\"00000000-0000-0000-0000-000000000004\",\"scheduledTaskID\":\"00000000-0000-0000-0000-000000000003\",\"startSlot\":-2},{\"endSlot\":98,\"id\":\"00000000-0000-0000-0000-000000000005\",\"scheduledTaskID\":\"00000000-0000-0000-0000-000000000003\",\"startSlot\":94}],\"startSlot\":-2,\"taskOccurrenceID\":\"00000000-0000-0000-0000-000000000002\"}],\"schemaVersion\":1,\"tasks\":[{\"colorHex\":\"#AABBCC\",\"createdAt\":\"2026-09-08T10:00:00.000Z\",\"estimatedDurationSlots\":120,\"id\":\"00000000-0000-0000-0000-000000000001\",\"isPinned\":false,\"note\":\"quote \\\" and newline\\n\",\"repeatForWeeks\":4,\"repeatRule\":\"weekly\",\"repeatWeekdays\":[1,3,5],\"title\":\"读书 📚\",\"updatedAt\":\"2026-09-08T10:00:00.000Z\"}]}",
+    "hash": "sha256:e3261e0efc058fabd66a4cc87581002c23fbef47e70b370378cb535e5688e7f6"
+  }
+]

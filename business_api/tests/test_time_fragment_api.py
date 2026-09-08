@@ -118,7 +118,7 @@ def operations_output(
     operations: list[dict[str, Any]],
     usage: dict[str, int] | None = None,
 ) -> ModelOutput:
-    return raw_output(json.dumps({"operations": operations}, ensure_ascii=False), usage=usage)
+    return raw_output(json.dumps({"operations": operations, "temporalRelations": []}, ensure_ascii=False), usage=usage)
 
 
 def model_add(
