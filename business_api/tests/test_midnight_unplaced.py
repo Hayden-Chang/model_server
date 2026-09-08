@@ -22,7 +22,9 @@ def without_nulls(value):
 
 def test_real_september11_output_retains_midnight_todo_without_correction(settings):
     trace = json.loads((Path(__file__).parent / "fixtures/sep11-live-clock-output.json").read_text())
-    output = ModelOutput(content=trace["rawModelOutput"], provider_model="recorded-live-output", usage=None)
+    # Upgrade the internal envelope without changing any recorded task or clock.
+    recorded = {**json.loads(trace["rawModelOutput"]), "temporalRelations": []}
+    output = ModelOutput(content=json.dumps(recorded), provider_model="recorded-live-output", usage=None)
     fake = FakeModelClient([output, output])
     with TestClient(create_app(settings, fake)) as client:
         response = client.post("/api/plan/parse", headers=guest_headers(client), json=trace["request"])

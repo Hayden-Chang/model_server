@@ -71,9 +71,15 @@ def _validate_boundary(
     text: str, clock: str, evidence: str, *, owner: str | None,
 ) -> tuple[int, int]:
     spans = _quote_spans(text, evidence)
-    tokens = list(_CLOCK.finditer(evidence))
+    tokens = [token for token in _CLOCK.finditer(evidence) if _minutes(clock) in _possible_minutes(token.group())]
+    if spans and not tokens:
+        raise ValueError(
+            f"输出时间 {clock} 与原文钟点不一致，时间依据中没有对应的钟点。"
+            "不得把按时长推算的时间当作原文钟点：若只给开始时间和时长，endTime 和 endEvidence 应为 null，"
+            "时长写入 durationSlots；若只给结束时间和时长，startTime 和 startEvidence 应为 null。"
+        )
     if not spans or len(tokens) != 1:
-        raise ValueError("时间依据必须是原文中肯定表述且只含一个钟点的片段")
+        raise ValueError("时间依据必须是原文肯定片段，且能唯一对应输出的钟点")
     token = tokens[0]
     matching = []
     for start, _ in spans:
@@ -136,6 +142,38 @@ def _existing_clock_slots(
         slots.add(placement.slot)
         slots.add(placement.slot + duration if placement.anchor == "start" else placement.slot - duration)
     return slots
+
+
+def _unowned_source_clocks(
+    text: str, operation: TimeFragmentExtractedAddOperation, extracted: TimeFragmentExtractedOperations,
+) -> bool:
+    source_spans = _quote_spans(text, operation.source_text)
+    owned_by_next: set[tuple[int, int]] = set()
+    successors = {relation.after_input_order for relation in extracted.temporal_relations
+                  if relation.before_input_order == operation.input_order}
+    for peer in extracted.operations:
+        if not isinstance(peer, TimeFragmentExtractedAddOperation) or peer.input_order not in successors:
+            continue
+        timing = peer.time_constraint
+        if timing is None:
+            continue
+        for clock, evidence in ((timing.start_time, timing.start_evidence), (timing.end_time, timing.end_evidence)):
+            if clock is None or evidence is None:
+                continue
+            try:
+                span = _validate_boundary(text, clock, evidence, owner=peer.source_text)
+            except ValueError:
+                continue
+            if any(source_start < peer_start <= span[0] < span[1] <= peer_end
+                   for source_start, _ in source_spans
+                   for peer_start, peer_end in _quote_spans(text, peer.source_text)):
+                owned_by_next.add(span)
+    return any(
+        (start + token.start(), start + token.end()) not in owned_by_next
+        and not _is_global_clock(text, start + token.start())
+        and not _NEGATION.search(_clause(text, start + token.start()))
+        for start, _ in source_spans for token in _CLOCK.finditer(operation.source_text)
+    )
 
 
 def compile_time_fragment_clocks(
@@ -202,11 +240,7 @@ def compile_time_fragment_clocks(
             if timing is None:
                 if _has_cropped_shared_endpoint(text, operation, extracted):
                     raise ValueError("任务引用裁掉了共享终点的时间上下文，请补全 sourceText 和该任务的时间依据")
-                if _has_omitted_source_clock(text, operation.source_text) or any(
-                    not _is_global_clock(operation.source_text, token.start())
-                    and not _NEGATION.search(_clause(operation.source_text, token.start()))
-                    for token in _CLOCK.finditer(operation.source_text)
-                ):
+                if _has_omitted_source_clock(text, operation.source_text) or _unowned_source_clocks(text, operation, extracted):
                     raise ValueError("任务原文含明确钟点，不能返回 timeConstraint=null")
             else:
                 for boundary_index, (clock, evidence) in enumerate((

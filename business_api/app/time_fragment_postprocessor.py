@@ -63,6 +63,7 @@ def build_time_fragment_correction_input(
     original_request: TimeFragmentModelPlanRequest,
     issues: list[TimeFragmentCorrectionIssue | TimeFragmentValidationIssue],
     first_response: TimeFragmentPlanResponseV2 | None,
+    first_extraction: TimeFragmentExtractedOperations | None = None,
 ) -> str:
     correction: dict[str, Any] = {
         "instruction": "第一次 operations 未通过结构或语义校验。根据具体 issues 修正，并只返回完整替换后的 operations JSON。",
@@ -92,6 +93,8 @@ def build_time_fragment_correction_input(
         correction["firstCandidate"] = _remove_private_fields(
             first_response.proposal.model_dump(mode="json", by_alias=True)
         )
+    if first_extraction is not None:
+        correction["firstExtraction"] = first_extraction.model_dump(mode="json", by_alias=True)
     return json.dumps(correction, ensure_ascii=False, separators=(",", ":"))
 
 

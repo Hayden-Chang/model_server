@@ -179,7 +179,8 @@ def test_v2_model_schema_and_pipeline_expose_only_structured_operations() -> Non
 
     assert pipeline is not None
     assert pipeline.response_schema == TIME_FRAGMENT_OPERATIONS_SCHEMA
-    assert set(TIME_FRAGMENT_OPERATIONS_SCHEMA["properties"]) == {"operations"}
+    assert set(TIME_FRAGMENT_OPERATIONS_SCHEMA["properties"]) == {"operations", "temporalRelations"}
+    assert set(TIME_FRAGMENT_OPERATIONS_SCHEMA["required"]) == {"operations", "temporalRelations"}
     operation_property_names = _property_names(TIME_FRAGMENT_OPERATIONS_SCHEMA)
     assert "domainRef" not in operation_property_names
     assert "segments" not in operation_property_names
