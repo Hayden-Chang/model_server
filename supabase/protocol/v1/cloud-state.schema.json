@@ -1,0 +1,591 @@
+{
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      },
+      "maxItems": 10000
+    },
+    "occurrences": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/occurrence"
+      },
+      "maxItems": 10000
+    },
+    "scheduledTasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scheduledTask"
+      },
+      "maxItems": 10000
+    },
+    "externalEvents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/externalEvent"
+      },
+      "maxItems": 10000
+    },
+    "focusSessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/focusSession"
+      },
+      "maxItems": 10000
+    },
+    "activeFocusSessionID": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "tasks",
+    "occurrences",
+    "scheduledTasks",
+    "externalEvents",
+    "focusSessions",
+    "activeFocusSessionID"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:daymosaic:cloud-state:1",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "fields": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title",
+        "note",
+        "estimatedDurationSlots",
+        "repeatRule",
+        "repeatForWeeks",
+        "repeatWeekdays",
+        "isPinned"
+      ],
+      "additionalProperties": false
+    },
+    "fieldPatch": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "task": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        },
+        "colorHex": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/time"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/time"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "note",
+        "estimatedDurationSlots",
+        "repeatRule",
+        "repeatForWeeks",
+        "repeatWeekdays",
+        "isPinned",
+        "colorHex",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "taskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "occurrenceDate": {
+          "$ref": "#/$defs/date"
+        },
+        "unscheduledDate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isAllDay": {
+          "type": "boolean"
+        },
+        "continuationSourceOccurrenceID": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orderKey": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "scheduled",
+            "completed"
+          ]
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/fields"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "taskID",
+        "occurrenceDate",
+        "unscheduledDate",
+        "isAllDay",
+        "continuationSourceOccurrenceID",
+        "orderKey",
+        "status",
+        "completedAt",
+        "overrides"
+      ],
+      "additionalProperties": false
+    },
+    "segment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scheduledTaskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 191
+        },
+        "endSlot": {
+          "type": "integer",
+          "minimum": -95,
+          "maximum": 192
+        }
+      },
+      "required": [
+        "id",
+        "scheduledTaskID",
+        "startSlot",
+        "endSlot"
+      ],
+      "additionalProperties": false
+    },
+    "scheduledTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "taskOccurrenceID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 192
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/segment"
+          },
+          "maxItems": 96
+        }
+      },
+      "required": [
+        "id",
+        "taskOccurrenceID",
+        "date",
+        "startSlot",
+        "plannedDurationSlots",
+        "segments"
+      ],
+      "additionalProperties": false
+    },
+    "externalSegment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "externalEventID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 191
+        },
+        "endSlot": {
+          "type": "integer",
+          "minimum": -95,
+          "maximum": 192
+        }
+      },
+      "required": [
+        "id",
+        "externalEventID",
+        "startSlot",
+        "endSlot"
+      ],
+      "additionalProperties": false
+    },
+    "externalEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "sourceStartSlot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 95
+        },
+        "sourceEndSlot": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 96
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/externalSegment"
+          },
+          "maxItems": 96
+        },
+        "isAllDay": {
+          "type": "boolean"
+        },
+        "importedAt": {
+          "$ref": "#/$defs/time"
+        },
+        "isFixed": {
+          "const": true
+        },
+        "originPlatform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "originDeviceID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceFingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "date",
+        "sourceStartSlot",
+        "sourceEndSlot",
+        "plannedDurationSlots",
+        "segments",
+        "isAllDay",
+        "importedAt",
+        "isFixed",
+        "originPlatform",
+        "originDeviceID",
+        "sourceFingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "focusSession": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scheduledTaskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "startedAt": {
+          "$ref": "#/$defs/time"
+        },
+        "remainingSecondsAtAnchor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31536000
+        },
+        "anchorAt": {
+          "$ref": "#/$defs/time"
+        },
+        "pausedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "paused",
+            "ended",
+            "completed"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "scheduledTaskID",
+        "plannedDurationSlots",
+        "startedAt",
+        "remainingSecondsAtAnchor",
+        "anchorAt",
+        "pausedAt",
+        "endedAt",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
