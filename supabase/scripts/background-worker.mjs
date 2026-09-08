@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { processDeletions, transport } from './deletion-worker.mjs';
 
 export async function runWorker(kind, client) {
@@ -31,6 +30,6 @@ export async function main(kind, env=process.env, output=process.stdout) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   process.exitCode = await main(process.argv[2]);
 }

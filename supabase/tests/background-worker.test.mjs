@@ -1,9 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main, runWorker } from '../scripts/background-worker.mjs';
+
+test('worker CLI executes when launched through the deployment symlink',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'sync-worker-release-'));
+  try {
+    await symlink(fileURLToPath(new URL('../scripts/',import.meta.url)),join(directory,'current'),'dir');
+    const result=spawnSync(process.execPath,[join(directory,'current','background-worker.mjs'),'unknown'],{encoding:'utf8'});
+    assert.equal(result.status,1);
+    assert.equal(result.stdout,'{"ok":false,"error":"workerFailed"}\n');
+    assert.equal(result.stderr,'');
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
 
 test('scheduled deletion preserves pending work and retries it on the next invocation',async()=>{
   let failing=true;
