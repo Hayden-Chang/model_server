@@ -11,6 +11,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Reques
 from fastapi.responses import HTMLResponse, JSONResponse
 from .admin_dashboard import ADMIN_DASHBOARD_HEADERS, ADMIN_DASHBOARD_HTML
 from .contracts import (
+    DevelopmentMembershipRequest,
+    DevelopmentMembershipResponse,
     ModelMetadata,
     RunRequest,
     RunResponse,
@@ -67,9 +69,14 @@ def create_app(
         settings.usage_db_path,
         settings.usage_content_retention_days,
     )
+    development_principals = frozenset(
+        GuestTokenCodec.device_key(device_id.strip())
+        for device_id in settings.time_fragment_development_device_ids.split(",") if device_id.strip()
+    )
     quotas = quota_store or QuotaStore(
         settings.usage_db_path,
         settings.time_fragment_guest_quota_limit,
+        development_principals=development_principals,
     )
 
     @asynccontextmanager
@@ -224,6 +231,30 @@ def create_app(
             access_token=guest_tokens.issue(payload.device_id),
             expires_in=settings.time_fragment_token_ttl_seconds,
         )
+
+    async def require_development_installation(
+        principal: str = Depends(require_time_fragment_guest),
+    ) -> str:
+        if principal not in development_principals:
+            raise HTTPException(status_code=403, detail={
+                "code": "DEVELOPMENT_MEMBERSHIP_DISABLED",
+                "message": "此安装尚未获准测试会员权益。",
+            })
+        return principal
+
+    @app.get("/api/development/membership", response_model=DevelopmentMembershipResponse)
+    async def development_membership_status(
+        principal: str = Depends(require_development_installation),
+    ) -> dict[str, object]:
+        return quotas.membership_status(principal)
+
+    @app.post("/api/development/membership", response_model=DevelopmentMembershipResponse)
+    async def development_membership_update(
+        payload: DevelopmentMembershipRequest,
+        principal: str = Depends(require_development_installation),
+    ) -> dict[str, object]:
+        quotas.set_membership(principal, payload.enabled)
+        return quotas.membership_status(principal)
 
     @app.post(
         "/api/plan/parse",
@@ -586,6 +617,14 @@ def _resolve_device_filter(
 
 
 def _quota_exhausted_detail(quota_status: QuotaStatus) -> dict[str, Any]:
+    if quota_status.resets_at is not None:
+        return {
+            "code": "AI_DAILY_QUOTA_EXHAUSTED",
+            "message": f"今日的 50 次 AI 排程额度已用完，将于北京时间 {quota_status.resets_at[:10]} 00:00 恢复。",
+            "limit": quota_status.quota_limit,
+            "remaining": 0,
+            "resetsAt": quota_status.resets_at,
+        }
     return {
         "code": "AI_QUOTA_EXHAUSTED",
         "message": "本轮内测的 AI 额度已用完，请将支持码发给开发者刷新。",

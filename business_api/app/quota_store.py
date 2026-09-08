@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class QuotaStatus:
     quota_limit: int
     used: int
     remaining: int
+    resets_at: str | None = None
 
 
 class QuotaExceeded(Exception):
@@ -42,13 +45,19 @@ class DuplicateRequestCompleted(Exception):
 
 
 class QuotaStore:
-    def __init__(self, database_path: str, default_limit: int) -> None:
+    def __init__(
+        self, database_path: str, default_limit: int, *,
+        development_principals: frozenset[str] = frozenset(),
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
         if database_path != ":memory:":
             database_file = Path(database_path).expanduser()
             database_file.parent.mkdir(parents=True, exist_ok=True)
             database_file.touch(mode=0o600, exist_ok=True)
             database_file.chmod(0o600)
         self._default_limit = default_limit
+        self._development_principals = development_principals
+        self._clock = clock
         self._lock = threading.RLock()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
@@ -84,11 +93,21 @@ class QuotaStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (bucket_id, request_id)
                 );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_active_principal
-                    ON quota_buckets(principal) WHERE active = 1;
+                CREATE TABLE IF NOT EXISTS development_memberships (
+                    principal TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+                );
                 CREATE INDEX IF NOT EXISTS idx_quota_support_code
                     ON quota_principals(support_code);
                 """
+            )
+            columns = {row[1] for row in self._connection.execute("PRAGMA table_info(quota_buckets)")}
+            if "period_key" not in columns:
+                self._connection.execute("ALTER TABLE quota_buckets ADD COLUMN period_key TEXT NOT NULL DEFAULT 'free'")
+            self._connection.execute("DROP INDEX IF EXISTS idx_quota_active_principal")
+            self._connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_active_period "
+                "ON quota_buckets(principal, period_key) WHERE active = 1"
             )
             self._connection.commit()
 
@@ -97,21 +116,24 @@ class QuotaStore:
             self._connection.close()
 
     def reserve(self, principal: str, request_id: str) -> QuotaReservation:
-        now = _utc_now()
+        instant = self._clock().astimezone(timezone.utc)
+        now = instant.isoformat().replace("+00:00", "Z")
+        expired_before = (instant - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 support_code = self._support_code_for_principal(principal, now)
-                bucket = self._active_bucket(principal)
+                period = self._period_key(principal, instant)
+                bucket = self._active_bucket(principal, period)
                 if bucket is None:
+                    quota_limit = 50 if self.membership_enabled(principal) else self._default_limit
                     cursor = self._connection.execute(
                         """INSERT INTO quota_buckets (
-                            principal, quota_limit, used_count, active, created_at
-                        ) VALUES (?, ?, 0, 1, ?)""",
-                        (principal, self._default_limit, now),
+                            principal, quota_limit, used_count, active, created_at, period_key
+                        ) VALUES (?, ?, 0, 1, ?, ?)""",
+                        (principal, quota_limit, now, period),
                     )
                     bucket_id = int(cursor.lastrowid)
-                    quota_limit = self._default_limit
                     used = 0
                 else:
                     bucket_id = int(bucket["id"])
@@ -121,7 +143,7 @@ class QuotaStore:
                 expired = self._connection.execute(
                     """UPDATE quota_requests SET state = 'refunded', updated_at = ?
                     WHERE bucket_id = ? AND state = 'reserved' AND updated_at < ?""",
-                    (now, bucket_id, _utc_before(timedelta(minutes=10))),
+                    (now, bucket_id, expired_before),
                 )
                 if expired.rowcount:
                     used = max(0, used - int(expired.rowcount))
@@ -130,6 +152,17 @@ class QuotaStore:
                         (used, bucket_id),
                     )
 
+                duplicate = self._connection.execute(
+                    """SELECT r.state FROM quota_requests r JOIN quota_buckets b ON b.id = r.bucket_id
+                    WHERE b.principal = ? AND r.request_id = ?
+                      AND (r.state = 'consumed' OR (r.state = 'reserved' AND r.updated_at >= ?))
+                    LIMIT 1""",
+                    (principal, request_id, expired_before),
+                ).fetchone()
+                if duplicate is not None:
+                    if duplicate["state"] == "reserved":
+                        raise DuplicateRequestInProgress
+                    raise DuplicateRequestCompleted
                 existing = self._connection.execute(
                     "SELECT state FROM quota_requests WHERE bucket_id = ? AND request_id = ?",
                     (bucket_id, request_id),
@@ -145,6 +178,7 @@ class QuotaStore:
                             quota_limit=quota_limit,
                             used=used,
                             remaining=0,
+                            resets_at=self._next_reset(instant) if period.startswith("member:") else None,
                         )
                     )
 
@@ -198,7 +232,8 @@ class QuotaStore:
                 return None
             bucket = self._active_bucket(principal["principal"])
             if bucket is None:
-                return QuotaStatus(support_code.upper(), self._default_limit, 0, self._default_limit)
+                limit = 50 if self.membership_enabled(principal["principal"]) else self._default_limit
+                return QuotaStatus(support_code.upper(), limit, 0, limit)
             quota_limit = int(bucket["quota_limit"])
             used = int(bucket["used_count"])
             return QuotaStatus(
@@ -209,7 +244,7 @@ class QuotaStore:
             )
 
     def reset(self, support_code: str) -> QuotaStatus | None:
-        now = _utc_now()
+        now = self._clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         normalized = support_code.upper()
         with self._lock, self._connection:
             principal = self._connection.execute(
@@ -220,19 +255,20 @@ class QuotaStore:
                 return None
             self._connection.execute(
                 """UPDATE quota_buckets SET active = 0, deactivated_at = ?
-                WHERE principal = ? AND active = 1""",
-                (now, principal["principal"]),
+                WHERE principal = ? AND period_key = ? AND active = 1""",
+                (now, principal["principal"], self._period_key(principal["principal"])),
             )
+            limit = 50 if self.membership_enabled(principal["principal"]) else self._default_limit
             self._connection.execute(
                 """INSERT INTO quota_buckets (
-                    principal, quota_limit, used_count, active, created_at
-                ) VALUES (?, ?, 0, 1, ?)""",
-                (principal["principal"], self._default_limit, now),
+                    principal, quota_limit, used_count, active, created_at, period_key
+                ) VALUES (?, ?, 0, 1, ?, ?)""",
+                (principal["principal"], limit, now, self._period_key(principal["principal"])),
             )
-        return QuotaStatus(normalized, self._default_limit, 0, self._default_limit)
+        return QuotaStatus(normalized, limit, 0, limit)
 
     def reset_all(self) -> int:
-        now = _utc_now()
+        now = self._clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 """UPDATE quota_buckets SET active = 0, deactivated_at = ?
@@ -241,6 +277,45 @@ class QuotaStore:
             )
             return int(cursor.rowcount)
 
+    def membership_enabled(self, principal: str) -> bool:
+        with self._lock:
+            if principal not in self._development_principals:
+                return False
+            row = self._connection.execute(
+                "SELECT enabled FROM development_memberships WHERE principal = ?", (principal,)
+            ).fetchone()
+            return row is not None and bool(row["enabled"])
+
+    def set_membership(self, principal: str, enabled: bool) -> None:
+        if principal not in self._development_principals:
+            raise PermissionError("development membership is not allowed for this installation")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO development_memberships(principal, enabled) VALUES (?, ?) "
+                "ON CONFLICT(principal) DO UPDATE SET enabled = excluded.enabled",
+                (principal, int(enabled)),
+            )
+
+    def membership_status(self, principal: str) -> dict[str, object]:
+        with self._lock:
+            enabled = self.membership_enabled(principal)
+            instant = self._clock()
+            bucket = self._active_bucket(principal, self._period_key(principal, instant))
+            limit = int(bucket["quota_limit"]) if bucket else (50 if enabled else self._default_limit)
+            used = int(bucket["used_count"]) if bucket else 0
+            return {"enabled": enabled, "limit": limit, "used": used,
+                    "remaining": max(0, limit - used), "resetsAt": self._next_reset(instant) if enabled else None}
+
+    def _period_key(self, principal: str, instant: datetime | None = None) -> str:
+        if not self.membership_enabled(principal):
+            return "free"
+        return "member:" + (instant or self._clock()).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+
+    @staticmethod
+    def _next_reset(instant: datetime) -> str:
+        local = instant.astimezone(ZoneInfo("Asia/Shanghai"))
+        return (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
     def _finish(
         self,
         reservation: QuotaReservation,
@@ -248,7 +323,7 @@ class QuotaStore:
         *,
         decrement: bool,
     ) -> None:
-        now = _utc_now()
+        now = self._clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 """UPDATE quota_requests SET state = ?, updated_at = ?
@@ -269,11 +344,11 @@ class QuotaStore:
                     (reservation.bucket_id,),
                 )
 
-    def _active_bucket(self, principal: str) -> sqlite3.Row | None:
+    def _active_bucket(self, principal: str, period: str | None = None) -> sqlite3.Row | None:
         return self._connection.execute(
             """SELECT id, quota_limit, used_count FROM quota_buckets
-            WHERE principal = ? AND active = 1""",
-            (principal,),
+            WHERE principal = ? AND period_key = ? AND active = 1""",
+            (principal, period or self._period_key(principal)),
         ).fetchone()
 
     def _support_code_for_principal(self, principal: str, now: str) -> str:
@@ -310,11 +385,3 @@ def _candidate_support_code(principal: str, attempt: int) -> str:
     digest = hashlib.sha256(f"{attempt}:{principal}".encode("utf-8")).digest()
     encoded = base64.b32encode(digest[:5]).decode("ascii")
     return f"TF-{encoded[:4]}-{encoded[4:]}"
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _utc_before(delta: timedelta) -> str:
-    return (datetime.now(timezone.utc) - delta).isoformat().replace("+00:00", "Z")
