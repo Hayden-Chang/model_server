@@ -15,6 +15,31 @@ def reported_output():
     return trace["request"]["text"], json.loads(trace["rawModelOutput"])["operations"]
 
 
+@pytest.mark.parametrize("title", ["吃晚饭", "晚餐"])
+@pytest.mark.parametrize("commute_source", ["七点半下班8 点到家", "七点半下班8 点到家给吃晚饭"])
+def test_shared_clock_cannot_be_lost_when_titles_or_peer_quotes_change(settings, title, commute_source):
+    text, operations = reported_output()
+    operations[7]["sourceText"] = commute_source
+    operations[8]["title"] = title
+    body, fake = run_clock_request(settings, text, operations)
+    assert body["validation"]["valid"] is False
+    assert len(fake.calls) == 2
+    assert body["proposal"]["candidatePlan"]["items"][8]["segments"] == []
+
+
+@pytest.mark.parametrize("source", ["有空再吃晚饭", "稍后吃晚饭", "再吃晚饭", "到家后吃晚饭"])
+def test_summarized_flexible_task_with_short_peer_quote_remains_untimed(settings, source):
+    prefix = "七点半下班8 点到家"
+    operations = [
+        model_add("下班回家", prefix, start_time="19:30", end_time="20:00",
+                  start_evidence="七点半下班", end_evidence="8 点到家"),
+        model_add("晚餐", source, input_order=1),
+    ]
+    body, fake = run_clock_request(settings, prefix + source, operations)
+    assert body["validation"]["valid"] is True and len(fake.calls) == 1
+    assert body["proposal"]["operations"][1]["placement"] is None
+
+
 def test_recorded_cropped_dinner_context_cannot_become_a_valid_midnight_schedule(settings):
     text, operations = reported_output()
     body, fake = run_clock_request(settings, text, operations)

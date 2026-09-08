@@ -23,7 +23,7 @@ _NEGATION = re.compile(r"不要|别|无需|不许|不能|禁止")
 _GLOBAL_START = re.compile(rf"^\s*(?:从|最早从|最早)\s*(?P<clock>{_CLOCK_TOKEN_SOURCE})\s*(?:开始|起|以后|之后)\s*(?:安排.*)?$")
 _CLOCK_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|再|请|做|时)*")
 _SHARED_ENDPOINT_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|请|做|时|给)*")
-_RELATIVE_ENDPOINT_CONTEXT = re.compile(r"有空|稍后|以后|之后|后|再|等一会")
+_RELATIVE_ENDPOINT_CONTEXT = re.compile(r"有空|稍后|以后|之后|后|再|等一会|(?:到家|回家)(?:以后|之后|后)")
 
 
 def _clause_start(text: str, position: int) -> int:
@@ -260,9 +260,9 @@ def compile_time_fragment_clocks(
 def _has_cropped_shared_endpoint(
     text: str, operation: TimeFragmentExtractedAddOperation, extracted: TimeFragmentExtractedOperations,
 ) -> bool:
-    # Inspect model-selected overlapping quotes, not prose-inferred tasks or clock inheritance.
-    title_spans = list(re.finditer(re.escape(operation.title), operation.source_text))
-    if len(title_spans) != 1:
+    # Locate the model's action quote independently of its display title or peer quote length.
+    prefix = _SHARED_ENDPOINT_TO_ACTION.match(operation.source_text)
+    if _RELATIVE_ENDPOINT_CONTEXT.match(operation.source_text, prefix.end()):
         return False
     for peer in extracted.operations:
         if not isinstance(peer, TimeFragmentExtractedAddOperation) or peer is operation:
@@ -272,19 +272,15 @@ def _has_cropped_shared_endpoint(
             continue
         assert timing.end_evidence is not None
         try:
-            _, clock_end = _validate_boundary(text, timing.end_time, timing.end_evidence, owner=peer.source_text)
+            clock_start, clock_end = _validate_boundary(text, timing.end_time, timing.end_evidence, owner=peer.source_text)
         except ValueError:
             continue  # The peer's own validation reports malformed evidence.
-        for owner_start, owner_end in _quote_spans(text, peer.source_text):
-            for source_start, source_end in _quote_spans(text, operation.source_text):
-                if not owner_start <= source_start < source_end <= owner_end:
+        for source_start, _ in _quote_spans(text, operation.source_text):
+            if _RELATIVE_ENDPOINT_CONTEXT.search(text[clock_end:source_start]):
+                continue
+            for evidence_start, evidence_end in _quote_spans(text, timing.end_evidence):
+                if not evidence_start <= clock_start < clock_end <= evidence_end <= source_start:
                     continue
-                action_start = source_start + title_spans[0].start()
-                if _RELATIVE_ENDPOINT_CONTEXT.search(text[clock_end:action_start]):
-                    continue
-                for evidence_start, evidence_end in _quote_spans(text, timing.end_evidence):
-                    if owner_start <= evidence_start < evidence_end <= source_start and (
-                        _SHARED_ENDPOINT_TO_ACTION.fullmatch(text[evidence_end:action_start])
-                    ):
-                        return True
+                if _SHARED_ENDPOINT_TO_ACTION.fullmatch(text[evidence_end:source_start]):
+                    return True
     return False

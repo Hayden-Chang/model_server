@@ -49,7 +49,7 @@ def test_wrong_task_clock_still_requires_correction(settings):
     assert len(fake.calls) == 2
     assert fake.calls[1][0].thinking_mode == "disabled"
     assert fake.calls[1][0].reasoning_effort is None
-    assert fake.calls[1][0].timeout_seconds == 30.0
+    assert fake.calls[1][0].timeout_seconds == 15.0
 
 
 def test_header_recovery_requires_evidence_containing_its_clock(settings):

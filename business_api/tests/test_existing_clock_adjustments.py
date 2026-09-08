@@ -83,4 +83,4 @@ def test_missing_move_quote_is_corrected_once_without_ineffective_reasoning_effo
     assert "未被时间依据覆盖" in prompt
     assert correction.thinking_mode == "disabled"
     assert correction.reasoning_effort is None
-    assert correction.timeout_seconds == 30
+    assert correction.timeout_seconds == 15
