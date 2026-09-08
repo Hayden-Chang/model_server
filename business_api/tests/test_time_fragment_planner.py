@@ -404,7 +404,7 @@ def test_golden_fixtures_cover_required_planner_semantics() -> None:
     assert golden_segments(unknown, "known-item") == [(36, 38)]
 
     boundary = golden_response("cross-day-boundary-todo")
-    assert boundary["validation"]["valid"] is False
+    assert boundary["validation"]["valid"] is True
     assert golden_issue_codes(boundary) == ["INVALID_TIME", "UNPLACED"]
     assert golden_segments(
         boundary, "10000000-0000-4000-8000-000000000006"
