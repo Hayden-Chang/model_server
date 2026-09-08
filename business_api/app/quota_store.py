@@ -270,12 +270,16 @@ class QuotaStore:
     def reset_all(self) -> int:
         now = self._clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         with self._lock, self._connection:
-            cursor = self._connection.execute(
+            self._connection.execute("BEGIN IMMEDIATE")
+            count = self._connection.execute(
+                "SELECT COUNT(DISTINCT principal) FROM quota_buckets WHERE active = 1"
+            ).fetchone()[0]
+            self._connection.execute(
                 """UPDATE quota_buckets SET active = 0, deactivated_at = ?
                 WHERE active = 1""",
                 (now,),
             )
-            return int(cursor.rowcount)
+            return int(count)
 
     def membership_enabled(self, principal: str) -> bool:
         with self._lock:

@@ -154,3 +154,21 @@ def test_reservation_uses_one_server_instant_across_midnight() -> None:
         assert store.membership_status("guest_one")["remaining"] == 50
     finally:
         store.close()
+
+
+def test_admin_reset_counts_installations_across_free_and_daily_buckets() -> None:
+    now = [datetime(2026, 9, 8, tzinfo=timezone.utc)]
+    store = QuotaStore(":memory:", 50, development_principals=frozenset({"guest_one"}), clock=lambda: now[0])
+    try:
+        store.consume(store.reserve("guest_one", "free"))
+        store.set_membership("guest_one", True)
+        store.consume(store.reserve("guest_one", "member-day-1"))
+        now[0] += timedelta(days=1)
+        store.consume(store.reserve("guest_one", "member-day-2"))
+        store.consume(store.reserve("guest_two", "another-installation"))
+        assert store.reset_all() == 2
+        assert store.membership_status("guest_one")["remaining"] == 50
+        store.set_membership("guest_one", False)
+        assert store.membership_status("guest_one")["remaining"] == 50
+    finally:
+        store.close()
