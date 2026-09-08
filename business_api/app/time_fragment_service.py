@@ -98,6 +98,12 @@ async def _execute_time_fragment_plan(
             correction_issues,
             first_response,
         )
+        if first_operations.temporal_relations:
+            with_extraction = build_time_fragment_correction_input(
+                model_request, correction_issues, first_response, first_operations,
+            )
+            if len(with_extraction) <= max_input_chars:
+                correction_input = with_extraction
 
     _ensure_input_within_limit(correction_input, max_input_chars)
     fallback_pipeline = replace(

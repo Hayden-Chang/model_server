@@ -583,6 +583,16 @@ class TimeFragmentExtractedAddOperation(_TimeFragmentV2Model):
         return value
 
 
+class TimeFragmentTemporalRelation(_TimeFragmentV2Model):
+    before_input_order: int = Field(alias="beforeInputOrder", ge=0, strict=True)
+    after_input_order: int = Field(alias="afterInputOrder", ge=0, strict=True)
+    kind: Literal["before", "until"]
+    evidence: str = Field(
+        min_length=1, max_length=2_000,
+        description="Exact affirmative quote supporting this relationship; contextual then/after references may mention only one linked task.",
+    )
+
+
 class TimeFragmentExtractedOperations(_TimeFragmentV2Model):
     operations: list[Annotated[
         TimeFragmentExtractedAddOperation
@@ -592,6 +602,7 @@ class TimeFragmentExtractedOperations(_TimeFragmentV2Model):
         | TimeFragmentModelDeleteOperation,
         Field(discriminator="type"),
     ]]
+    temporal_relations: list[TimeFragmentTemporalRelation] = Field(alias="temporalRelations", max_length=96)
 
 
 class TimeFragmentAddOperation(_TimeFragmentAddOperation):
