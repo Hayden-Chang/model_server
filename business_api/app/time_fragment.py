@@ -208,6 +208,7 @@ def plan_time_fragment(
             model_output,
             request.text,
             existing_items=request.current_plan.items,
+            earliest_start_slot=request.earliest_start_slot,
         )
     continuous_timepoint_adds = (
         None if extracted_clocks else _continuous_timepoint_add_operations(request.text)

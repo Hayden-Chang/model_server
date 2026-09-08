@@ -47,6 +47,8 @@ class LiteLLMClient:
         }
         if pipeline.thinking_mode is not None:
             payload["thinking"] = {"type": pipeline.thinking_mode}
+        if pipeline.reasoning_effort is not None:
+            payload["reasoning_effort"] = pipeline.reasoning_effort
         if pipeline.response_schema is not None:
             if self._settings.structured_output_mode == "json_schema":
                 payload["response_format"] = {
@@ -62,12 +64,15 @@ class LiteLLMClient:
 
         url = str(self._settings.litellm_base_url).rstrip("/") + "/v1/chat/completions"
         try:
-            async with httpx.AsyncClient(timeout=self._settings.model_timeout_seconds) as client:
+            timeout = min(self._settings.model_timeout_seconds, pipeline.timeout_seconds or self._settings.model_timeout_seconds)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     url,
                     headers=self._authorization_header(),
                     json=payload,
                 )
+        except httpx.TimeoutException as error:
+            raise ModelGatewayUnavailable("model gateway request timed out") from error
         except httpx.HTTPError as error:
             raise ModelGatewayUnavailable("model gateway could not be reached") from error
 
@@ -80,7 +85,10 @@ class LiteLLMClient:
             body = response.json()
             content = body["choices"][0]["message"]["content"]
             if not isinstance(content, str) or not content.strip():
-                raise ValueError("empty model content")
+                finish = body["choices"][0].get("finish_reason")
+                if finish not in ("stop", "length", "content_filter", "tool_calls"):
+                    finish = "unknown"
+                raise ModelGatewayResponseError(f"model gateway returned empty content (finish_reason={finish})")
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise ModelGatewayResponseError("model gateway returned an invalid response") from error
 

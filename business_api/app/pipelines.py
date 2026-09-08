@@ -62,6 +62,8 @@ class Pipeline:
     max_tokens: int
     response_schema: dict[str, Any] | None = None
     thinking_mode: Literal["enabled", "disabled"] | None = None
+    reasoning_effort: Literal["low", "high", "max"] | None = None
+    timeout_seconds: float | None = None
 
     def messages(self, user_input: str) -> list[dict[str, str]]:
         system_prompt = self.system_prompt

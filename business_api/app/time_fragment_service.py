@@ -39,6 +39,11 @@ async def execute_time_fragment_plan(
     pipeline = get_pipeline("time-fragment-plan-v2")
     assert pipeline is not None
     model_request = project_time_fragment_request_for_model(request)
+    if request.earliest_start_slot is not None:
+        slot = request.earliest_start_slot
+        prefix = f"从 {slot // 4:02}:{slot % 4 * 15:02} 开始\n"
+        if model_request.text.startswith(prefix):
+            model_request = model_request.model_copy(update={"text": model_request.text[len(prefix):]})
     initial_input = json.dumps(
         model_request.model_dump(mode="json", by_alias=True, exclude_none=True),
         ensure_ascii=False,
@@ -73,7 +78,9 @@ async def execute_time_fragment_plan(
         )
 
     _ensure_input_within_limit(correction_input, max_input_chars)
-    fallback_pipeline = replace(pipeline, thinking_mode="enabled")
+    fallback_pipeline = replace(
+        pipeline, thinking_mode="enabled", reasoning_effort="low", timeout_seconds=30.0,
+    )
     second_output = await model_client.complete(fallback_pipeline, correction_input)
     try:
         second_operations = parse_time_fragment_model_operations(second_output.content)

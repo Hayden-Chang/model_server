@@ -1,0 +1,17 @@
+# Append this site to the existing HTTPS ingress, then validate and reload it.
+https://staging.api.keeline.xyz {
+	tls /etc/letsencrypt/live/staging.api.keeline.xyz/fullchain.pem /etc/letsencrypt/live/staging.api.keeline.xyz/privkey.pem
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+	}
+	encode zstd gzip
+	reverse_proxy staging-caddy:8080 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+}

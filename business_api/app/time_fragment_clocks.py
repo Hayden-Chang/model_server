@@ -117,6 +117,7 @@ def compile_time_fragment_clocks(
     text: str,
     *,
     existing_items: list[TimeFragmentPlanItem],
+    earliest_start_slot: int | None = None,
 ) -> tuple[TimeFragmentModelOperations, dict[int, str]]:
     operations = []
     errors: dict[int, str] = {}
@@ -152,6 +153,21 @@ def compile_time_fragment_clocks(
         data.pop("sourceText")
         data.pop("timeConstraint")
         timing = operation.time_constraint
+        # Older apps repeat their separate global constraint in the request text.
+        # Clear only a start boundary quoted from that exact matching header.
+        if earliest_start_slot is not None and timing is not None:
+            prefix = f"从 {earliest_start_slot // 4:02}:{earliest_start_slot % 4 * 15:02} 开始\n"
+            spans = _quote_spans(text, timing.start_evidence or "")
+            if (
+                text.startswith(prefix)
+                and timing.start_time is not None
+                and _minutes(timing.start_time) == earliest_start_slot * 15
+                and spans
+                and all(end <= len(prefix) for _, end in spans)
+            ):
+                timing = None if timing.end_time is None else timing.model_copy(
+                    update={"start_time": None, "start_evidence": None},
+                )
         placement = None
         try:
             if not _quote_spans(text, operation.source_text):

@@ -1,0 +1,13 @@
+{
+	admin off
+}
+
+http://:8080 {
+	header X-Model-Server-Environment staging
+	reverse_proxy staging-business-api:8000 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+}
