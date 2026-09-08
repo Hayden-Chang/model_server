@@ -13,7 +13,8 @@
 
 账号同步接口由客户端直接访问 Supabase；AI 请求继续走 Caddy。账号同步的部署、
 权限和接口契约见 [Supabase 服务说明](../supabase/README.md)。真实验证码邮件仍待
-配置 SMTP，删除和维护任务的定时托管尚未完成；本次目录迁移不改变运行时拓扑。
+配置 SMTP；删除和维护任务使用独立 systemd 定时器，部署和验证步骤见
+[后台任务说明](../supabase/deploy/README.md)，不经过 AI 服务的容器或请求链路。
 
 以下章节描述原有 API-first 大模型服务，其运行约束为：
 

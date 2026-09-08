@@ -8,10 +8,11 @@ It does not add an iOS login screen or sync coordinator, billing, or AI routing.
 ## Repository ownership and existing project
 
 This directory is the backend source of truth, moved from Time Fragment PR #117
-at commit `023a31c753a9cef666473adcd0c3530e0c86eff3`. The service code, contracts,
-tests and four migrations are preserved byte-for-byte; only this guide adds the
-repository handoff. Keep the existing project `tjfhfwvxkcgpswdtnhxv` in Singapore.
-Its applied migrations are `202609080001` through `202609080004`.
+at commit `023a31c753a9cef666473adcd0c3530e0c86eff3`. The initial import preserved
+the service code, contracts, tests and four migrations byte-for-byte; its guide
+added the repository handoff. Keep the existing project `tjfhfwvxkcgpswdtnhxv` in Singapore.
+The migration versions applied before the repository move were `202609080001`
+through `202609080004`; subsequent backend changes add new migration versions.
 
 Link this repository to that project and inspect `supabase db push --dry-run`;
 the move itself must produce no pending migrations. Do not rename or regenerate
@@ -247,7 +248,14 @@ client or Git. The worker emits only aggregate completed/pending counts and exit
 nonzero when work remains. A supervisor should retry with backoff. The server-only
 RPCs are `pending_account_deletions`, `prepare_account_deletion`,
 `complete_account_deletion`, `cleanup_deletion_receipts`, and
-`maintain_sync_account(p_user_id)`.
+`maintain_sync_account(p_user_id)` and `maintain_sync_batch(p_limit)`.
+
+The batch RPC handles at most 100 accounts, skips busy/deletion-pending accounts,
+and rotates attempts so an account cleanup failure does not block other accounts.
+Its permissions are restricted to `service_role`. The scheduled entry point is
+`node scripts/background-worker.mjs deletion` or `maintenance`; fatal errors emit
+only a stable code. See [systemd deployment](deploy/README.md) for independent
+timers, isolated credentials, runtime installation and scheduled verification.
 
 Maintenance never reads membership status. Safety snapshots are cleaned only
 after their window and every required active device's acknowledgement (or

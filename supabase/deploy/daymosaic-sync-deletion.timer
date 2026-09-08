@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry DayMosaic account deletion once a minute
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=1s
+Unit=daymosaic-sync@deletion.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=DayMosaic sync %i worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+LoadCredential=supabase.json:/etc/daymosaic-sync-worker/supabase.json
+ExecStart=/opt/daymosaic-sync-worker/runtime/bin/node /opt/daymosaic-sync-worker/current/scripts/background-worker.mjs %i
+TimeoutStartSec=90min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077

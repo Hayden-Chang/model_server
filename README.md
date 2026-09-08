@@ -26,7 +26,8 @@ See [the service guide](supabase/README.md) for the RPC contract, local tests an
 deployment procedure. The existing Supabase project and its applied migration
 versions are retained when moving the source into this repository. Database
 migrations are deployed separately from Docker Compose. Real email delivery
-still requires custom SMTP; deletion/maintenance scheduling is not yet hosted.
+still requires custom SMTP. Independent deletion/maintenance timers and their
+deployment procedure are provided in [supabase/deploy](supabase/deploy/README.md).
 
 ## AI public API
 
