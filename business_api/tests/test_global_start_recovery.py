@@ -49,3 +49,20 @@ def test_wrong_task_clock_still_requires_correction(settings):
     assert len(fake.calls) == 2
     assert fake.calls[1][0].reasoning_effort == "low"
     assert fake.calls[1][0].timeout_seconds == 30.0
+
+
+def test_header_recovery_requires_evidence_containing_its_clock(settings):
+    text = "从 09:00 开始\n阅读"
+    operation = model_add("阅读", text, start_time="09:00", start_evidence="从")
+    body, _ = run_clock_request(settings, text, [operation], earliest=36)
+    assert body["validation"]["valid"] is False
+
+
+def test_removing_global_start_preserves_explicit_task_end(settings):
+    text = "从 09:00 开始\n阅读到10:00"
+    operation = model_add("阅读", text, start_time="09:00", end_time="10:00",
+                          start_evidence="从 09:00 开始", end_evidence="阅读到10:00")
+    body, fake = run_clock_request(settings, text, [operation], earliest=36)
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [{"startSlot": 38, "endSlot": 40}]

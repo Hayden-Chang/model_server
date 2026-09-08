@@ -162,6 +162,7 @@ def compile_time_fragment_clocks(
                 text.startswith(prefix)
                 and timing.start_time is not None
                 and _minutes(timing.start_time) == earliest_start_slot * 15
+                and len(list(_CLOCK.finditer(timing.start_evidence or ""))) == 1
                 and spans
                 and all(end <= len(prefix) for _, end in spans)
             ):
