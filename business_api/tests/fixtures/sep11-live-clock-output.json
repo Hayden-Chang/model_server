@@ -1,0 +1,367 @@
+{
+  "request": {
+    "baseFingerprint": "sha256:5359677a4f43d752d72ffd482fdb07b57a1b42fe02f129a3e62a9688a565e9bf",
+    "currentPlan": {
+      "date": "2026-09-11",
+      "items": []
+    },
+    "now": "2026-09-08T01:33:31+08:00",
+    "requestID": "fe7e3266-9da3-4218-9275-f8197f3f04d7",
+    "text": "8:50 起床，9 点出门，9:30 到公司。12 点点外卖，1 点吃饭。1:30 上班。外卖。七点半下班8 点到家给吃晚饭。9 点洗澡，10 点看《老友记》。11 点玩手机，12 点睡觉。"
+  },
+  "rawModelOutput": "{\"operations\":[{\"type\":\"add\",\"title\":\"起床\",\"inputOrder\":0,\"sourceText\":\"8:50 起床\",\"timeConstraint\":{\"startTime\":\"08:50\",\"endTime\":null,\"startEvidence\":\"8:50 起床\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"出门\",\"inputOrder\":1,\"sourceText\":\"9 点出门\",\"timeConstraint\":{\"startTime\":\"09:00\",\"endTime\":null,\"startEvidence\":\"9 点出门\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"到公司\",\"inputOrder\":2,\"sourceText\":\"9:30 到公司\",\"timeConstraint\":{\"startTime\":\"09:30\",\"endTime\":null,\"startEvidence\":\"9:30 到公司\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"点外卖\",\"inputOrder\":3,\"sourceText\":\"12 点点外卖\",\"timeConstraint\":{\"startTime\":\"12:00\",\"endTime\":null,\"startEvidence\":\"12 点点外卖\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"吃饭\",\"inputOrder\":4,\"sourceText\":\"1 点吃饭\",\"timeConstraint\":{\"startTime\":\"13:00\",\"endTime\":null,\"startEvidence\":\"1 点吃饭\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"上班\",\"inputOrder\":5,\"sourceText\":\"1:30 上班\",\"timeConstraint\":{\"startTime\":\"13:30\",\"endTime\":null,\"startEvidence\":\"1:30 上班\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"外卖\",\"inputOrder\":6,\"sourceText\":\"外卖\",\"timeConstraint\":null,\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"下班回家\",\"inputOrder\":7,\"sourceText\":\"七点半下班8 点到家给吃晚饭\",\"timeConstraint\":{\"startTime\":\"19:30\",\"endTime\":\"20:00\",\"startEvidence\":\"七点半下班\",\"endEvidence\":\"8 点到家\"},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"吃晚饭\",\"inputOrder\":8,\"sourceText\":\"七点半下班8 点到家给吃晚饭\",\"timeConstraint\":{\"startTime\":\"20:00\",\"endTime\":null,\"startEvidence\":\"8 点到家\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"洗澡\",\"inputOrder\":9,\"sourceText\":\"9 点洗澡\",\"timeConstraint\":{\"startTime\":\"21:00\",\"endTime\":null,\"startEvidence\":\"9 点洗澡\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"看《老友记》\",\"inputOrder\":10,\"sourceText\":\"10 点看《老友记》\",\"timeConstraint\":{\"startTime\":\"22:00\",\"endTime\":null,\"startEvidence\":\"10 点看《老友记》\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"玩手机\",\"inputOrder\":11,\"sourceText\":\"11 点玩手机\",\"timeConstraint\":{\"startTime\":\"23:00\",\"endTime\":null,\"startEvidence\":\"11 点玩手机\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null},{\"type\":\"add\",\"title\":\"睡觉\",\"inputOrder\":12,\"sourceText\":\"12 点睡觉\",\"timeConstraint\":{\"startTime\":\"24:00\",\"endTime\":null,\"startEvidence\":\"12 点睡觉\",\"endEvidence\":null},\"durationSlots\":2,\"priority\":null}]}",
+  "firstCandidate": {
+    "algorithmVersion": "time-fragment-planner-v1",
+    "deletedOccurrenceIDs": [],
+    "deletedExternalEventIDs": [],
+    "operations": [
+      {
+        "type": "add",
+        "title": "起床",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 35
+        },
+        "priority": null,
+        "inputOrder": 0,
+        "temporaryId": "83c7a09c-6a15-5a2d-b50e-d6cd6fb92ada"
+      },
+      {
+        "type": "add",
+        "title": "出门",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 36
+        },
+        "priority": null,
+        "inputOrder": 1,
+        "temporaryId": "fa4f3024-da0f-5532-9f6c-7803af506009"
+      },
+      {
+        "type": "add",
+        "title": "到公司",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 38
+        },
+        "priority": null,
+        "inputOrder": 2,
+        "temporaryId": "1b494eb7-8c84-54ce-b568-7d50462b6330"
+      },
+      {
+        "type": "add",
+        "title": "点外卖",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 48
+        },
+        "priority": null,
+        "inputOrder": 3,
+        "temporaryId": "dd9e38f3-c1e5-54d1-a41d-2af16627cf14"
+      },
+      {
+        "type": "add",
+        "title": "吃饭",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 52
+        },
+        "priority": null,
+        "inputOrder": 4,
+        "temporaryId": "b3367000-e674-5242-bb1a-32a19157fc3b"
+      },
+      {
+        "type": "add",
+        "title": "上班",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 54
+        },
+        "priority": null,
+        "inputOrder": 5,
+        "temporaryId": "a09dd960-84a5-5599-b420-8fb742200c10"
+      },
+      {
+        "type": "add",
+        "title": "外卖",
+        "durationSlots": 2,
+        "placement": null,
+        "priority": null,
+        "inputOrder": 6,
+        "temporaryId": "a0a8d490-3860-5fff-81a1-46b8d45a0f2d"
+      },
+      {
+        "type": "add",
+        "title": "下班回家",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 78
+        },
+        "priority": null,
+        "inputOrder": 7,
+        "temporaryId": "a17c729a-7aa3-5385-82cd-b6303fa7d350"
+      },
+      {
+        "type": "add",
+        "title": "吃晚饭",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 80
+        },
+        "priority": null,
+        "inputOrder": 8,
+        "temporaryId": "9412bbd9-d2f2-501a-92b9-7882a9535245"
+      },
+      {
+        "type": "add",
+        "title": "洗澡",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 84
+        },
+        "priority": null,
+        "inputOrder": 9,
+        "temporaryId": "6c83b061-3d43-5efd-9ee3-a360eb78deb7"
+      },
+      {
+        "type": "add",
+        "title": "看《老友记》",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 88
+        },
+        "priority": null,
+        "inputOrder": 10,
+        "temporaryId": "eb3dbbac-7e6a-5fe9-b8d9-c6478e0fe276"
+      },
+      {
+        "type": "add",
+        "title": "玩手机",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 92
+        },
+        "priority": null,
+        "inputOrder": 11,
+        "temporaryId": "d5b91986-74a4-54a1-8e8d-82b752793d5c"
+      },
+      {
+        "type": "add",
+        "title": "睡觉",
+        "durationSlots": 2,
+        "placement": {
+          "anchor": "start",
+          "slot": 96
+        },
+        "priority": null,
+        "inputOrder": 12,
+        "temporaryId": "6e0fe505-3ace-5430-be21-700591b89504"
+      }
+    ],
+    "candidatePlan": {
+      "date": "2026-09-11",
+      "items": [
+        {
+          "itemId": "83c7a09c-6a15-5a2d-b50e-d6cd6fb92ada",
+          "objectType": "internalTask",
+          "title": "起床",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 35,
+              "endSlot": 36
+            },
+            {
+              "startSlot": 37,
+              "endSlot": 38
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "fa4f3024-da0f-5532-9f6c-7803af506009",
+          "objectType": "internalTask",
+          "title": "出门",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 36,
+              "endSlot": 37
+            },
+            {
+              "startSlot": 39,
+              "endSlot": 40
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "1b494eb7-8c84-54ce-b568-7d50462b6330",
+          "objectType": "internalTask",
+          "title": "到公司",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 38,
+              "endSlot": 39
+            },
+            {
+              "startSlot": 40,
+              "endSlot": 41
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "dd9e38f3-c1e5-54d1-a41d-2af16627cf14",
+          "objectType": "internalTask",
+          "title": "点外卖",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 48,
+              "endSlot": 50
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "b3367000-e674-5242-bb1a-32a19157fc3b",
+          "objectType": "internalTask",
+          "title": "吃饭",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 52,
+              "endSlot": 54
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "a09dd960-84a5-5599-b420-8fb742200c10",
+          "objectType": "internalTask",
+          "title": "上班",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 54,
+              "endSlot": 56
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "a0a8d490-3860-5fff-81a1-46b8d45a0f2d",
+          "objectType": "internalTask",
+          "title": "外卖",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 0,
+              "endSlot": 2
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "a17c729a-7aa3-5385-82cd-b6303fa7d350",
+          "objectType": "internalTask",
+          "title": "下班回家",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 78,
+              "endSlot": 80
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "9412bbd9-d2f2-501a-92b9-7882a9535245",
+          "objectType": "internalTask",
+          "title": "吃晚饭",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 80,
+              "endSlot": 82
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "6c83b061-3d43-5efd-9ee3-a360eb78deb7",
+          "objectType": "internalTask",
+          "title": "洗澡",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 84,
+              "endSlot": 86
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "eb3dbbac-7e6a-5fe9-b8d9-c6478e0fe276",
+          "objectType": "internalTask",
+          "title": "看《老友记》",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 88,
+              "endSlot": 90
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "d5b91986-74a4-54a1-8e8d-82b752793d5c",
+          "objectType": "internalTask",
+          "title": "玩手机",
+          "durationSlots": 2,
+          "segments": [
+            {
+              "startSlot": 92,
+              "endSlot": 94
+            }
+          ],
+          "isPinned": false,
+          "isCompleted": false
+        },
+        {
+          "itemId": "6e0fe505-3ace-5430-be21-700591b89504",
+          "objectType": "internalTask",
+          "title": "睡觉",
+          "durationSlots": 2,
+          "segments": [],
+          "isPinned": false,
+          "isCompleted": false
+        }
+      ]
+    }
+  }
+}

@@ -202,19 +202,19 @@ def test_partial_quote_uses_original_explicit_period_without_requiring_paraphras
     assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [{"startSlot": 52, "endSlot": 54}]
 
 
-@pytest.mark.parametrize("start,end,expected", [("23:30", "24:00", True), ("24:00", None, False)])
-def test_midnight_remains_end_of_selected_day_not_noon_or_next_day(settings, start, end, expected):
-    text = "23:30 看书，12点睡觉" if expected else "12点睡觉"
+@pytest.mark.parametrize("start,end,scheduled", [("23:30", "24:00", True), ("24:00", None, False)])
+def test_midnight_remains_end_of_selected_day_not_noon_or_next_day(settings, start, end, scheduled):
+    text = "23:30 看书，12点睡觉" if scheduled else "12点睡觉"
     operation = model_add(
-        "看书" if expected else "睡觉", text, start_time=start, end_time=end,
-        start_evidence="23:30 看书" if expected else "12点睡觉",
-        end_evidence="12点睡觉" if expected else None,
+        "看书" if scheduled else "睡觉", text, start_time=start, end_time=end,
+        start_evidence="23:30 看书" if scheduled else "12点睡觉",
+        end_evidence="12点睡觉" if scheduled else None,
     )
     body, fake = run_clock_request(settings, text, [operation])
-    assert body["validation"]["valid"] is expected
+    assert body["validation"]["valid"] is True
     item = body["proposal"]["candidatePlan"]["items"][0]
-    assert item["segments"] == ([{"startSlot": 94, "endSlot": 96}] if expected else [])
-    assert len(fake.calls) == (1 if expected else 2)
+    assert item["segments"] == ([{"startSlot": 94, "endSlot": 96}] if scheduled else [])
+    assert len(fake.calls) == 1
 
 
 def test_negative_other_clause_does_not_reject_affirmative_task_clock(settings):
@@ -246,8 +246,8 @@ def test_entire_reported_day_preserves_clock_anchors_and_flags_only_midnight_bou
         for index, (title, source, start, end, start_quote, end_quote) in enumerate(rows)
     ]
     body, fake = run_clock_request(settings, text, operations)
-    assert len(fake.calls) == 2
-    assert body["validation"]["valid"] is False  # 24:00 start remains a single-day boundary error.
+    assert len(fake.calls) == 1
+    assert body["validation"]["valid"] is True  # Midnight add stays unscheduled without blocking the day.
     assert len(body["proposal"]["candidatePlan"]["items"]) == 13
     expected_slots = [35, 36, 38, 48, 52, 54, None, 78, 80, 84, 88, 92, 96]
     assert [op["placement"]["slot"] if op["placement"] else None for op in body["proposal"]["operations"]] == expected_slots
@@ -258,3 +258,4 @@ def test_entire_reported_day_preserves_clock_anchors_and_flags_only_midnight_bou
     assert items[7]["durationSlots"] == 2
     assert items[-1]["segments"] == []
     assert {issue["code"] for issue in body["validation"]["issues"]} == {"INVALID_TIME", "UNPLACED"}
+    assert all(issue["severity"] == "warning" for issue in body["validation"]["issues"])

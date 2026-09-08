@@ -66,14 +66,14 @@
       }
     },
     "validation": {
-      "valid": false,
+      "valid": true,
       "attempts": 1,
       "issues": [
         {
           "source": "model_server",
-          "severity": "error",
+          "severity": "warning",
           "code": "INVALID_TIME",
-          "message": "指定的时间锚点不在可排期范围内",
+          "message": "指定时间已到当天结束（24:00），已保留为未排任务",
           "itemId": "10000000-0000-4000-8000-000000000006",
           "field": "placement.slot"
         },

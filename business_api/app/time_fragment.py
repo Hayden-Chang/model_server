@@ -596,18 +596,26 @@ def plan_time_fragment(
             (target.placement.anchor == "start" and target.placement.slot == 96)
             or (target.placement.anchor == "end" and target.placement.slot == 0)
         )
+        midnight_unplaced_add = (
+            target.item_id in added_ids
+            and target.placement is not None
+            and target.placement.anchor == "start"
+            and target.placement.slot == 96
+        )
         if placement_outside_day or placement_precedes_earliest:
             invalid_target_ids.add(target.item_id)
             _add_issue(
                 issues,
                 code="INVALID_TIME",
                 message=(
-                    "指定时间早于当前可排期起点，已保留为未排任务"
+                    "指定时间已到当天结束（24:00），已保留为未排任务"
+                    if midnight_unplaced_add
+                    else "指定时间早于当前可排期起点，已保留为未排任务"
                     if placement_precedes_current_time
                     else "指定的时间锚点不在可排期范围内"
                 ),
                 severity=(
-                    "warning" if placement_precedes_current_time else "error"
+                    "warning" if midnight_unplaced_add or placement_precedes_current_time else "error"
                 ),
                 item_id=item.item_id,
                 field="placement.slot",
