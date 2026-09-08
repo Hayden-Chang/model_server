@@ -1,0 +1,44 @@
+name: Account and sync service
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/account-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/account-sync.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: supabase
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: supabase/package-lock.json
+      - run: npm ci
+      - run: npm run test:sync
+  supabase-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: supabase/setup-cli@v3
+        with:
+          version: 2.117.0
+      - run: node supabase/scripts/test-local-stack.mjs

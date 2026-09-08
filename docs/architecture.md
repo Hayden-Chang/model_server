@@ -5,7 +5,17 @@
 
 ## 1. 当前实现概览
 
-项目是一套 API-first 大模型服务，当前运行约束为：
+仓库统一维护 DayMosaic 后端代码，当前包含两个独立部署的部分：
+
+- `supabase/`：账号认证、同步事务 RPC、协议契约、数据库迁移、测试和账号删除处理；
+  Auth、Postgres 和 Realtime 运行在托管 Supabase 项目。
+- 原有 AI 服务：继续使用下述 Caddy、Business API 和 LiteLLM 容器。
+
+账号同步接口由客户端直接访问 Supabase；AI 请求继续走 Caddy。账号同步的部署、
+权限和接口契约见 [Supabase 服务说明](../supabase/README.md)。真实验证码邮件仍待
+配置 SMTP，删除和维护任务的定时托管尚未完成；本次目录迁移不改变运行时拓扑。
+
+以下章节描述原有 API-first 大模型服务，其运行约束为：
 
 - 3 个容器：`caddy`、`business-api`、`litellm`。
 - 1 个公网端口：只有 Caddy 发布 `443`。
@@ -49,6 +59,7 @@ flowchart LR
 ```text
 model_server/
 ├── README.md                         # 项目入口、公共 API 和本地测试
+├── supabase/                         # 独立部署的账号同步服务、迁移、契约和测试
 ├── .env.example                      # 部署环境变量模板，不包含真实密钥
 ├── docker-compose.yml                # 3 个容器、端口、网络和健康检查
 ├── Caddyfile                         # HTTPS、响应头和反向代理规则
@@ -415,13 +426,13 @@ LLM_API_KEY
 
 ## 12. 当前限制与非目标
 
-以下能力当前没有实现，不能把它们当成已具备的系统能力：
+以下限制适用于原有 AI 服务；独立 Supabase 账号同步服务的范围见上文：
 
 - 每个 Pipeline 独立选择模型别名。
 - 多模型负载均衡、供应商回退和基础设施自动重试策略；Time Fragment 仅有一次内容纠错调用。
 - 流式响应、异步任务和批处理接口。
 - 数据库、对话历史、缓存和持久化费用记录。
-- 注册、登录、正式用户 JWT/Session、游客升级和多设备账号绑定。
+- AI 接口接入 Supabase 用户 JWT/Session，以及游客额度升级到正式账号。
 - 按调用方持久化的配额、租户、权限、成本记账和调用审计。
 - 可持久化或服务端可撤销的 Time Fragment 游客令牌。
 - 上线阶段的地区路由、合规展示和额外网关防滥用策略。
