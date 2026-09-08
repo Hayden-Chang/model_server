@@ -566,8 +566,14 @@ class TimeFragmentExtractedAddOperation(_TimeFragmentV2Model):
     duration_slots: int = Field(default=2, alias="durationSlots", ge=1, le=96, strict=True)
     priority: int | None = Field(default=None, ge=1, strict=True)
     input_order: int = Field(alias="inputOrder", ge=0, strict=True)
-    source_text: str = Field(alias="sourceText", min_length=1, max_length=2_000)
-    time_constraint: TimeFragmentClockConstraint | None = Field(alias="timeConstraint")
+    source_text: str = Field(
+        alias="sourceText", min_length=1, max_length=2_000,
+        description="Exact task quote including its timing context and any shared clock; do not crop to the action name. Overlapping quotes are allowed.",
+    )
+    time_constraint: TimeFragmentClockConstraint | None = Field(
+        alias="timeConstraint",
+        description="Use a shared clock for every task it actually anchors, with the same HH:mm interpretation. Null only for genuinely untimed or merely relative actions.",
+    )
 
     @field_validator("title")
     @classmethod

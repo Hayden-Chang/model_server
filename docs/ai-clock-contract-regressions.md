@@ -20,6 +20,15 @@ the iOS local validator must now follow that warning-only contract.
   the live parser, never treated as a compatibility fallback.
 - Source references are verified at their original positions, including period
   prefixes; repeated short quotes cannot cover multiple independent clocks.
+- Shared endpoint quotes may anchor both a journey end and a following activity
+  start, but the same original clock span must resolve to the same HH:mm.
+- A narrow reject-only guard detects the captured dinner quote-clipping failure:
+  a model-selected timed source contains an untimed source, whose uniquely
+  quoted literal title directly follows that source's valid endpoint evidence
+  through conservative grammatical connectors. It requests corrected context;
+  it never assigns the previous clock. Explicit flexibility/relative connectors,
+  independent sources and summarized titles without a literal match are outside
+  this guard. This is not a general natural-language completeness guarantee.
 - Global starts are scoped to their own clock, not all clocks in that sentence.
 - Existing named time references are checked against currentPlan; they do not
   turn relative insertions into new per-task clock placements.
@@ -49,6 +58,9 @@ test helper parses the prose or invokes production recovery to fabricate it.
 | Current full-day report | All 12 stated anchors preserved; combined commute 19:30–20:00; 24:00 sleep remains unscheduled with warnings, never noon or next-day placement; no retry | `test_time_fragment_clock_extraction.py::test_entire_reported_day_preserves_clock_anchors_and_flags_only_midnight_boundary` |
 | Actual Simulator first model output | Replay captured raw output unchanged: same 13 candidate tasks/operations/segments, but valid warning-only result after one call | `test_midnight_unplaced.py::test_real_september11_output_retains_midnight_todo_without_correction` |
 | Other hard errors with midnight add | End-at-zero on a future day, existing moves to midnight and wrong clock evidence stay errors; only those errors go to correction | `test_midnight_unplaced.py::test_midnight_add_does_not_hide_other_hard_errors` |
+| Captured dinner context omission | Raw `给吃晚饭` + null cannot silently become00:30; corrected full context starts20:00, retains all other tasks and midnight warnings | `test_shared_clock_context.py::test_recorded_cropped_dinner_context_cannot_become_a_valid_midnight_schedule`, `test_correction_restores_shared_dinner_clock_without_changing_other_operations` |
+| Shared vs independent clock mentions | Commute end20:00 and dinner start08:00 citing the same original span are rejected; distinct8点 breakfast/dinner mentions can resolve differently | `test_shared_clock_context.py::test_shared_arrival_clock_has_one_resolution_across_commute_and_dinner`, `test_distinct_eight_oclock_mentions_can_still_resolve_to_different_periods` |
+| Flexible activity after arrival | Independent tasks and 有空再/稍后/等一会儿/再 actions do not automatically inherit arrival time | `test_shared_clock_context.py::test_independent_or_explicitly_flexible_tasks_do_not_inherit_arrival_clock` |
 
 Two old *bug* expectations are deliberately not retained: a 10:00 request with
 an 11:00 model clock may no longer become a valid 08:00 free task; a negated

@@ -22,6 +22,8 @@ _SEPARATOR = re.compile(r"[，,。；;！!？?\n]")
 _NEGATION = re.compile(r"不要|别|无需|不许|不能|禁止")
 _GLOBAL_START = re.compile(rf"^\s*(?:从|最早从|最早)\s*(?P<clock>{_CLOCK_TOKEN_SOURCE})\s*(?:开始|起|以后|之后)\s*(?:安排.*)?$")
 _CLOCK_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|再|请|做|时)*")
+_SHARED_ENDPOINT_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|请|做|时|给)*")
+_RELATIVE_ENDPOINT_CONTEXT = re.compile(r"有空|稍后|以后|之后|后|再|等一会")
 
 
 def _clause_start(text: str, position: int) -> int:
@@ -142,6 +144,7 @@ def compile_time_fragment_clocks(
     operations = []
     errors: dict[int, str] = {}
     covered: set[tuple[int, int]] = set()
+    resolved_clocks: dict[tuple[int, int], str] = {}
     existing = {item.item_id: item for item in existing_items}
     # A named baseline clock can identify an unchanged task in an after/before request.
     for token in _CLOCK.finditer(text):
@@ -193,6 +196,8 @@ def compile_time_fragment_clocks(
             if not _quote_spans(text, operation.source_text):
                 raise ValueError("sourceText 必须是原文中的肯定任务片段")
             if timing is None:
+                if _has_cropped_shared_endpoint(text, operation, extracted):
+                    raise ValueError("任务引用裁掉了共享终点的时间上下文，请补全 sourceText 和该任务的时间依据")
                 if _has_omitted_source_clock(text, operation.source_text) or any(
                     not _is_global_clock(operation.source_text, token.start())
                     and not _NEGATION.search(_clause(operation.source_text, token.start()))
@@ -209,7 +214,11 @@ def compile_time_fragment_clocks(
                         owner = operation.source_text if (
                             boundary_index == 0 or evidence in operation.source_text
                         ) else None
-                        covered.add(_validate_boundary(text, clock, evidence, owner=owner))
+                        span = _validate_boundary(text, clock, evidence, owner=owner)
+                        if span in resolved_clocks and resolved_clocks[span] != clock:
+                            raise ValueError("同一原文钟点被多个任务引用时必须解析为同一个时间")
+                        resolved_clocks[span] = clock
+                        covered.add(span)
                 if timing.start_time is not None:
                     assert timing.start_evidence is not None
                     if timing.start_evidence not in operation.source_text:
@@ -246,3 +255,36 @@ def compile_time_fragment_clocks(
     if missing:
         errors[-1] = "原文明确钟点未被时间依据覆盖：" + "、".join(dict.fromkeys(missing))
     return TimeFragmentModelOperations(operations=operations), errors
+
+
+def _has_cropped_shared_endpoint(
+    text: str, operation: TimeFragmentExtractedAddOperation, extracted: TimeFragmentExtractedOperations,
+) -> bool:
+    # Inspect model-selected overlapping quotes, not prose-inferred tasks or clock inheritance.
+    title_spans = list(re.finditer(re.escape(operation.title), operation.source_text))
+    if len(title_spans) != 1:
+        return False
+    for peer in extracted.operations:
+        if not isinstance(peer, TimeFragmentExtractedAddOperation) or peer is operation:
+            continue
+        timing = peer.time_constraint
+        if timing is None or timing.start_time is None or timing.end_time is None:
+            continue
+        assert timing.end_evidence is not None
+        try:
+            _, clock_end = _validate_boundary(text, timing.end_time, timing.end_evidence, owner=peer.source_text)
+        except ValueError:
+            continue  # The peer's own validation reports malformed evidence.
+        for owner_start, owner_end in _quote_spans(text, peer.source_text):
+            for source_start, source_end in _quote_spans(text, operation.source_text):
+                if not owner_start <= source_start < source_end <= owner_end:
+                    continue
+                action_start = source_start + title_spans[0].start()
+                if _RELATIVE_ENDPOINT_CONTEXT.search(text[clock_end:action_start]):
+                    continue
+                for evidence_start, evidence_end in _quote_spans(text, timing.end_evidence):
+                    if owner_start <= evidence_start < evidence_end <= source_start and (
+                        _SHARED_ENDPOINT_TO_ACTION.fullmatch(text[evidence_end:action_start])
+                    ):
+                        return True
+    return False
