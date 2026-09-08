@@ -18,9 +18,12 @@ separate staging certificate using the existing Nginx ACME webroot, append
 and reload it without restarting production. The existing certificate renewal
 hook must reload that ingress for renewals of both API certificates.
 
-On the current small host, enable 2 GiB of swap before starting another LiteLLM.
-The staging Compose file bounds memory and CPU usage. Swap does not add physical
-memory; verify model latency and container OOM/restart counters after startup.
+Do not start this stack alongside production on the current 1.6 GiB host.
+The initial co-location attempt caused sustained memory pressure and production
+health-check timeouts despite 2 GiB of swap and container resource limits.
+Those limits have not been validated for live staging model traffic. Provision
+adequate isolated capacity and measure startup peaks before enabling staging;
+swap and container limits alone do not establish that the host has capacity.
 
 Verify public live/ready checks, `X-Model-Server-Environment: staging`, guest
 authentication, a real valid planning proposal, and rejection of production
