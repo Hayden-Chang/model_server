@@ -1,0 +1,162 @@
+{
+  "request": {
+    "baseFingerprint": "sha256:test",
+    "currentPlan": {
+      "date": "2026-09-11",
+      "items": [
+        {
+          "durationSlots": 2,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "task-1",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 48,
+              "startSlot": 46
+            }
+          ],
+          "title": "打王者",
+          "domainRef": null
+        },
+        {
+          "durationSlots": 4,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "task-2",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 52,
+              "startSlot": 48
+            }
+          ],
+          "title": "吃午饭",
+          "domainRef": null
+        },
+        {
+          "durationSlots": 4,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "task-3",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 56,
+              "startSlot": 52
+            }
+          ],
+          "title": "休息",
+          "domainRef": null
+        },
+        {
+          "durationSlots": 16,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "task-4",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 72,
+              "startSlot": 56
+            }
+          ],
+          "title": "逛街",
+          "domainRef": null
+        },
+        {
+          "durationSlots": 8,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "task-5",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 80,
+              "startSlot": 72
+            }
+          ],
+          "title": "KTV",
+          "domainRef": null
+        }
+      ]
+    },
+    "earliestStartSlot": 36,
+    "now": "2026-09-07T10:00:00+08:00",
+    "requestID": "clock-adjustment-regression",
+    "text": "把打王者改名为打游戏，并移到晚上 20:00 到 20:45；吃午饭改成 12:00 到 12:45；删除 KTV。其余任务的时间和时长完全不变。"
+  },
+  "operations": [
+    {
+      "type": "changeTitle",
+      "targetItemId": "task-1",
+      "objectType": "internalTask",
+      "title": "打游戏",
+      "allowedChanges": [
+        "title"
+      ],
+      "inputOrder": 0,
+      "authorizationText": "把打王者改名为打游戏"
+    },
+    {
+      "type": "move",
+      "targetItemId": "task-1",
+      "objectType": "internalTask",
+      "allowedChanges": [
+        "segments"
+      ],
+      "inputOrder": 1,
+      "authorizationText": "移到晚上 20:00 到 20:45",
+      "placement": {
+        "anchor": "start",
+        "slot": 80
+      }
+    },
+    {
+      "type": "changeDuration",
+      "targetItemId": "task-1",
+      "objectType": "internalTask",
+      "allowedChanges": [
+        "durationSlots",
+        "segments"
+      ],
+      "durationSlots": 3,
+      "inputOrder": 2,
+      "authorizationText": "移到晚上 20:00 到 20:45"
+    },
+    {
+      "type": "move",
+      "targetItemId": "task-2",
+      "objectType": "internalTask",
+      "allowedChanges": [
+        "segments"
+      ],
+      "inputOrder": 3,
+      "authorizationText": "吃午饭改成 12:00 到 12:45",
+      "placement": {
+        "anchor": "start",
+        "slot": 48
+      }
+    },
+    {
+      "type": "changeDuration",
+      "targetItemId": "task-2",
+      "objectType": "internalTask",
+      "allowedChanges": [
+        "durationSlots",
+        "segments"
+      ],
+      "durationSlots": 3,
+      "inputOrder": 4,
+      "authorizationText": "吃午饭改成 12:00 到 12:45"
+    },
+    {
+      "type": "delete",
+      "targetItemId": "task-5",
+      "objectType": "internalTask",
+      "allowedChanges": [],
+      "inputOrder": 5,
+      "authorizationText": "删除 KTV"
+    }
+  ]
+}

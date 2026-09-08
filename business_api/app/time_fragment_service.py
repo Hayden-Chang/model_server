@@ -79,7 +79,7 @@ async def execute_time_fragment_plan(
 
     _ensure_input_within_limit(correction_input, max_input_chars)
     fallback_pipeline = replace(
-        pipeline, thinking_mode="enabled", reasoning_effort="low", timeout_seconds=30.0,
+        pipeline, thinking_mode="disabled", reasoning_effort=None, timeout_seconds=30.0,
     )
     second_output = await model_client.complete(fallback_pipeline, correction_input)
     try:

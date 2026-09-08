@@ -793,7 +793,7 @@ def test_inline_explicit_time_range_rejects_negated_add_and_corrects_once(
     assert body["proposal"]["operations"] == []
     assert body["proposal"]["candidatePlan"]["items"] == []
     assert len(fake.calls) == 2
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
     correction = json.loads(fake.calls[1][1])
     assert correction["issues"]
     assert all(issue["code"] != "UNPLACED" for issue in correction["issues"])
@@ -1061,7 +1061,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
     assert response.status_code == 200
     assert response.json()["validation"] == {"valid": True, "attempts": 2, "issues": []}
     assert len(fake.calls) == 2
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
     first_input = json.loads(fake.calls[0][1])
     correction = json.loads(fake.calls[1][1])
     assert correction["originalRequest"] == first_input
@@ -1387,7 +1387,7 @@ def test_two_unparseable_outputs_return_parse_failed_and_never_make_a_third_call
     assert correction["issues"] == [{"code": "PARSE_FAILED", "message": "模型输出不是有效 JSON"}]
     assert "firstCandidate" not in correction
     assert len(fake.calls) == 2
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "enabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
 
 
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(

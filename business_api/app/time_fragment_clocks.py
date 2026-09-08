@@ -112,6 +112,26 @@ def _has_omitted_source_clock(text: str, source: str) -> bool:
     return False
 
 
+def _existing_clock_slots(
+    extracted: TimeFragmentExtractedOperations, target: TimeFragmentPlanItem,
+) -> set[int]:
+    slots = {slot for segment in target.segments for slot in (segment.start_slot, segment.end_slot)}
+    changes = [op for op in extracted.operations if getattr(op, "target_item_id", None) == target.item_id]
+    moves = [op for op in changes if op.type == "move"]
+    durations = [op.duration_slots for op in changes if op.type == "changeDuration"]
+    if not moves and not durations:
+        return slots
+    placement = moves[-1].placement if moves else (
+        TimeFragmentPlacement(anchor="start", slot=target.segments[0].start_slot)
+        if target.segments else None
+    )
+    if placement is not None:
+        duration = durations[-1] if durations else target.duration_slots
+        slots.add(placement.slot)
+        slots.add(placement.slot + duration if placement.anchor == "start" else placement.slot - duration)
+    return slots
+
+
 def compile_time_fragment_clocks(
     extracted: TimeFragmentExtractedOperations,
     text: str,
@@ -139,13 +159,12 @@ def compile_time_fragment_clocks(
             operations.append(operation)
             target = existing.get(operation.target_item_id)
             if target is not None:
-                slots = {slot for segment in target.segments for slot in (segment.start_slot, segment.end_slot)}
-                placement = getattr(operation, "placement", None)
-                if placement is not None:
-                    slots.add(placement.slot)
+                slots = _existing_clock_slots(extracted, target)
+                quote_spans = _quote_spans(text, operation.authorization_text or "")
                 for token in _CLOCK.finditer(text):
                     clause = _clause(text, token.start())
-                    if target.title in clause or target.item_id in clause:
+                    quoted = any(start <= token.start() and token.end() <= end for start, end in quote_spans)
+                    if target.title in clause or target.item_id in clause or quoted:
                         if any(_round_minutes_to_slot(value) in slots for value in _possible_minutes(token.group())):
                             covered.add(token.span())
             continue
