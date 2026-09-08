@@ -1,0 +1,85 @@
+{
+  "request": {
+    "baseFingerprint": "sha256:72f20435b067dc7105bab045e5321fe2914e9c784e8bdd090693454bb3f760d3",
+    "currentPlan": {
+      "date": "2026-09-09",
+      "items": [
+        {
+          "durationSlots": 3,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "f6a54300-d287-5fb9-92c3-8d9653b36188",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 83,
+              "startSlot": 80
+            }
+          ],
+          "title": "打游戏"
+        },
+        {
+          "durationSlots": 3,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "99ded043-6409-516e-b579-2f8565ad7905",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 51,
+              "startSlot": 48
+            }
+          ],
+          "title": "吃午饭"
+        },
+        {
+          "durationSlots": 4,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "4023f071-4ed6-52fd-8bca-d724990dbb4a",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 56,
+              "startSlot": 52
+            }
+          ],
+          "title": "休息"
+        },
+        {
+          "durationSlots": 16,
+          "isCompleted": false,
+          "isPinned": false,
+          "itemId": "bf629877-2845-5244-8f14-926ad702200d",
+          "objectType": "internalTask",
+          "segments": [
+            {
+              "endSlot": 72,
+              "startSlot": 56
+            }
+          ],
+          "title": "逛街"
+        }
+      ]
+    },
+    "earliestStartSlot": 36,
+    "now": "2026-09-08T18:05:03+08:00",
+    "requestID": "40ae4a46-c771-4752-b0a1-cd3563f79300",
+    "text": "在 13:00 插入一个 30 分钟的电话。"
+  },
+  "operations": [
+    {
+      "type": "add",
+      "title": "电话",
+      "inputOrder": 0,
+      "sourceText": "在 13:00 插入一个 30 分钟的电话。",
+      "timeConstraint": {
+        "startTime": "13:00",
+        "endTime": "13:30",
+        "startEvidence": "在 13:00 插入一个 30 分钟的电话。",
+        "endEvidence": "在 13:00 插入一个 30 分钟的电话。"
+      },
+      "durationSlots": 2
+    }
+  ]
+}

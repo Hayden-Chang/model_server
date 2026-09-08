@@ -96,7 +96,11 @@ def _validate_boundary(
         )]
     matching = list(dict.fromkeys(pair[0] for pair in matching))
     if not matching:
-        raise ValueError(f"输出时间 {clock} 与原文钟点不一致，或错误引用了全局开始时间")
+        raise ValueError(
+            f"输出时间 {clock} 与原文钟点不一致，或错误引用了全局开始时间。"
+            "不得把按时长推算的时间当作原文钟点：若只给开始时间和时长，endTime 和 endEvidence 应为 null，"
+            "时长写入 durationSlots；若只给结束时间和时长，startTime 和 startEvidence 应为 null。"
+        )
     if len(matching) != 1:
         raise ValueError("时间依据对应多处原文，请引用能唯一定位该任务时间的完整片段")
     return matching[0]
