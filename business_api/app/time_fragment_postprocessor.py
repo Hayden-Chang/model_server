@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .contracts import (
-    TimeFragmentModelOperations,
+    TimeFragmentExtractedOperations,
     TimeFragmentModelPlanRequest,
     TimeFragmentPlanResponseV2,
     TimeFragmentValidationIssue,
@@ -24,7 +24,7 @@ class TimeFragmentModelOutputInvalid(Exception):
         self.issues = issues
 
 
-def parse_time_fragment_model_operations(content: str) -> TimeFragmentModelOperations:
+def parse_time_fragment_model_operations(content: str) -> TimeFragmentExtractedOperations:
     candidate = content.strip()
     if candidate.startswith("```json") and candidate.endswith("```"):
         candidate = candidate[7:-3].strip()
@@ -43,7 +43,7 @@ def parse_time_fragment_model_operations(content: str) -> TimeFragmentModelOpera
         )
 
     try:
-        return TimeFragmentModelOperations.model_validate(value)
+        return TimeFragmentExtractedOperations.model_validate(value)
     except ValidationError as error:
         issues = [
             TimeFragmentCorrectionIssue(

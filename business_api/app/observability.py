@@ -1,3 +1,4 @@
+import asyncio
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -40,7 +41,7 @@ class TrackedModelClient:
         call_index = len(self.calls) + 1
         try:
             output = await self._client.complete(pipeline, user_input)
-        except Exception as error:
+        except (Exception, asyncio.CancelledError) as error:
             completed_at = datetime.now(timezone.utc)
             self.calls.append(
                 ModelCallCapture(

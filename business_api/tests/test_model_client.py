@@ -1,9 +1,10 @@
 import asyncio
+from dataclasses import replace
 
 import httpx
 import pytest
 
-from app.model_client import LiteLLMClient
+from app.model_client import LiteLLMClient, ModelGatewayResponseError, ModelGatewayUnavailable
 from app.pipelines import PIPELINES
 from app.settings import Settings
 
@@ -42,3 +43,29 @@ def test_structured_output_mode_is_applied(monkeypatch: pytest.MonkeyPatch, mode
 
     assert captured["model"] == "primary-model"
     assert captured["response_format"]["type"] == expected_type
+
+
+def test_correction_forwards_low_effort_and_bounds_timeout(monkeypatch):
+    async def fake_post(self, url, **kwargs):
+        assert self.timeout.read == 30.0
+        assert kwargs["json"]["reasoning_effort"] == "low"
+        assert kwargs["json"]["thinking"] == {"type": "enabled"}
+        raise httpx.ReadTimeout("private upstream message")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    pipeline = replace(PIPELINES["time-fragment-plan-v2"], thinking_mode="enabled",
+                       reasoning_effort="low", timeout_seconds=30.0)
+    with pytest.raises(ModelGatewayUnavailable, match="model gateway request timed out"):
+        asyncio.run(LiteLLMClient(make_settings("json_object")).complete(pipeline, "test"))
+
+
+@pytest.mark.parametrize("content", [None, "", "   "])
+def test_empty_model_content_keeps_safe_finish_reason(monkeypatch, content):
+    async def fake_post(self, url, **kwargs):
+        return httpx.Response(200, json={"choices": [{"finish_reason": "length",
+            "message": {"content": content, "reasoning_content": "must not be exposed"}}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    with pytest.raises(ModelGatewayResponseError, match="empty content.*finish_reason=length") as error:
+        asyncio.run(LiteLLMClient(make_settings("json_object")).complete(PIPELINES["general-text-v1"], "test"))
+    assert "must not be exposed" not in str(error.value)

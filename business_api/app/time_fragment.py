@@ -11,6 +11,7 @@ from .contracts import (
     TimeFragmentChangeTitleOperation,
     TimeFragmentDeleteOperation,
     TimeFragmentExternalEventItem,
+    TimeFragmentExtractedOperations,
     TimeFragmentInternalTaskItem,
     TimeFragmentModelAddOperation,
     TimeFragmentModelOperation,
@@ -186,7 +187,7 @@ class _ScheduleTarget:
 
 def plan_time_fragment(
     request: TimeFragmentPlanRequestV2,
-    model_output: TimeFragmentModelOperations,
+    model_output: TimeFragmentModelOperations | TimeFragmentExtractedOperations,
     *,
     attempts: Literal[1, 2] = 1,
     uuid_factory: Callable[[], UUID] | None = None,
@@ -198,7 +199,20 @@ def plan_time_fragment(
     ``build_time_fragment_parse_failed_response``.
     """
 
-    continuous_timepoint_adds = _continuous_timepoint_add_operations(request.text)
+    extracted_clocks = isinstance(model_output, TimeFragmentExtractedOperations)
+    clock_errors: dict[int, str] = {}
+    if extracted_clocks:
+        from .time_fragment_clocks import compile_time_fragment_clocks
+
+        model_output, clock_errors = compile_time_fragment_clocks(
+            model_output,
+            request.text,
+            existing_items=request.current_plan.items,
+            earliest_start_slot=request.earliest_start_slot,
+        )
+    continuous_timepoint_adds = (
+        None if extracted_clocks else _continuous_timepoint_add_operations(request.text)
+    )
     if (
         continuous_timepoint_adds is not None
         and model_output.operations
@@ -219,6 +233,7 @@ def plan_time_fragment(
         request_id=request.request_id,
         existing_item_ids=set(base_counts),
         uuid_factory=uuid_factory,
+        extracted_clocks=extracted_clocks,
     )
     normalized_operations = _apply_clear_after_insertion_intent(
         request.text,
@@ -231,6 +246,16 @@ def plan_time_fragment(
         for operation in normalized_operations
     )
     issues: list[TimeFragmentValidationIssue] = []
+    invalid_clock_ids: set[str] = set()
+    for index, message in clock_errors.items():
+        item_id = None
+        if index >= 0:
+            item_id = str(normalized_operations[index].temporary_id)
+            invalid_clock_ids.add(item_id)
+        _add_issue(
+            issues, code="INVALID_OPERATION", message=message,
+            item_id=item_id, field="timeConstraint",
+        )
     if any(count > 1 for count in base_counts.values()):
         _add_issue(
             issues,
@@ -457,6 +482,8 @@ def plan_time_fragment(
         )
         candidate_items.append(added_item)
         candidate_by_id[item_id] = added_item
+        if item_id in invalid_clock_ids:
+            continue
         schedule_targets.append(
             _ScheduleTarget(
                 item_id=item_id,
@@ -569,18 +596,26 @@ def plan_time_fragment(
             (target.placement.anchor == "start" and target.placement.slot == 96)
             or (target.placement.anchor == "end" and target.placement.slot == 0)
         )
+        midnight_unplaced_add = (
+            target.item_id in added_ids
+            and target.placement is not None
+            and target.placement.anchor == "start"
+            and target.placement.slot == 96
+        )
         if placement_outside_day or placement_precedes_earliest:
             invalid_target_ids.add(target.item_id)
             _add_issue(
                 issues,
                 code="INVALID_TIME",
                 message=(
-                    "指定时间早于当前可排期起点，已保留为未排任务"
+                    "指定时间已到当天结束（24:00），已保留为未排任务"
+                    if midnight_unplaced_add
+                    else "指定时间早于当前可排期起点，已保留为未排任务"
                     if placement_precedes_current_time
                     else "指定的时间锚点不在可排期范围内"
                 ),
                 severity=(
-                    "warning" if placement_precedes_current_time else "error"
+                    "warning" if midnight_unplaced_add or placement_precedes_current_time else "error"
                 ),
                 item_id=item.item_id,
                 field="placement.slot",
@@ -978,6 +1013,7 @@ def _normalize_operations(
     request_id: str,
     existing_item_ids: set[str],
     uuid_factory: Callable[[], UUID] | None,
+    extracted_clocks: bool = False,
 ) -> list[TimeFragmentOperation]:
     used_ids = set(existing_item_ids)
     normalized: list[TimeFragmentOperation] = []
@@ -985,7 +1021,7 @@ def _normalize_operations(
         request_text,
         model_output.operations,
     )
-    requested_add_timings = _requested_add_time_constraints(
+    requested_add_timings = {} if extracted_clocks else _requested_add_time_constraints(
         request_text,
         model_output.operations,
     )
@@ -1005,7 +1041,8 @@ def _normalize_operations(
                 if duration_slots is not None:
                     operation_data["durationSlots"] = duration_slots
             elif (
-                operation.placement is not None
+                not extracted_clocks
+                and operation.placement is not None
                 and not _add_placement_is_authorized(
                     request_text,
                     operation_data["title"],

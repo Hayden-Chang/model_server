@@ -537,7 +537,61 @@ TimeFragmentModelOperation = Annotated[
 
 
 class TimeFragmentModelOperations(_TimeFragmentV2Model):
+    """Solver-ready operations; clock extraction has a separate model wire schema."""
+
     operations: list[TimeFragmentModelOperation]
+
+
+class TimeFragmentClockConstraint(_TimeFragmentV2Model):
+    start_time: str | None = Field(alias="startTime", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
+    end_time: str | None = Field(alias="endTime", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
+    start_evidence: str | None = Field(alias="startEvidence", min_length=1, max_length=1_000)
+    end_evidence: str | None = Field(alias="endEvidence", min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def boundaries_require_matching_evidence(self) -> "TimeFragmentClockConstraint":
+        if self.start_time is None and self.end_time is None:
+            raise ValueError("timeConstraint requires a start or end boundary")
+        for clock, evidence in (
+            (self.start_time, self.start_evidence), (self.end_time, self.end_evidence),
+        ):
+            if (clock is None) != (evidence is None):
+                raise ValueError("each clock boundary requires its own source evidence")
+        return self
+
+
+class TimeFragmentExtractedAddOperation(_TimeFragmentV2Model):
+    type: Literal["add"]
+    title: str = Field(min_length=1, max_length=500)
+    duration_slots: int = Field(default=2, alias="durationSlots", ge=1, le=96, strict=True)
+    priority: int | None = Field(default=None, ge=1, strict=True)
+    input_order: int = Field(alias="inputOrder", ge=0, strict=True)
+    source_text: str = Field(
+        alias="sourceText", min_length=1, max_length=2_000,
+        description="Exact task quote including its timing context and any shared clock; do not crop to the action name. Overlapping quotes are allowed.",
+    )
+    time_constraint: TimeFragmentClockConstraint | None = Field(
+        alias="timeConstraint",
+        description="Use a shared clock for every task it actually anchors, with the same HH:mm interpretation. Null only for genuinely untimed or merely relative actions.",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title must not be blank")
+        return value
+
+
+class TimeFragmentExtractedOperations(_TimeFragmentV2Model):
+    operations: list[Annotated[
+        TimeFragmentExtractedAddOperation
+        | TimeFragmentModelMoveOperation
+        | TimeFragmentModelChangeDurationOperation
+        | TimeFragmentModelChangeTitleOperation
+        | TimeFragmentModelDeleteOperation,
+        Field(discriminator="type"),
+    ]]
 
 
 class TimeFragmentAddOperation(_TimeFragmentAddOperation):

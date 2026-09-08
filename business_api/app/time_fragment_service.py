@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import replace
 from datetime import date as Date
@@ -5,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .contracts import TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2
+from .model_client import ModelGatewayUnavailable
 from .pipelines import get_pipeline
 from .time_fragment import (
     build_time_fragment_parse_failed_response,
@@ -16,6 +18,11 @@ from .time_fragment_postprocessor import (
     build_time_fragment_correction_input,
     parse_time_fragment_model_operations,
 )
+
+
+_PLAN_TIMEOUT_SECONDS = 45.0
+_INITIAL_MODEL_TIMEOUT_SECONDS = 30.0
+_CORRECTION_TIMEOUT_SECONDS = 15.0
 
 
 class TimeFragmentInputTooLarge(Exception):
@@ -35,10 +42,29 @@ async def execute_time_fragment_plan(
     *,
     max_input_chars: int,
 ) -> TimeFragmentPlanResponseV2:
+    try:
+        async with asyncio.timeout(_PLAN_TIMEOUT_SECONDS):
+            return await _execute_time_fragment_plan(model_client, request, max_input_chars=max_input_chars)
+    except TimeoutError as error:
+        raise ModelGatewayUnavailable("model gateway request timed out") from error
+
+
+async def _execute_time_fragment_plan(
+    model_client: Any,
+    request: TimeFragmentPlanRequestV2,
+    *,
+    max_input_chars: int,
+) -> TimeFragmentPlanResponseV2:
     _validate_temporal_request(request)
     pipeline = get_pipeline("time-fragment-plan-v2")
     assert pipeline is not None
+    pipeline = replace(pipeline, timeout_seconds=_INITIAL_MODEL_TIMEOUT_SECONDS)
     model_request = project_time_fragment_request_for_model(request)
+    if request.earliest_start_slot is not None:
+        slot = request.earliest_start_slot
+        prefix = f"从 {slot // 4:02}:{slot % 4 * 15:02} 开始\n"
+        if model_request.text.startswith(prefix):
+            model_request = model_request.model_copy(update={"text": model_request.text[len(prefix):]})
     initial_input = json.dumps(
         model_request.model_dump(mode="json", by_alias=True, exclude_none=True),
         ensure_ascii=False,
@@ -46,7 +72,8 @@ async def execute_time_fragment_plan(
     )
     _ensure_input_within_limit(initial_input, max_input_chars)
 
-    first_output = await model_client.complete(pipeline, initial_input)
+    async with asyncio.timeout(_INITIAL_MODEL_TIMEOUT_SECONDS):
+        first_output = await model_client.complete(pipeline, initial_input)
     try:
         first_operations = parse_time_fragment_model_operations(first_output.content)
     except TimeFragmentModelOutputInvalid as error:
@@ -73,8 +100,11 @@ async def execute_time_fragment_plan(
         )
 
     _ensure_input_within_limit(correction_input, max_input_chars)
-    fallback_pipeline = replace(pipeline, thinking_mode="enabled")
-    second_output = await model_client.complete(fallback_pipeline, correction_input)
+    fallback_pipeline = replace(
+        pipeline, thinking_mode="disabled", reasoning_effort=None, timeout_seconds=_CORRECTION_TIMEOUT_SECONDS,
+    )
+    async with asyncio.timeout(_CORRECTION_TIMEOUT_SECONDS):
+        second_output = await model_client.complete(fallback_pipeline, correction_input)
     try:
         second_operations = parse_time_fragment_model_operations(second_output.content)
     except TimeFragmentModelOutputInvalid:

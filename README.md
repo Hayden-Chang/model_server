@@ -88,6 +88,20 @@ returns a `PlanProposal`. The proposal is authoritative and contains the echoed
 `baseFingerprint`, `algorithmVersion`, normalized `operations`, explicit delete
 sets, and the complete `candidatePlan` with time segments.
 
+Model `add` operations use a separate clock-extraction schema: `sourceText` is a
+verbatim task quote, and `timeConstraint` is required even when its value is
+`null` (an untimed task). A timed object contains nullable `startTime`, `endTime`,
+`startEvidence`, and `endEvidence`; each stated boundary uses local `HH:mm` at
+original minute precision and its own exact source quote. Display titles may
+combine actions, such as a commute, without occurring verbatim in the quote.
+The server validates the source clocks against the request, rounds boundaries
+to the nearest 15 minutes, and computes range durations. A missing or mismatched
+clock is an error, not permission to freely reschedule that task. Model adds
+cannot supply `placement` or the protected-object `authorizationText` field.
+Existing-object authorization and the public proposal schema are unchanged.
+Solver-ready legacy operations and shared golden fixtures are internal only;
+the live model parser never falls back to that schema or legacy prose recovery.
+
 The first model call explicitly disables thinking and only extracts structured
 operations; the deterministic planner computes any split time segments locally.
 Tasks that no longer fit or whose requested time has already passed remain in

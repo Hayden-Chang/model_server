@@ -1,0 +1,73 @@
+name: model-server-staging
+
+services:
+  staging-caddy:
+    image: model-server-caddy:2.11.4
+    restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 128m
+    cpus: 0.25
+    depends_on:
+      staging-business-api:
+        condition: service_healthy
+    expose: ["8080"]
+    volumes:
+      - ./deploy/Caddyfile.staging:/etc/caddy/Caddyfile:ro
+    networks:
+      - default
+      - ingress
+
+  staging-business-api:
+    image: model-server-staging-business-api:${STAGING_SOURCE_SHA:?STAGING_SOURCE_SHA is required}
+    build:
+      context: ./business_api
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 512m
+    cpus: 0.5
+    depends_on: [staging-litellm]
+    environment:
+      BUSINESS_API_KEY: ${BUSINESS_API_KEY:?BUSINESS_API_KEY is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      LITELLM_BASE_URL: http://staging-litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}
+      LITELLM_MODEL_ALIAS: primary-model
+      STRUCTURED_OUTPUT_MODE: json_object
+      TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
+      USAGE_DB_PATH: /var/lib/model-server/usage.sqlite3
+      USAGE_CONTENT_RETENTION_DAYS: 7
+    expose: ["8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - staging-usage:/var/lib/model-server
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  staging-litellm:
+    image: ghcr.io/berriai/litellm:v1.98.0
+    restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 1536m
+    cpus: 0.5
+    command: [--config, /app/config.yaml, --port, "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY is required}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL is required}
+      LLM_API_BASE: ${LLM_API_BASE:?LLM_API_BASE is required}
+      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
+    expose: ["4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+
+volumes:
+  staging-usage:
+
+networks:
+  ingress:
+    external: true
+    name: model-server_default
