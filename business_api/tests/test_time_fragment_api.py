@@ -1083,7 +1083,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         assert "status" not in recursive_keys(json.loads(serialized))
 
 
-def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_correction(
+def test_explicit_past_add_schedules_and_capacity_unplaced_adds_remain_without_correction(
     settings: Settings,
 ) -> None:
     operations = [
@@ -1113,15 +1113,16 @@ def test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_corre
     assert body["validation"]["attempts"] == 1
     assert len(body["proposal"]["operations"]) == 14
     assert len(body["proposal"]["candidatePlan"]["items"]) == 14
-    assert sum(not item["segments"] for item in body["proposal"]["candidatePlan"]["items"]) == 4
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == [{"startSlot": 48, "endSlot": 52}]
+    assert sum(not item["segments"] for item in body["proposal"]["candidatePlan"]["items"]) == 2
     assert {
         (issue["code"], issue["severity"])
         for issue in body["validation"]["issues"]
-    } == {("INVALID_TIME", "warning"), ("UNPLACED", "warning")}
+    } == {("UNPLACED", "warning")}
     assert len(fake.calls) == 1
 
 
-def test_semantic_correction_excludes_normal_unplaced_warnings(
+def test_semantic_correction_preserves_explicit_past_clock(
     settings: Settings,
 ) -> None:
     fake = FakeModelClient(
@@ -1165,11 +1166,9 @@ def test_semantic_correction_excludes_normal_unplaced_warnings(
     body = response.json()
     assert body["validation"]["valid"] is True
     assert body["validation"]["attempts"] == 2
-    assert {(issue["code"], issue["severity"]) for issue in body["validation"]["issues"]} == {
-        ("INVALID_TIME", "warning"), ("UNPLACED", "warning"),
-    }
+    assert body["validation"]["issues"] == []
     assert body["proposal"]["candidatePlan"]["items"][-1]["title"] == "已错过时间的任务"
-    assert body["proposal"]["candidatePlan"]["items"][-1]["segments"] == []
+    assert body["proposal"]["candidatePlan"]["items"][-1]["segments"] == [{"startSlot": 32, "endSlot": 34}]
     correction = json.loads(fake.calls[1][1])
     assert correction["issues"] == [
         {

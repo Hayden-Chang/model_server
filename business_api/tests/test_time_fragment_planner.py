@@ -514,7 +514,7 @@ def test_future_earliest_slot_preserves_unchanged_existing_earlier_task() -> Non
     ).segments] == [(36, 38)]
 
 
-def test_future_explicit_add_before_app_earliest_slot_is_rejected() -> None:
+def test_future_explicit_add_overrides_app_earliest_slot() -> None:
     temporary_id = UUID("24242424-2424-4242-8242-242424242424")
     response = plan_time_fragment(
         request_with_items(
@@ -535,9 +535,11 @@ def test_future_explicit_add_before_app_earliest_slot_is_rejected() -> None:
         uuid_factory=lambda: temporary_id,
     )
 
-    assert response.validation.valid is False
-    assert item_by_id(response, str(temporary_id)).segments == []
-    assert "INVALID_TIME" in issue_codes(response)
+    assert response.validation.valid is True
+    assert [(segment.start_slot, segment.end_slot) for segment in item_by_id(
+        response, str(temporary_id),
+    ).segments] == [(32, 34)]
+    assert issue_codes(response) == []
 
 
 def test_default_temporary_ids_make_identical_request_and_operations_byte_identical() -> None:
