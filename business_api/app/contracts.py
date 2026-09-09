@@ -737,3 +737,16 @@ class TimeFragmentPlanResponseV2(_TimeFragmentV2Model):
     request_id: str = Field(alias="requestID")
     proposal: TimeFragmentPlanProposal | None
     validation: TimeFragmentValidation
+
+
+class DevelopmentMembershipRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = Field(strict=True)
+
+
+class DevelopmentMembershipResponse(BaseModel):
+    enabled: bool
+    limit: int
+    used: int
+    remaining: int
+    resetsAt: str | None = None
