@@ -242,6 +242,19 @@ def plan_time_fragment(
         uuid_factory=uuid_factory,
         extracted_clocks=extracted_clocks,
     )
+    from .time_fragment_clocks import has_requested_move_clock
+
+    # Retain user clock anchors before relative insertion derives any placements.
+    requested_placements = {
+        str(operation.temporary_id) if isinstance(operation, TimeFragmentAddOperation)
+        else operation.target_item_id: operation.placement
+        for index, operation in enumerate(normalized_operations)
+        if isinstance(operation, (TimeFragmentAddOperation, TimeFragmentMoveOperation))
+        and operation.placement is not None
+        and (isinstance(operation, TimeFragmentAddOperation) or has_requested_move_clock(
+            request.text, model_output.operations[index], base_index.get(operation.target_item_id),
+        ))
+    }
     normalized_operations = _apply_clear_after_insertion_intent(
         request.text,
         base_items,
@@ -581,6 +594,18 @@ def plan_time_fragment(
         )
     )
     earliest_slot = _first_available_slot(request)
+    # An explicit clock overrides the default for this whole proposal, even today.
+    # Excluded/invalid targets, unchanged history and cascaded moves cannot do so.
+    for target in schedule_targets:
+        placement = requested_placements.get(target.item_id)
+        if not target.placement_is_explicit or placement is None or placement != target.placement:
+            continue
+        start_slot = (
+            placement.slot if placement.anchor == "start"
+            else placement.slot - candidate_by_id[target.item_id].duration_slots
+        )
+        if 0 <= start_slot < 96:
+            earliest_slot = min(earliest_slot, start_slot)
     current_day_slot = _current_day_slot(request)
     invalid_target_ids: set[str] = set()
     day_end_ids: set[str] = set()
