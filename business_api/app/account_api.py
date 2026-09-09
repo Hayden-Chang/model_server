@@ -116,12 +116,18 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         return await quota("membership", current, enabled=payload.enabled)
 
     @app.post("/api/plan/parse", response_model=TimeFragmentPlanResponseV2)
-    async def plan(payload: TimeFragmentPlanRequestV2, current: Actor = Depends(actor)):
+    async def plan(
+        payload: TimeFragmentPlanRequestV2,
+        request: Request,
+        current: Actor = Depends(actor),
+    ):
         body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         attempt = str(uuid4())
         await quota("reserve", current, requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
         try:
-            response = TimeFragmentPlanResponseV2.model_validate(await backend.plan(current, body, attempt))
+            response = TimeFragmentPlanResponseV2.model_validate(
+                await backend.plan(current, body, attempt, request.state.request_id)
+            )
             if response.request_id != payload.request_id:
                 raise ValueError("response request mismatch")
         except Exception:

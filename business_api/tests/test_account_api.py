@@ -58,8 +58,8 @@ class Backend:
             raise self.quota_error
         return {"supportCode":"TF-AAAA-AAAA","used":1,"limit":50,"remaining":49,"enabled":False}
 
-    async def plan(self, actor, payload, attempt):
-        self.calls.append(("plan",actor,payload,attempt))
+    async def plan(self, actor, payload, attempt, request_id):
+        self.calls.append(("plan",actor,payload,attempt,request_id))
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
@@ -72,13 +72,14 @@ def account_headers():
 def test_account_resolved_before_quota_and_unusable_output_refunds(configuration):
     backend=Backend()
     with TestClient(create_account_api(configuration,backend)) as client:
-        response=client.post("/api/plan/parse",headers=account_headers(),json=request_payload())
+        response=client.post("/api/plan/parse",headers={**account_headers(),"X-Request-ID":"forward-me-123"},json=request_payload())
     assert response.status_code==200
     assert [call[0] for call in backend.calls]==["account","reserve","plan","finish"]
     assert backend.calls[1][1]==ACCOUNT
     assert backend.calls[1][2]["bodyHash"]==body_hash(request_payload())
     assert backend.calls[3][2]["consume"] is False
     assert backend.calls[1][2]["attempt"]==backend.calls[3][2]["attempt"]
+    assert backend.calls[2][4]=="forward-me-123"
     assert response.headers["cache-control"]=="no-store"
 
 

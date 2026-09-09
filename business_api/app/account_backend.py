@@ -114,11 +114,13 @@ class AccountBackend:
         result.pop("period", None)
         return result
 
-    async def plan(self, actor: Actor, payload: dict, attempt: str) -> dict:
+    async def plan(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
         token = self.credentials.issue(actor.principal, payload, attempt)
         try:
             response = await self.http.post(str(self.settings.planning_base_url).rstrip("/") + "/internal/time-fragment/plan",
-                                            json=payload, headers={"Authorization": "Bearer " + token}, timeout=55)
+                                            json=payload,
+                                            headers={"Authorization": "Bearer " + token, "X-Request-ID": request_id},
+                                            timeout=55)
             if response.status_code in (413, 422):
                 detail = response.json()["detail"]
                 raise failure(detail["code"], response.status_code, message=detail.get("message", "invalid planning input"))
