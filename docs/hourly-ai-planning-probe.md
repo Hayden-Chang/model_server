@@ -16,9 +16,10 @@ and retried once; the rejected request made no model call.
 
 ## Installation contract
 
-Use a reviewed commit in an isolated worktree. Install these two Python files
+Use a reviewed commit in an isolated worktree. Install these three Python files
 as root-owned, world-readable files in `/opt/model-server-hourly-probe/`:
-`scripts/probe-ai-planning.py` and `scripts/validate-time-fragment-smoke.py`.
+`scripts/probe-ai-planning.py`, `scripts/validate-time-fragment-smoke.py` and
+`scripts/notify-ai-planning.py`.
 Install the supplied service/timer in `/etc/systemd/system/` and verify them with
 `systemd-analyze verify` before enabling the timer.
 
@@ -56,8 +57,37 @@ timing, safe error codes and probe request IDs. No tokens, raw provider errors,
 request bodies or model output are logged. Events distinguish `failure`,
 `still_failing`, `recovered` and `healthy` for notification routing.
 
-Messaging and an external heartbeat remain separate setup steps: choose a
-notification destination before sending messages. This host-side timer alone
+An external heartbeat remains a separate setup step. This host-side timer alone
 cannot notify when the whole server is down. Normal one-round model cost for
 720 monthly probes is estimated at CNY 4.8–9.6 using the observed small-task
 usage, excluding cache discounts and internal correction calls.
+
+## Optional email alerts
+
+Configure a real outbound SMTP account before activation. A recipient address
+alone is not a sending account. Keep a root-owned mode-0600
+`/etc/model-server-hourly-probe/mail.json` containing `host`, `port`, `security`
+(`ssl` or `starttls`), `from`, `to`, `username` and `password`. Use one plain
+recipient address. Store the SMTP credential only on the server, never in Git,
+chat, terminal arguments or command output.
+
+Install `deploy/model-server-hourly-probe-email.conf` as
+`/etc/systemd/system/model-server-hourly-probe.service.d/email.conf` only after
+the credential file exists, then run `systemctl daemon-reload`. The optional
+drop-in exposes the JSON through `CREDENTIALS_DIRECTORY/mail-config`. Without
+the drop-in, the existing probe continues with notification status `disabled`.
+
+Validate delivery with `scripts/notify-ai-planning.py --test` in a service using
+that credential, or set `PROBE_MAIL_CONFIG` to the protected JSON path for a
+manual root run. The test does not call the model or change incident state.
+`accepted_by_smtp` means the sender accepted the email; inbox receipt must be
+confirmed separately.
+
+The first failed probe sends an alert and recovery sends another email. Normal
+results and a continued, already-notified failure stay quiet. Failed deliveries
+retain the incident in `mail-state.json` and retry on the next hourly probe,
+without additional model requests. Recovery is also retried until accepted.
+Sending uses certificate-verified TLS and a 10-second socket timeout. Raw SMTP
+errors, credentials, user tasks and model output are never included in messages
+or logs. A network interruption after SMTP acceptance or a crash before saving
+delivery state can cause a duplicate; exactly-once email delivery is not claimed.

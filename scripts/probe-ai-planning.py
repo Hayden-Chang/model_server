@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 VALIDATOR = runpy.run_path(str(Path(__file__).with_name("validate-time-fragment-smoke.py")))
+NOTIFIER = runpy.run_path(str(Path(__file__).with_name("notify-ai-planning.py")))
 TEXT = "从 09:00 开始\n08:00 开始 Production Smoke，持续30分钟。"
 SAFE_CODES = {"MODEL_GATEWAY_ERROR", "MODEL_GATEWAY_UNAVAILABLE", "AI_QUOTA_EXHAUSTED",
               "AI_DAILY_QUOTA_EXHAUSTED", "AI_REQUEST_IN_PROGRESS", "AI_REQUEST_ALREADY_COMPLETED"}
@@ -132,6 +133,14 @@ def transition(previous, current):
     return "recovered" if previous == "unhealthy" else "healthy"
 
 
+def save_result(directory, result):
+    serialized = json.dumps(result, ensure_ascii=False)
+    temporary = directory / "latest.tmp"
+    temporary.write_text(serialized + "\n")
+    temporary.replace(directory / "latest.json")
+    return serialized
+
+
 def main():
     os.umask(0o077)
     directory = Path(os.environ.get("PROBE_STATE_DIR", "/var/lib/model-server-hourly-probe"))
@@ -157,12 +166,11 @@ def main():
             result = {"status": "unhealthy", "stage": "configuration", "code": "LOCAL_IO_ERROR"}
         result.update({"checkedAt": now.isoformat(), "durationSeconds": round(time.monotonic() - started, 3),
                        "event": transition(previous.get("status"), result["status"])})
-        serialized = json.dumps(result, ensure_ascii=False)
-        temporary = directory / "latest.tmp"
-        temporary.write_text(serialized + "\n")
-        temporary.replace(directory / "latest.json")
+        save_result(directory, result)
+        result["notification"] = NOTIFIER["notify"](directory, result)
+        serialized = save_result(directory, result)
         print(serialized)
-        return 0 if result["status"] == "healthy" else 1
+        return 0 if result["status"] == "healthy" and result["notification"]["status"] != "failed" else 1
 
 
 if __name__ == "__main__":
