@@ -21,6 +21,7 @@ def test_compose_keeps_private_services_unpublished_and_uses_internal_credential
     assert overlay["business-api"]["environment"]["PLANNING_INTERNAL_ONLY"]=="true"
     assert overlay["business-api"]["environment"]["PLANNING_INTERNAL_SECRET"]==overlay["time-fragment-api"]["environment"]["PLANNING_INTERNAL_SECRET"]
     assert overlay["caddy"]["volumes"]==["./Caddyfile.accounts:/etc/caddy/Caddyfile:ro"]
+    assert overlay["time-fragment-api"]["volumes"]==["model-server-usage:/var/lib/model-server:ro"]
     assert "SUPABASE_SERVICE_ROLE_KEY" not in base["business-api"]["environment"]
 
 

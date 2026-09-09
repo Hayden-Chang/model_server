@@ -32,6 +32,8 @@ services:
     expose: ["8000"]
     read_only: true
     tmpfs: [/tmp]
+    volumes:
+      - model-server-usage:/var/lib/model-server:ro
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=20)"]
       interval: 30s

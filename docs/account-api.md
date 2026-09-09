@@ -87,10 +87,14 @@ Other generic pipelines and the observability dashboard remain available.
    restricted backup of the `model-server-usage` SQLite volume. Keep its WAL with
    the database, or create the snapshot with SQLite's backup API. The old planner
    must remain stopped until the new API becomes the only public AI writer.
-5. Run the importer against the offline snapshot with the new service environment:
+5. Run the importer against the offline snapshot with the new service environment.
+   The service image already carries the app and the overlay mounts the legacy
+   volume read-only at `/var/lib/model-server`:
 
    ```sh
-   python -m app.migrate_guest_quota /path/to/offline/usage.sqlite3 --legacy-service-stopped
+   docker compose -f docker-compose.yml -f docker-compose.accounts.yml run --rm --no-deps \
+     time-fragment-api python -m app.migrate_guest_quota \
+     /var/lib/model-server/usage.sqlite3 --legacy-service-stopped
    ```
 
    It opens SQLite read-only and imports existing support codes, active free/daily

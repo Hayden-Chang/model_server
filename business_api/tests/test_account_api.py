@@ -157,6 +157,10 @@ def test_admin_quota_still_requires_admin_key(configuration):
     backend=Backend()
     with TestClient(create_account_api(configuration,backend)) as client:
         assert client.post("/admin/time-fragment/quotas/reset-all",headers=account_headers()).status_code==401
+        # Raw non-ASCII header bytes decode to non-ASCII text; the key comparison
+        # must reject them instead of raising inside secrets.compare_digest.
+        raw=b"Bearer \xe7\xae\xa1\xe7\x90\x86\xe5\x91\x98"
+        assert client.post("/admin/time-fragment/quotas/reset-all",headers={"Authorization":raw}).status_code==401
         backend.quota_error=failure("AI_REQUEST_IN_PROGRESS",409)
         assert client.post("/admin/time-fragment/quotas/reset-all",headers={"Authorization":"Bearer "+ADMIN_KEY}).status_code==409
 

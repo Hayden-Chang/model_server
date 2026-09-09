@@ -61,7 +61,8 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         return await backend.account(bearer(authorization))
 
     async def admin(authorization: str | None = Header(default=None)) -> None:
-        if not secrets.compare_digest(bearer(authorization), settings.admin_api_key.get_secret_value()):
+        supplied = bearer(authorization)
+        if not supplied.isascii() or not secrets.compare_digest(supplied, settings.admin_api_key.get_secret_value()):
             raise failure("UNAUTHORIZED", 401)
 
     async def developer(current: Actor = Depends(actor)) -> Actor:
