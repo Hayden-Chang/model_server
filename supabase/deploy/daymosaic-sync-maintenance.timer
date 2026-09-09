@@ -1,0 +1,11 @@
+[Unit]
+Description=Maintain DayMosaic sync accounts in bounded batches
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=1s
+Unit=daymosaic-sync@maintenance.service
+
+[Install]
+WantedBy=timers.target
