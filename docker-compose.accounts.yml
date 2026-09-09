@@ -33,7 +33,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     volumes:
-      - model-server-usage:/var/lib/model-server:ro
+      # SQLite is in WAL mode, so the importer and reverse exporter need a
+      # writable mount even though the running API never writes to this volume.
+      - model-server-usage:/var/lib/model-server
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=20)"]
       interval: 30s

@@ -165,6 +165,17 @@ def test_admin_quota_still_requires_admin_key(configuration):
         assert client.post("/admin/time-fragment/quotas/reset-all",headers={"Authorization":"Bearer "+ADMIN_KEY}).status_code==409
 
 
+def test_request_id_is_echoed_when_valid_and_replaced_when_invalid(configuration):
+    backend=Backend()
+    with TestClient(create_account_api(configuration,backend)) as client:
+        echoed=client.get("/health/live",headers={"X-Request-ID":"smoke-request-123"})
+        assert echoed.headers["x-request-id"]=="smoke-request-123"
+        assert echoed.headers["cache-control"]=="no-store"
+        replaced=client.get("/health/live",headers={"X-Request-ID":"bad id!"})
+        assert replaced.headers["x-request-id"]!="bad id!"
+        assert len(replaced.headers["x-request-id"])==36
+
+
 def test_rpc_uses_verified_identity_and_retries_same_attempt_without_leaking_keys(configuration):
     requests=[]
     def handler(request):

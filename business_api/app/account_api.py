@@ -1,6 +1,7 @@
 """Public DayMosaic API. Identity/quota are resolved before private planning."""
 
 import secrets
+import re
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -15,6 +16,8 @@ from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipRespo
                         TimeFragmentQuotaStatusResponse, TimeFragmentQuotaResetAllResponse)
 from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
+
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 class ClaimGuestRequest(BaseModel):
@@ -38,9 +41,12 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
 
     @app.middleware("http")
     async def private_responses(request: Request, call_next):
+        supplied = request.headers.get("x-request-id", "")
+        request_id = supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else str(uuid4())
+        request.state.request_id = request_id
         response = await call_next(request)
         response.headers["cache-control"] = "no-store"
-        response.headers["x-request-id"] = str(uuid4())
+        response.headers["x-request-id"] = request_id
         return response
 
     def bearer(authorization: str | None) -> str:

@@ -99,7 +99,9 @@ Other generic pipelines and the observability dashboard remain available.
    must remain stopped until the new API becomes the only public AI writer.
 5. Run the importer against the offline snapshot with the new service environment.
    The service image already carries the app and the overlay mounts the legacy
-   volume read-only at `/var/lib/model-server`:
+   volume at `/var/lib/model-server`. SQLite is in WAL mode, so the mount is
+   writable for the importer and rollback one-offs even though the running API
+   never writes to it:
 
    ```sh
    docker compose -f docker-compose.yml -f docker-compose.accounts.yml run --rm --no-deps \
@@ -128,8 +130,7 @@ stops the new public entrypoint, takes a consistent SQLite backup under
 Postgres into the legacy database, closes the new ledger gate (refunding abandoned
 reservations), restores the base Compose topology and verifies `/health/live`
 plus guest-token issuance. The one-off `quota-rollback` profile service has a
-writable legacy volume but only the two credentials the reverse export needs; the
-running `time-fragment-api` keeps its read-only mount.
+writable legacy volume but only the two credentials the reverse export needs.
 
 ```sh
 cd /opt/model_server
