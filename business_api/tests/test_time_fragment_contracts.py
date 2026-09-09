@@ -129,6 +129,17 @@ def test_internal_task_rejects_external_event_fields_even_without_request_wrappe
         TimeFragmentInternalTaskItem.model_validate(item)
 
 
+def test_internal_task_without_domain_ref_is_valid_in_continuation_request() -> None:
+    payload = app_request_payload()
+    payload["currentPlan"]["items"][0].pop("domainRef")
+
+    request = TimeFragmentPlanRequestV2.model_validate(payload)
+
+    item = request.current_plan.items[0]
+    assert isinstance(item, TimeFragmentInternalTaskItem)
+    assert item.domain_ref is None
+
+
 def test_model_visible_projection_never_contains_domain_references_or_envelope_ids() -> None:
     request = TimeFragmentPlanRequestV2.model_validate(app_request_payload())
 
