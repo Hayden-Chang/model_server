@@ -103,7 +103,9 @@ echo "[1/6] backup legacy SQLite quota database -> ${backup_file}"
 if [ "$dry_run" -eq 0 ]; then
   mkdir -p "$backup_dir"
 fi
-compose_rollback run --rm --no-deps -v "${backup_dir}:/backup" quota-rollback \
+# The host backup directory is root-owned while the image runs as UID 10001;
+# run this one-off as root so SQLite can create the destination file.
+compose_rollback run --rm --no-deps --user 0 -v "${backup_dir}:/backup" quota-rollback \
   python -c "import sqlite3; src=sqlite3.connect('/var/lib/model-server/usage.sqlite3',timeout=30); dst=sqlite3.connect('/backup/usage.sqlite3',timeout=30); src.backup(dst); dst.close(); src.close(); print('backup ok')"
 if [ "$dry_run" -eq 0 ] && [ ! -s "$backup_file" ]; then
   echo "backup verification failed: ${backup_file}" >&2
