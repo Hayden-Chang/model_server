@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     time_fragment_token_ttl_seconds: int = Field(default=2_592_000, ge=300, le=31_536_000)
     time_fragment_guest_quota_limit: int = Field(default=50, ge=1, le=10_000)
     time_fragment_development_device_ids: str = ""
+    planning_internal_secret: SecretStr | None = Field(default=None, min_length=32)
+    planning_internal_only: bool = False
     admin_api_key: SecretStr | None = Field(default=None, min_length=16)
     usage_db_path: str = ":memory:"
     usage_content_retention_days: int = Field(default=30, ge=1, le=365)

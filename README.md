@@ -5,6 +5,10 @@ in [supabase/](supabase/README.md) and deploys to managed Supabase independently
 the AI service. Its database migrations, protocol contracts, tests and deletion
 worker are maintained here; client login and sync coordination belong in the App.
 
+The optional [account-aware AI API](docs/account-api.md) adds Supabase account
+authentication, shared quota, guest-usage migration and private planning calls.
+Its Compose overlay requires a controlled quota import before public cutover.
+
 The API-first LLM service uses three runtime containers and an embedded SQLite
 observability store:
 

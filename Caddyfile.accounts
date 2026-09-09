@@ -1,0 +1,35 @@
+{
+	default_sni {$PUBLIC_DOMAIN}
+}
+
+https://{$PUBLIC_DOMAIN} {
+	tls /etc/letsencrypt/live/{$PUBLIC_DOMAIN}/fullchain.pem /etc/letsencrypt/live/{$PUBLIC_DOMAIN}/privkey.pem
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+	@private path /internal /internal/*
+	handle @private {
+		respond 404
+	}
+	@account path /api/* /admin/time-fragment/*
+	handle @account {
+		reverse_proxy time-fragment-api:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 120s
+			}
+		}
+	}
+	handle {
+		reverse_proxy business-api:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 120s
+			}
+		}
+	}
+}
