@@ -241,7 +241,7 @@ class TimeFragmentExternalDomainRef(_TimeFragmentV2Model):
 class TimeFragmentInternalTaskItem(_TimeFragmentV2Model):
     item_id: str = Field(alias="itemId", min_length=1, max_length=200)
     object_type: Literal["internalTask"] = Field(alias="objectType")
-    domain_ref: TimeFragmentInternalDomainRef | None = Field(alias="domainRef")
+    domain_ref: TimeFragmentInternalDomainRef | None = Field(default=None, alias="domainRef")
     title: str = Field(min_length=1, max_length=500)
     duration_slots: int = Field(alias="durationSlots", ge=1, le=96, strict=True)
     segments: list[TimeFragmentSegmentV2] = Field(max_length=96)
