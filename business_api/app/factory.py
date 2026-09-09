@@ -4,6 +4,7 @@ import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -34,6 +35,7 @@ from .model_client import (
 )
 from .observability import TrackedModelClient, aggregate_usage
 from .pipelines import get_pipeline
+from .planning_auth import PlanningCredentials
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .quota_store import (
     DuplicateRequestCompleted,
@@ -64,6 +66,10 @@ def create_app(
     usage_store: UsageStore | None = None,
     quota_store: QuotaStore | None = None,
 ) -> FastAPI:
+    if settings.planning_internal_only and settings.planning_internal_secret is None:
+        raise ValueError("Internal planning requires its own credential secret")
+    if settings.planning_internal_secret == settings.time_fragment_token_secret:
+        raise ValueError("Planning and guest token secrets must be independent")
     client = model_client or LiteLLMClient(settings)
     store = usage_store or UsageStore(
         settings.usage_db_path,
@@ -93,6 +99,8 @@ def create_app(
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
+        if settings.planning_internal_only and request.url.path.startswith(("/api/", "/admin/time-fragment/")):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         supplied = request.headers.get("x-request-id", "")
         request_id = supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else str(uuid.uuid4())
         request.state.request_id = request_id
@@ -442,6 +450,48 @@ def create_app(
         )
         return response
 
+    @app.post("/internal/time-fragment/plan", response_model=TimeFragmentPlanResponseV2)
+    async def internal_plan(
+        payload: TimeFragmentPlanRequestV2,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> TimeFragmentPlanResponseV2:
+        if settings.planning_internal_secret is None:
+            raise HTTPException(503, detail={"code": "INTERNAL_PLANNING_DISABLED"})
+        body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        try:
+            claims = PlanningCredentials(settings.planning_internal_secret.get_secret_value()).verify(
+                (authorization or "").removeprefix("Bearer "), body)
+        except ValueError as error:
+            raise HTTPException(401, detail={"code": "UNAUTHORIZED"}) from error
+        tracker = TrackedModelClient(client)
+        started_at, started_clock = datetime.now(timezone.utc), time.perf_counter()
+        status_code = 200
+        try:
+            return await execute_time_fragment_plan(tracker, payload, max_input_chars=settings.max_input_chars)
+        except TimeFragmentRequestInvalid as error:
+            status_code = 422
+            raise HTTPException(422, detail={"code": error.code, "message": error.message}) from error
+        except TimeFragmentInputTooLarge as error:
+            status_code = 413
+            raise HTTPException(413, detail={"code": "INPUT_TOO_LARGE"}) from error
+        except ModelGatewayUnavailable as error:
+            status_code = 503
+            raise HTTPException(503, detail={"code": "MODEL_GATEWAY_UNAVAILABLE"}) from error
+        except ModelGatewayResponseError as error:
+            status_code = 502
+            raise HTTPException(502, detail={"code": "MODEL_GATEWAY_ERROR"}) from error
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            tracker.calls = [replace(call, input_content="", output_content=None, error_message=None)
+                             for call in tracker.calls]
+            persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
+                route="/internal/time-fragment/plan", pipeline="time-fragment-plan-v2",
+                started_at=started_at, started_clock=started_clock, status_code=status_code,
+                request_content=None, response_content=None, tracker=tracker)
+
     @app.post(
         "/v1/pipelines/{pipeline_id}:run",
         response_model=RunResponse,
@@ -456,6 +506,8 @@ def create_app(
             Header(alias="X-Device-ID", min_length=16, max_length=200, pattern=DEVICE_ID_PATTERN),
         ] = None,
     ) -> RunResponse:
+        if settings.planning_internal_only and pipeline_id.startswith("time-fragment"):
+            raise HTTPException(403, detail={"code": "INTERNAL_PLANNING_REQUIRED"})
         started_at = datetime.now(timezone.utc)
         started_clock = time.perf_counter()
         tracker = TrackedModelClient(client)

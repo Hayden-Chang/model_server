@@ -1,0 +1,41 @@
+# Opt-in cutover: import the stopped legacy quota database before serving traffic.
+services:
+  caddy:
+    depends_on:
+      time-fragment-api:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile.accounts:/etc/caddy/Caddyfile:ro
+  business-api:
+    environment:
+      PLANNING_INTERNAL_ONLY: "true"
+      PLANNING_INTERNAL_SECRET: ${PLANNING_INTERNAL_SECRET:?PLANNING_INTERNAL_SECRET is required}
+  time-fragment-api:
+    build:
+      context: ./business_api
+    command: [uvicorn, app.account_main:app, --host, 0.0.0.0, --port, "8000"]
+    restart: unless-stopped
+    depends_on:
+      business-api:
+        condition: service_healthy
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      PLANNING_BASE_URL: http://business-api:8000
+      PLANNING_INTERNAL_SECRET: ${PLANNING_INTERNAL_SECRET:?PLANNING_INTERNAL_SECRET is required}
+      TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
+      TIME_FRAGMENT_TOKEN_TTL_SECONDS: ${TIME_FRAGMENT_TOKEN_TTL_SECONDS:-2592000}
+      TIME_FRAGMENT_GUEST_QUOTA_LIMIT: ${TIME_FRAGMENT_GUEST_QUOTA_LIMIT:-50}
+      TIME_FRAGMENT_DEVELOPMENT_DEVICE_IDS: ${TIME_FRAGMENT_DEVELOPMENT_DEVICE_IDS:-}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+    expose: ["8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - model-server-usage:/var/lib/model-server:ro
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=20)"]
+      interval: 30s
+      timeout: 25s
+      retries: 3
