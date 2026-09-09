@@ -1,66 +1,60 @@
-# Hourly AI planning probe
+# 每小时 AI 规划服务检测
 
-This optional host-side probe follows the public HTTPS health → guest auth →
-planning route. It submits a fixed synthetic task on tomorrow's empty plan:
-08:00 Production Smoke for 30 minutes, with a 09:00 default. It validates the
-V2 response, request/fingerprint correlation, one new task and exactly 08:00–08:30.
-It never applies a plan or reads user task content. No application modules,
-database migrations, model settings or Compose services change.
+这套可选检测脚本运行在后端服务器上，依次访问公网 HTTPS 健康检查、游客鉴权和排程接口。
+每次在明天的空白日程中提交一个固定测试任务：08:00 开始，持续 30 分钟，任务名为
+`Production Smoke`，同时传入 09:00 的默认开始时间。脚本校验 V2 响应格式、请求标识与
+方案指纹是否对应，并确认只新增一项任务，且时间准确落在 08:00–08:30。
+检测不会应用方案或读取用户任务内容，也不修改应用模块、数据库、模型设置或 Compose 服务。
 
-The systemd timer runs once per hour. It does not replay missed hours after
-downtime or restart automatically on failure. A run has a 150-second outer
-timeout and a process lock. Normal runs issue one planning request; the API may
-perform its existing internal correction. Network/model/validation failures are
-not retried by the probe. A validated probe-quota rejection can be replenished
-and retried once; the rejected request made no model call.
+systemd 定时器每小时运行一次，停机期间错过的检测不会补跑，检测失败也不会自动重启进程。
+单次运行的外层超时为 150 秒，并通过进程锁防止并发执行。正常情况下只发起一次排程请求，
+接口内部可能按现有逻辑进行纠正。网络错误、模型错误和排程校验失败不会由检测脚本重试。
+若确认请求因专用检测账号额度耗尽而被拒绝，可补充该账号额度后重试一次；被额度拦截的
+请求没有调用模型。
 
-## Installation contract
+## 安装要求
 
-Use a reviewed commit in an isolated worktree. Install these three Python files
-as root-owned, world-readable files in `/opt/model-server-hourly-probe/`:
-`scripts/probe-ai-planning.py`, `scripts/validate-time-fragment-smoke.py` and
-`scripts/notify-ai-planning.py`.
-Install the supplied service/timer in `/etc/systemd/system/` and verify them with
-`systemd-analyze verify` before enabling the timer.
+使用隔离工作树中经过评审的提交，将以下三个 Python 文件安装到
+`/opt/model-server-hourly-probe/`，文件归 root 用户所有，允许其他用户读取：
+`scripts/probe-ai-planning.py`、`scripts/validate-time-fragment-smoke.py` 和
+`scripts/notify-ai-planning.py`。
+将仓库提供的服务和定时器配置安装到 `/etc/systemd/system/`，并在启用定时器前使用
+`systemd-analyze verify` 校验。
 
-Create a mode-0700 `/etc/model-server-hourly-probe/` directory and a mode-0600
-`probe.env` with:
+创建权限为 `0700` 的 `/etc/model-server-hourly-probe/` 目录，以及权限为 `0600` 的
+`probe.env` 文件，填入以下配置：
 
 ```ini
 PROBE_BASE_URL=https://api.keeline.xyz
-PROBE_DEVICE_ID=ai-planning-hourly-probe-<new UUID>
-PROBE_SUPPORT_CODE=<support code bound to this exact probe identity>
+PROBE_DEVICE_ID=ai-planning-hourly-probe-<新生成的 UUID>
+PROBE_SUPPORT_CODE=<与该检测账号绑定的支持码>
 ```
 
-Provision the existing API's admin credential locally on the server in a
-mode-0600 `admin-key` file in that directory; never copy credentials into Git or
-terminal output. The service uses systemd credentials and a dynamic user. The
-script reads `CREDENTIALS_DIRECTORY`, including on systemd 249; `PROBE_ADMIN_KEY_FILE`
-can provide an explicit file path for non-systemd execution. The `/opt` asset
-directory must be mode 0755 so the dynamic user can read the scripts.
+在服务器本地将现有接口的管理员凭据写入同一目录下权限为 `0600` 的 `admin-key` 文件，
+不要将凭据复制到 Git 或终端输出。服务使用 systemd 凭据机制和动态用户运行。
+脚本通过 `CREDENTIALS_DIRECTORY` 读取凭据，兼容 systemd 249；在 systemd 以外执行时，
+可通过 `PROBE_ADMIN_KEY_FILE` 指定凭据文件路径。脚本目录
+`/opt/model-server-hourly-probe/` 的权限必须为 `0755`，以便动态用户读取脚本。
 
-Bootstrap with the dedicated identity and obtain its support code from the
-server's quota registry, matching the exact guest principal derived from this
-device ID. Bind that code in `probe.env`. The probe refuses quota recovery for
-any other support code, missing credentials, daily membership quotas or an
-ordinary App device ID. It never calls reset-all and does not alter user quotas.
+初始化时使用专用检测身份，从服务器额度记录中查出对应的支持码，确认它属于该设备标识
+生成的游客账号，再将支持码绑定到 `probe.env`。对于其他支持码、缺少凭据、会员每日额度
+或普通应用设备标识，脚本均拒绝执行额度恢复。它不会调用全量重置接口 `reset-all`，
+也不会修改用户额度。
 
-Start the service once, inspect the result, then enable/start the timer. Confirm
-the timer is enabled and its next trigger is an hour boundary. Stop scheduling
-with `systemctl disable --now model-server-hourly-probe.timer`.
+先手动启动一次服务并检查结果，再启用和启动定时器，确认定时器已启用且下一次执行时间
+为整点。停止定时检测可执行 `systemctl disable --now model-server-hourly-probe.timer`。
 
-## Results and notifications
+## 检测结果与通知
 
-Each run writes a sanitized JSON record to journald and atomically replaces
-`/var/lib/model-server-hourly-probe/latest.json`. Records contain only status,
-timing, safe error codes and probe request IDs. No tokens, raw provider errors,
-request bodies or model output are logged. Events distinguish `failure`,
-`still_failing`, `recovered` and `healthy` for notification routing.
+每次运行都会向 journald 写入脱敏后的 JSON 记录，并原子替换
+`/var/lib/model-server-hourly-probe/latest.json`。记录仅包含状态、时间、耗时、
+安全错误码和检测请求标识，不记录令牌、供应商原始错误、请求正文或模型输出。
+事件分为 `failure`（首次故障）、`still_failing`（持续故障）、`recovered`（已恢复）
+和 `healthy`（正常），供通知逻辑判断。
 
-An external heartbeat remains a separate setup step. This host-side timer alone
-cannot notify when the whole server is down. Normal one-round model cost for
-720 monthly probes is estimated at CNY 4.8–9.6 using the observed small-task
-usage, excluding cache discounts and internal correction calls.
+外部心跳监控需要单独配置，仅依靠本机定时器无法在整台服务器停机时发送通知。
+按此前观测到的小任务用量估算，每月 720 次检测、每次一轮模型调用的费用约为
+4.8–9.6 元，未计入缓存优惠及接口内部纠正带来的额外调用。
 
 ## 运维速查：脚本位置与邮件通知
 
@@ -135,32 +129,28 @@ HTTP 状态：502
 `[DayMosaic] AI 规划告警邮箱验证`，正文说明它是配置验证邮件且没有触发模型调用。
 邮件均不包含用户日程原文、模型原始输出或凭据。
 
-## Optional email alerts
+## 邮件告警的可选配置
 
-Configure a real outbound SMTP account before activation. A recipient address
-alone is not a sending account. Keep a root-owned mode-0600
-`/etc/model-server-hourly-probe/mail.json` containing `host`, `port`, `security`
-(`ssl` or `starttls`), `from`, `to`, `username` and `password`. Use one plain
-recipient address. Store the SMTP credential only on the server, never in Git,
-chat, terminal arguments or command output.
+启用前需要配置可实际发信的 SMTP 账号，仅提供收件地址无法发信。
+创建归 root 用户所有、权限为 `0600` 的 `/etc/model-server-hourly-probe/mail.json`，
+包含 `host`、`port`、`security`（取值为 `ssl` 或 `starttls`）、`from`、`to`、
+`username` 和 `password` 字段。收件人只能填写一个纯邮箱地址。
+SMTP 凭据仅保存在服务器，不得放入 Git、聊天、终端命令参数或命令输出。
 
-Install `deploy/model-server-hourly-probe-email.conf` as
-`/etc/systemd/system/model-server-hourly-probe.service.d/email.conf` only after
-the credential file exists, then run `systemctl daemon-reload`. The optional
-drop-in exposes the JSON through `CREDENTIALS_DIRECTORY/mail-config`. Without
-the drop-in, the existing probe continues with notification status `disabled`.
+确认凭据文件已存在后，再将 `deploy/model-server-hourly-probe-email.conf` 安装为
+`/etc/systemd/system/model-server-hourly-probe.service.d/email.conf`，然后执行
+`systemctl daemon-reload`。这份可选的服务附加配置通过
+`CREDENTIALS_DIRECTORY/mail-config` 提供 JSON 凭据；未安装附加配置时，
+检测仍可运行，通知状态为 `disabled`（未启用）。
 
-Validate delivery with `scripts/notify-ai-planning.py --test` in a service using
-that credential, or set `PROBE_MAIL_CONFIG` to the protected JSON path for a
-manual root run. The test does not call the model or change incident state.
-`accepted_by_smtp` means the sender accepted the email; inbox receipt must be
-confirmed separately.
+在加载该凭据的服务中执行 `scripts/notify-ai-planning.py --test` 验证发信；
+也可将 `PROBE_MAIL_CONFIG` 指向受限 JSON 文件，由 root 用户手动执行。
+测试不会调用模型或改变故障状态。`accepted_by_smtp` 表示发件服务器已接受邮件，
+收件箱是否收到仍需单独确认。
 
-The first failed probe sends an alert and recovery sends another email. Normal
-results and a continued, already-notified failure stay quiet. Failed deliveries
-retain the incident in `mail-state.json` and retry on the next hourly probe,
-without additional model requests. Recovery is also retried until accepted.
-Sending uses certificate-verified TLS and a 10-second socket timeout. Raw SMTP
-errors, credentials, user tasks and model output are never included in messages
-or logs. A network interruption after SMTP acceptance or a crash before saving
-delivery state can cause a duplicate; exactly-once email delivery is not claimed.
+首次检测失败时发送告警，恢复时再发送一封邮件；正常结果及已经通知过的持续故障保持静默。
+发送失败时，故障状态保留在 `mail-state.json`，到下一次每小时检测时重试，
+不会为邮件重试额外调用模型。恢复邮件也会重试，直到被发件服务器接受。
+发信使用经过证书校验的 TLS 连接，套接字超时为 10 秒。邮件和日志均不包含 SMTP
+原始错误、凭据、用户任务或模型输出。若 SMTP 接受邮件后网络中断，或保存发送状态前
+进程崩溃，可能出现重复邮件，因此不保证每封邮件严格只投递一次。
