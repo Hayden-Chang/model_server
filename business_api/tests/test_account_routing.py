@@ -22,6 +22,11 @@ def test_compose_keeps_private_services_unpublished_and_uses_internal_credential
     assert overlay["business-api"]["environment"]["PLANNING_INTERNAL_SECRET"]==overlay["time-fragment-api"]["environment"]["PLANNING_INTERNAL_SECRET"]
     assert overlay["caddy"]["volumes"]==["./Caddyfile.accounts:/etc/caddy/Caddyfile:ro"]
     assert overlay["time-fragment-api"]["volumes"]==["model-server-usage:/var/lib/model-server:ro"]
+    rollback=overlay["quota-rollback"]
+    assert "ports" not in rollback
+    assert rollback["profiles"]==["rollback"]
+    assert rollback["volumes"]==["model-server-usage:/var/lib/model-server"]
+    assert set(rollback["environment"])=={"SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"}
     assert "SUPABASE_SERVICE_ROLE_KEY" not in base["business-api"]["environment"]
 
 

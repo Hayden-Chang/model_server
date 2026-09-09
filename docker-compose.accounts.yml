@@ -39,3 +39,16 @@ services:
       interval: 30s
       timeout: 25s
       retries: 3
+  # Opt-in one-off for the emergency rollback: writable legacy volume and only
+  # the two credentials the reverse export needs. It never publishes a port.
+  quota-rollback:
+    build:
+      context: ./business_api
+    profiles: ["rollback"]
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - model-server-usage:/var/lib/model-server

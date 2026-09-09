@@ -16,6 +16,7 @@ async function account() {
   return {...guest(),principal:'account:'+user.id,sessionID:device.session,device,user};
 }
 const rpc=(action,data={})=>db.rpc(null,'ai_quota_service',[action,data],'service_role');
+const serviceRpc=name=>db.rpc(null,name,[],'service_role');
 const reserve=(p, requestID=randomUUID(), extra={})=>rpc('reserve',{...p,requestID,bodyHash:hash,attempt:randomUUID(),...extra});
 const finish=(p,requestID,attempt,consume=true)=>rpc('finish',{...p,requestID,attempt,consume});
 async function use(p,count) {
@@ -165,4 +166,47 @@ test('admin resets preserve receipts and reject outstanding reservations',async(
   await finish(p,id,r.attempt);
   assert.equal((await rpc('admin_reset',{supportCode:p.supportCode})).used,0);
   assert.equal((await reserve(p,id)).code,'AI_REQUEST_ALREADY_COMPLETED');
+});
+
+test('rollback export returns guests only and excludes abandoned reservations',async()=>{
+  const g=guest(),a=await account();const ids=[randomUUID(),randomUUID()];
+  for(const id of ids){const r=await reserve(g,id);await finish(g,id,r.attempt);}
+  await use(a,3);
+  await reserve(g,randomUUID());
+  const snapshot=await serviceRpc('ai_quota_export_legacy');
+  assert.equal(typeof snapshot.exportedAt,'string');
+  const entry=snapshot.principals.find(p=>p.principal===g.principal);
+  assert.ok(entry,'guest must be exported');
+  assert.equal(entry.supportCode,g.supportCode);
+  assert.equal(entry.buckets.find(b=>b.period==='free').used,2);
+  assert.equal(entry.buckets.find(b=>b.period==='free').limit,50);
+  assert.deepEqual([...entry.completedRequests].sort(),[...ids].sort());
+  assert.equal(snapshot.principals.some(p=>p.principal===a.principal),false,'account must not enter the legacy export');
+  for(const role of ['anon','authenticated']){
+    await assert.rejects(db.rpc(a.device,'ai_quota_export_legacy',[],role),/permission denied/);
+    await assert.rejects(db.rpc(a.device,'ai_quota_rollback',[],role),/permission denied/);
+    await assert.rejects(db.rpc(a.device,'ai_quota_reset_import',[],role),/permission denied/);
+  }
+});
+
+test('rollback refunds reservations, closes the gate and clears guests before re-cutover',async()=>{
+  const g=guest(),a=await account();const done=randomUUID();
+  const consumed=await reserve(g,done);await finish(g,done,consumed.attempt);
+  const pendingId=randomUUID();await reserve(g,pendingId);
+  await reserve(a,randomUUID());
+  const closed=await serviceRpc('ai_quota_rollback');
+  assert.equal(closed.gateOpen,false);
+  assert.ok(closed.refundedReservations>=1);
+  assert.equal((await db.admin.query('select state from ai_private.requests where principal=$1 and request_id=$2',[g.principal,pendingId])).rows[0].state,'refunded');
+  assert.equal((await db.admin.query('select used from ai_private.buckets where principal=$1 and period=$2',[g.principal,'free'])).rows[0].used,1);
+  await assert.rejects(reserve(g),/AI_IMPORT_REQUIRED/);
+  const reset=await serviceRpc('ai_quota_reset_import');
+  assert.ok(reset.removedGuestPrincipals>0);
+  assert.equal((await db.admin.query('select count(*)::int n from ai_private.principals where id=$1',[g.principal])).rows[0].n,0);
+  assert.equal((await db.admin.query('select count(*)::int n from ai_private.principals where id=$1',[a.principal])).rows[0].n,1);
+  await rpc('import',{...g,limit:50,developmentEnabled:false,importHash:'rollback-restore',
+    buckets:[{period:'free',used:1}],completedRequests:[done]});
+  await rpc('finish_import');
+  assert.equal((await rpc('status',g)).used,1);
+  assert.equal((await reserve(g,done)).code,'AI_REQUEST_ALREADY_COMPLETED');
 });

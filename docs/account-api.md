@@ -68,8 +68,11 @@ internal path, and neither Python service publishes a host port. The generic
 business-key pipeline route also refuses Time Fragment pipelines in internal mode.
 Other generic pipelines and the observability dashboard remain available.
 
-1. Apply migration `202609090006_ai_quota.sql` after the five account/sync migrations.
-   It is additive. The new ledger starts closed until legacy import is completed.
+1. Apply migrations `202609090006_ai_quota.sql` and
+   `202609090007_ai_quota_rollback.sql` after the five account/sync migrations.
+   They are additive. The new ledger starts closed until legacy import is
+   completed; the second migration adds the service-role-only export and rollback
+   functions used by the emergency script.
 2. Configure `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, the legacy JWT
    `SUPABASE_SERVICE_ROLE_KEY`, and an independent random
    `PLANNING_INTERNAL_SECRET` in the server's protected environment. Preserve
@@ -79,7 +82,14 @@ Other generic pipelines and the observability dashboard remain available.
 
    ```sh
    docker compose -f docker-compose.yml -f docker-compose.accounts.yml config --quiet
-   docker compose -f docker-compose.yml -f docker-compose.accounts.yml build business-api time-fragment-api
+   docker compose -f docker-compose.yml -f docker-compose.accounts.yml --profile rollback \
+     build business-api time-fragment-api quota-rollback
+   ```
+
+   Before the window, confirm the rollback plan and keep the script executable:
+
+   ```sh
+   scripts/rollback-account-ai-cutover.sh --dry-run
    ```
 
 4. Schedule a short maintenance window and pause the existing AI probe. Stop
@@ -108,15 +118,45 @@ Other generic pipelines and the observability dashboard remain available.
    direct legacy planner routes. Resume the probe with this service configuration.
 
 After cutover, all commands that recreate services must use both Compose files.
-Do not roll back to the old SQLite quota authority after the new API has accepted
-traffic: its counters are now stale. Keep the new API/ledger during a planner
-rollback, or take the service offline and perform a separately reviewed reverse
-migration. Never run both public quota authorities concurrently.
+Never run both public quota authorities concurrently.
+
+## Emergency rollback
+
+`scripts/rollback-account-ai-cutover.sh` is the supported way to switch back. It
+stops the new public entrypoint, takes a consistent SQLite backup under
+`rollback-backups/<timestamp>/`, reverse-exports post-cutover guest usage from
+Postgres into the legacy database, closes the new ledger gate (refunding abandoned
+reservations), restores the base Compose topology and verifies `/health/live`
+plus guest-token issuance. The one-off `quota-rollback` profile service has a
+writable legacy volume but only the two credentials the reverse export needs; the
+running `time-fragment-api` keeps its read-only mount.
+
+```sh
+cd /opt/model_server
+scripts/rollback-account-ai-cutover.sh            # availability first
+scripts/rollback-account-ai-cutover.sh --strict   # abort if the reverse export fails
+```
+
+The default run still restores the legacy service when the reverse export fails,
+and exits nonzero so the warning is visible; that keeps the app working with
+slightly stale quota counters. `--skip-export` restores availability without
+merging post-cutover usage and is only for the case where the new ledger is
+unreachable and the quota drift is acceptable. `--no-reset-import` closes the gate
+but keeps the imported guest rows for inspection.
+
+After a successful rollback the new gate stays closed and imported guest rows are
+removed, so a later re-cutover re-imports the updated SQLite snapshot instead of
+hitting an import-hash clash. The legacy service is the only public quota
+authority until a re-cutover. If the reverse export failed, do not re-cutover until
+the missing usage is reconciled.
 
 ## Validation
 
 New database cases are in `supabase/tests/ai-quota.test.mjs`; API, internal-service,
 legacy-export and private-content cases are in `business_api/tests/test_account_api.py`.
+Rollback export/close behavior is covered by
+`business_api/tests/test_reverse_ai_quota_export.py` and the script contract by
+`business_api/tests/test_rollback_script.py`.
 `test_account_routing.py` starts a verified Caddy 2.11.4 binary on temporary local
 ports to exercise the actual matchers. Set `CADDY_BINARY` to enable that case.
 These tests use synthetic users/content and do not send mail or invoke a paid model.
