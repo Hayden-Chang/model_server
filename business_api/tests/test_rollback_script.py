@@ -33,6 +33,8 @@ def test_dry_run_prints_the_full_plan_without_creating_backups():
     result = run_script("--dry-run")
     assert result.returncode == 0, result.stderr
     assert "docker compose -f docker-compose.yml -f docker-compose.accounts.yml stop caddy time-fragment-api" in result.stdout
+    assert "--profile rollback run --rm --no-deps --user 0 -v" in result.stdout
+    assert "quota-rollback python -c import sqlite3" in result.stdout
     assert "--profile rollback run --rm --no-deps quota-rollback python -m app.reverse_ai_quota_export --step export" in result.stdout
     assert "--profile rollback run --rm --no-deps quota-rollback python -m app.reverse_ai_quota_export --step close --reset-import" in result.stdout
     assert "docker compose -f docker-compose.yml up -d" in result.stdout
