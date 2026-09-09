@@ -1,0 +1,21 @@
+[Unit]
+Description=Public AI planning synthetic probe
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/model-server-hourly-probe/probe.env
+LoadCredential=admin-key:/etc/model-server-hourly-probe/admin-key
+Environment=PROBE_ADMIN_KEY_FILE=%d/admin-key
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/model-server-hourly-probe/probe-ai-planning.py
+TimeoutStartSec=150
+StateDirectory=model-server-hourly-probe
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=96M

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check public AI planning once every hour
+
+[Timer]
+OnCalendar=hourly
+AccuracySec=1s
+Persistent=false
+Unit=model-server-hourly-probe.service
+
+[Install]
+WantedBy=timers.target
