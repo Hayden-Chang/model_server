@@ -179,3 +179,20 @@ def test_credentials_only_target_a_pathless_https_origin(url):
 
 def test_redirects_never_forward_credentials_to_another_origin():
     assert PROBE.NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.invalid") is None
+
+
+def test_systemd_credentials_directory_supports_quota_recovery(tmp_path, monkeypatch, capsys):
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    (credentials / "admin-key").write_text("private-admin-key")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credentials))
+    monkeypatch.delenv("PROBE_ADMIN_KEY_FILE", raising=False)
+    monkeypatch.setenv("PROBE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("PROBE_DEVICE_ID", DEVICE)
+    monkeypatch.setenv("PROBE_SUPPORT_CODE", CODE)
+    http = FakeHTTP(429, {"code": "AI_QUOTA_EXHAUSTED", "supportCode": CODE})
+    monkeypatch.setattr(PROBE, "HTTPClient", lambda base: http)
+    assert PROBE.main() == 0
+    assert json.loads(capsys.readouterr().out)["probeQuotaReset"] is True
+    assert http.calls[3][0] == "/admin/time-fragment/quotas/" + CODE + "/reset"
+    assert http.calls[3][2] == "private-admin-key"

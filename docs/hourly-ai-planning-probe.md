@@ -33,7 +33,10 @@ PROBE_SUPPORT_CODE=<support code bound to this exact probe identity>
 
 Provision the existing API's admin credential locally on the server in a
 mode-0600 `admin-key` file in that directory; never copy credentials into Git or
-terminal output. The service uses systemd credentials and a dynamic user.
+terminal output. The service uses systemd credentials and a dynamic user. The
+script reads `CREDENTIALS_DIRECTORY`, including on systemd 249; `PROBE_ADMIN_KEY_FILE`
+can provide an explicit file path for non-systemd execution. The `/opt` asset
+directory must be mode 0755 so the dynamic user can read the scripts.
 
 Bootstrap with the dedicated identity and obtain its support code from the
 server's quota registry, matching the exact guest principal derived from this

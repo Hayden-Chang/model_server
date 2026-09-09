@@ -144,10 +144,13 @@ def main():
             return 0
         previous = json.loads((directory / "latest.json").read_text()) if (directory / "latest.json").exists() else {}
         started, now = time.monotonic(), datetime.now(ZoneInfo("Asia/Shanghai"))
+        admin_key_file = os.environ.get("PROBE_ADMIN_KEY_FILE")
+        if not admin_key_file and os.environ.get("CREDENTIALS_DIRECTORY"):
+            admin_key_file = str(Path(os.environ["CREDENTIALS_DIRECTORY"]) / "admin-key")
         try:
             result = check(HTTPClient(os.environ.get("PROBE_BASE_URL", "https://api.keeline.xyz")),
                            os.environ.get("PROBE_DEVICE_ID", ""), now,
-                           os.environ.get("PROBE_SUPPORT_CODE", ""), os.environ.get("PROBE_ADMIN_KEY_FILE"))
+                           os.environ.get("PROBE_SUPPORT_CODE", ""), admin_key_file)
         except ProbeFailure as error:
             result = {"status": "unhealthy", "stage": error.stage, "code": error.code, "httpStatus": error.status}
         except OSError:
