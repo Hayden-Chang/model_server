@@ -10,6 +10,7 @@ from .contracts import (
     TimeFragmentExtractedAddOperation,
     TimeFragmentExtractedOperations,
     TimeFragmentModelAddOperation,
+    TimeFragmentModelMoveOperation,
     TimeFragmentModelOperations,
     TimeFragmentPlacement,
     TimeFragmentPlanItem,
@@ -121,6 +122,27 @@ def _has_omitted_source_clock(text: str, source: str) -> bool:
                 and not _NEGATION.search(_clause(text, token.start()))
             ):
                 return True
+    return False
+
+
+def has_requested_move_clock(
+    text: str, operation: TimeFragmentModelMoveOperation, target: TimeFragmentPlanItem | None,
+) -> bool:
+    if target is None or operation.placement is None:
+        return False
+    quote_spans = _quote_spans(text, operation.authorization_text or "")
+    for token in _CLOCK.finditer(text):
+        clause = _clause(text, token.start())
+        if _is_global_clock(text, token.start()) or _NEGATION.search(clause):
+            continue
+        identifies_target = target.title in clause or target.item_id in clause or any(
+            start <= token.start() and token.end() <= end for start, end in quote_spans
+        )
+        if identifies_target and any(
+            _round_minutes_to_slot(value) == operation.placement.slot
+            for value in _possible_minutes(token.group())
+        ):
+            return True
     return False
 
 
