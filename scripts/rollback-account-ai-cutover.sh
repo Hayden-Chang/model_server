@@ -104,7 +104,7 @@ if [ "$dry_run" -eq 0 ]; then
   mkdir -p "$backup_dir"
 fi
 compose_rollback run --rm --no-deps -v "${backup_dir}:/backup" quota-rollback \
-  python -c "import sqlite3; src=sqlite3.connect('/var/lib/model-server/usage.sqlite3'); dst=sqlite3.connect('/backup/usage.sqlite3'); src.backup(dst); dst.close(); src.close(); print('backup ok')"
+  python -c "import sqlite3; src=sqlite3.connect('/var/lib/model-server/usage.sqlite3',timeout=30); dst=sqlite3.connect('/backup/usage.sqlite3',timeout=30); src.backup(dst); dst.close(); src.close(); print('backup ok')"
 if [ "$dry_run" -eq 0 ] && [ ! -s "$backup_file" ]; then
   echo "backup verification failed: ${backup_file}" >&2
   exit 1
