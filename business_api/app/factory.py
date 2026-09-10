@@ -464,11 +464,23 @@ def create_app(
                 (authorization or "").removeprefix("Bearer "), body)
         except ValueError as error:
             raise HTTPException(401, detail={"code": "UNAUTHORIZED"}) from error
-        tracker = TrackedModelClient(client)
+        diagnostic_trace_id = claims.get("diagnosticTraceID")
+        capture_content = (
+            isinstance(diagnostic_trace_id, str)
+            and diagnostic_trace_id == request.state.request_id
+        )
+        tracker = TrackedModelClient(client, capture_http=capture_content)
         started_at, started_clock = datetime.now(timezone.utc), time.perf_counter()
         status_code = 200
+        response_content: Any | None = None
         try:
-            return await execute_time_fragment_plan(tracker, payload, max_input_chars=settings.max_input_chars)
+            response = await execute_time_fragment_plan(
+                tracker,
+                payload,
+                max_input_chars=settings.max_input_chars,
+            )
+            response_content = response.model_dump(mode="json", by_alias=True)
+            return response
         except TimeFragmentRequestInvalid as error:
             status_code = 422
             raise HTTPException(422, detail={"code": error.code, "message": error.message}) from error
@@ -485,12 +497,28 @@ def create_app(
             status_code = 500
             raise
         finally:
-            tracker.calls = [replace(call, input_content="", output_content=None, error_message=None)
-                             for call in tracker.calls]
+            if not capture_content:
+                tracker.calls = [
+                    replace(
+                        call,
+                        input_content="",
+                        output_content=None,
+                        error_message=None,
+                        request_method=None,
+                        request_url=None,
+                        request_headers=None,
+                        request_body=None,
+                        response_status_code=None,
+                        response_body=None,
+                    )
+                    for call in tracker.calls
+                ]
             persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
                 route="/internal/time-fragment/plan", pipeline="time-fragment-plan-v2",
                 started_at=started_at, started_clock=started_clock, status_code=status_code,
-                request_content=None, response_content=None, tracker=tracker)
+                request_content=body if capture_content else None,
+                response_content=response_content if capture_content else None,
+                tracker=tracker)
 
     @app.post(
         "/v1/pipelines/{pipeline_id}:run",
@@ -563,6 +591,10 @@ def create_app(
         dependencies=[Depends(require_admin_key)],
     )
     async def list_observability_requests(
+        request_id: Annotated[
+            str | None,
+            Query(min_length=1, max_length=128, pattern=REQUEST_ID_PATTERN.pattern),
+        ] = None,
         device_id: Annotated[
             str | None,
             Query(min_length=16, max_length=200, pattern=DEVICE_ID_PATTERN),
@@ -576,6 +608,7 @@ def create_app(
         resolved_device = _resolve_device_filter(guest_tokens, device_id, device_key)
         _validate_time_range(start_time, end_time)
         records, total = store.list_requests(
+            request_id=request_id,
             device_key=resolved_device,
             start_time=start_time,
             end_time=end_time,

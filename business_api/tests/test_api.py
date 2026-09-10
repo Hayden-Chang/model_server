@@ -193,6 +193,59 @@ def test_litellm_client_forwards_pipeline_thinking_mode(
     assert recorder.request_json.get("thinking") == expected_thinking
 
 
+def test_litellm_http_trace_matches_exact_online_request_without_secret(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_body = {
+        "choices": [{"message": {"content": '{"operations":[]}'}}],
+        "model": "deepseek-chat",
+        "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+    }
+
+    class StubResponse:
+        status_code = 200
+        is_success = True
+
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return response_body
+
+    class RecordingAsyncClient:
+        url: str | None = None
+        request_headers: dict[str, str] | None = None
+        request_json: dict[str, Any] | None = None
+
+        async def __aenter__(self) -> "RecordingAsyncClient":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> StubResponse:
+            self.url=url;self.request_headers=headers;self.request_json=json
+            return StubResponse()
+
+    recorder=RecordingAsyncClient()
+    monkeypatch.setattr("app.model_client.httpx.AsyncClient",lambda **_:recorder)
+    pipeline=get_pipeline("time-fragment-plan-v2")
+    assert pipeline is not None
+    ordinary=asyncio.run(LiteLLMClient(settings).complete(pipeline,"五点吃饭"))
+    traced=asyncio.run(LiteLLMClient(settings).complete_with_http_trace(pipeline,"五点吃饭"))
+
+    assert ordinary.http_exchange is None
+    assert traced.http_exchange is not None
+    assert traced.http_exchange.request_url==recorder.url=="http://litellm:4000/v1/chat/completions"
+    assert traced.http_exchange.request_body==recorder.request_json
+    assert traced.http_exchange.response_body==response_body
+    assert traced.http_exchange.response_status_code==200
+    assert traced.http_exchange.request_headers=={
+        "Authorization":"Bearer ${LITELLM_MASTER_KEY}",
+        "Content-Type":"application/json",
+    }
+    assert "litellm-test-key" not in str(traced.http_exchange)
+
+
 def test_structured_pipeline_validates_and_returns_object(settings: Settings) -> None:
     fake = FakeModelClient(
         output=ModelOutput(

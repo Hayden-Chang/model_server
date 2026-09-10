@@ -264,6 +264,7 @@ Time Fragment 路由没有应用层请求频率限制、限流状态或限流缓
 ```text
 GET /admin/observability/requests
 GET /admin/observability/summary
+POST /admin/time-fragment/diagnostics/trace-token
 ```
 
 两者只接受独立的 `ADMIN_API_KEY`。明细接口可通过原始 `device_id`（服务现场计算摘要）
@@ -271,8 +272,13 @@ GET /admin/observability/summary
 聚合接口返回整体和逐设备的请求数、成功/失败数、模型调用数、Token 合计、Token
 上报请求数、平均耗时以及首次/最近请求时间。
 
-原始业务请求、业务响应、模型输入和模型输出默认保留 30 天，之后置空；设备摘要、
-状态、耗时和 Token 元数据继续保留。鉴权头和 Bearer Token 不进入 SQLite。
+Account API 链路默认不保存业务正文。管理员可以为单个 `device_id` 和 `trace_id`
+签发 15 分钟诊断令牌；Debug App 同时发送该令牌和相同的 `X-Request-ID` 后，只有这一
+条请求会保存完整业务请求/响应、模型输入/输出，以及 Business API 与 LiteLLM 之间
+实际交换的 HTTP 请求体和原始返回。令牌不能用于其他设备或请求 ID。
+
+诊断正文默认保留 30 天，之后置空；设备摘要、状态、耗时和 Token 元数据继续保留。
+真实鉴权头和 Bearer Token 不进入 SQLite，LiteLLM 头只保存环境变量占位符。
 
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
 

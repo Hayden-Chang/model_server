@@ -80,6 +80,12 @@ class UsageStore:
                     usage_complete INTEGER NOT NULL CHECK (usage_complete IN (0, 1)),
                     error_type TEXT,
                     error_message TEXT,
+                    request_method TEXT,
+                    request_url TEXT,
+                    request_headers TEXT,
+                    request_body TEXT,
+                    response_status_code INTEGER,
+                    response_body TEXT,
                     UNIQUE(inference_request_id, call_index)
                 );
                 CREATE INDEX IF NOT EXISTS idx_inference_device_started
@@ -92,7 +98,26 @@ class UsageStore:
                     ON model_calls(completed_at);
                 """
             )
+            self._ensure_model_call_trace_columns()
             self._connection.commit()
+
+    def _ensure_model_call_trace_columns(self) -> None:
+        existing = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(model_calls)").fetchall()
+        }
+        for name, data_type in (
+            ("request_method", "TEXT"),
+            ("request_url", "TEXT"),
+            ("request_headers", "TEXT"),
+            ("request_body", "TEXT"),
+            ("response_status_code", "INTEGER"),
+            ("response_body", "TEXT"),
+        ):
+            if name not in existing:
+                self._connection.execute(
+                    f"ALTER TABLE model_calls ADD COLUMN {name} {data_type}"
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -135,8 +160,9 @@ class UsageStore:
                     inference_request_id, call_index, pipeline, started_at, completed_at,
                     duration_ms, input_content, output_content, provider_model,
                     prompt_tokens, completion_tokens, total_tokens, usage_complete,
-                    error_type, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    error_type, error_message, request_method, request_url,
+                    request_headers, request_body, response_status_code, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [_call_values(inference_id, call) for call in capture.model_calls],
             )
@@ -147,21 +173,27 @@ class UsageStore:
                 (_utc_iso(cutoff),),
             )
             self._connection.execute(
-                """UPDATE model_calls SET input_content = NULL, output_content = NULL
-                WHERE completed_at < ? AND (input_content IS NOT NULL OR output_content IS NOT NULL)""",
+                """UPDATE model_calls SET input_content = NULL, output_content = NULL,
+                request_headers = NULL, request_body = NULL, response_body = NULL
+                WHERE completed_at < ? AND (
+                    input_content IS NOT NULL OR output_content IS NOT NULL
+                    OR request_headers IS NOT NULL OR request_body IS NOT NULL
+                    OR response_body IS NOT NULL
+                )""",
                 (_utc_iso(cutoff),),
             )
 
     def list_requests(
         self,
         *,
+        request_id: str | None = None,
         device_key: str | None,
         start_time: datetime | None,
         end_time: datetime | None,
         limit: int,
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]:
-        where, parameters = _filters(device_key, start_time, end_time)
+        where, parameters = _filters(device_key, start_time, end_time, request_id=request_id)
         with self._lock:
             total = int(
                 self._connection.execute(
@@ -252,6 +284,12 @@ def _call_values(inference_id: int, call: ModelCallCapture) -> tuple[Any, ...]:
         int(call.usage_complete),
         call.error_type,
         call.error_message,
+        call.request_method,
+        call.request_url,
+        None if call.request_headers is None else _json_dump(call.request_headers),
+        None if call.request_body is None else _json_dump(call.request_body),
+        call.response_status_code,
+        None if call.response_body is None else _json_dump(call.response_body),
     )
 
 
@@ -259,10 +297,13 @@ def _filters(
     device_key: str | None,
     start_time: datetime | None,
     end_time: datetime | None,
+    *,
+    request_id: str | None = None,
 ) -> tuple[str, tuple[Any, ...]]:
     conditions: list[str] = []
     parameters: list[Any] = []
     for column, operator, value in (
+        ("request_id", "=", request_id),
         ("device_key", "=", device_key),
         ("started_at", ">=", None if start_time is None else _utc_iso(start_time)),
         ("started_at", "<", None if end_time is None else _utc_iso(end_time)),
@@ -287,6 +328,12 @@ def _model_call_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "usage_complete": bool(row["usage_complete"]),
         "error_type": row["error_type"],
         "error_message": row["error_message"],
+        "request_method": row["request_method"],
+        "request_url": row["request_url"],
+        "request_headers": _json_load(row["request_headers"]),
+        "request_body": _json_load(row["request_body"]),
+        "response_status_code": row["response_status_code"],
+        "response_body": _json_load(row["response_body"]),
     }
 
 

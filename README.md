@@ -166,8 +166,9 @@ guest credentials. Observability endpoints are read-only; quota reset endpoints
 mutate only the installation quota ledger:
 
 ```text
-GET /admin/observability/requests?device_id=<installation-id>&start_time=<ISO-8601>&end_time=<ISO-8601>
+GET /admin/observability/requests?request_id=<request-id>&device_id=<installation-id>&start_time=<ISO-8601>&end_time=<ISO-8601>
 GET /admin/observability/summary?device_key=<guest-key>&start_time=<ISO-8601>&end_time=<ISO-8601>
+POST /admin/time-fragment/diagnostics/trace-token
 GET /admin/time-fragment/quotas/<support-code>
 POST /admin/time-fragment/quotas/<support-code>/reset
 POST /admin/time-fragment/quotas/reset-all
@@ -178,12 +179,23 @@ reported the support code. The reset-all operation starts fresh buckets lazily
 on each installation's next AI request. Both the quota ledger and observability
 records live in the existing `model-server-usage` SQLite volume.
 
+The account-aware Time Fragment route redacts request and model content by
+default. A one-run chain report can request a 15-minute diagnostic token from
+`POST /admin/time-fragment/diagnostics/trace-token` with `device_id` and
+`trace_id`. The Debug App must then send that token as `X-AI-Trace-Token` and
+the same trace ID as `X-Request-ID`. The token is signed, bound to the guest
+principal derived from that device ID, and rejected for another device or
+request ID. Only that request retains its complete business request/response,
+model input/output, and the exact HTTP request/response exchanged with LiteLLM.
+The stored Authorization header is always the literal
+`Bearer ${LITELLM_MASTER_KEY}`, never the real key.
+
 Open `https://${PUBLIC_IP}/admin/observability` for the browser dashboard. The
 page itself contains no data or credentials. Enter `ADMIN_API_KEY` in the login
 form; the key is kept only in that tab's `sessionStorage` and sent as a Bearer
 header to the management endpoints. It is never placed in the URL.
 
-Raw API and model-call content is removed after
+Opt-in raw API, LiteLLM request/response, and model-call content is removed after
 `USAGE_CONTENT_RETENTION_DAYS` (30 by default). Device, status, timing, model-call
 count, and token metadata remain. Authorization headers and Bearer tokens are
 never persisted. The SQLite database lives in a dedicated Docker volume.

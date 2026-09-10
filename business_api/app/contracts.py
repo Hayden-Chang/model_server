@@ -52,6 +52,12 @@ class ModelCallRecord(BaseModel):
     usage_complete: bool
     error_type: str | None
     error_message: str | None
+    request_method: str | None = None
+    request_url: str | None = None
+    request_headers: dict[str, str] | None = None
+    request_body: dict[str, Any] | None = None
+    response_status_code: int | None = None
+    response_body: dict[str, Any] | None = None
 
 
 class UsageRecordResponse(BaseModel):
@@ -115,6 +121,18 @@ class TimeFragmentGuestResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
+
+
+class TimeFragmentDiagnosticTraceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str = Field(min_length=16, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    trace_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+class TimeFragmentDiagnosticTraceResponse(BaseModel):
+    trace_token: str
+    expires_in: int = 900
 
 
 class TimeFragmentQuotaStatusResponse(BaseModel):

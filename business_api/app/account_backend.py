@@ -174,9 +174,21 @@ class AccountBackend:
         result.pop("period", None)
         return result
 
-    async def plan(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
+    async def plan(
+        self,
+        actor: Actor,
+        payload: dict,
+        attempt: str,
+        request_id: str,
+        diagnostic_trace_id: str | None = None,
+    ) -> dict:
         started, response = time.perf_counter(), None
-        token = self.credentials.issue(actor.principal, payload, attempt)
+        token = self.credentials.issue(
+            actor.principal,
+            payload,
+            attempt,
+            diagnostic_trace_id=diagnostic_trace_id,
+        )
         try:
             response = await self.http.post(str(self.settings.planning_base_url).rstrip("/") + "/internal/time-fragment/plan",
                                             json=payload,
