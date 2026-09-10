@@ -28,6 +28,12 @@ def model_call(
         usage_complete=usage is not None,
         error_type=None,
         error_message=None,
+        request_method="POST",
+        request_url="http://litellm:4000/v1/chat/completions",
+        request_headers={"Authorization": "Bearer ${LITELLM_MASTER_KEY}"},
+        request_body={"model": "deepseek/deepseek-flash", "messages": []},
+        response_status_code=200,
+        response_body={"model": "deepseek-chat", "choices": []},
     )
 
 
@@ -92,6 +98,18 @@ def test_records_nested_model_calls_and_filters_and_aggregates_by_device() -> No
     }
     assert [call["call_index"] for call in records[0]["model_calls"]] == [1, 2]
     assert records[0]["model_calls"][1]["input_content"] == '{"text":"安排任务"}'
+    assert records[0]["model_calls"][1]["request_body"]["model"] == "deepseek/deepseek-flash"
+    assert records[0]["model_calls"][1]["response_body"]["model"] == "deepseek-chat"
+    by_request, request_total = store.list_requests(
+        request_id="request-a",
+        device_key=None,
+        start_time=None,
+        end_time=None,
+        limit=10,
+        offset=0,
+    )
+    assert request_total == 1
+    assert by_request[0]["request_id"] == "request-a"
     assert totals["request_count"] == 2
     assert totals["model_call_count"] == 3
     assert totals["total_tokens"] == 54
@@ -116,6 +134,11 @@ def test_content_retention_redacts_payloads_but_keeps_usage_metadata() -> None:
     assert records[0]["response_content"] is None
     assert records[0]["model_calls"][0]["input_content"] is None
     assert records[0]["model_calls"][0]["output_content"] is None
+    assert records[0]["model_calls"][0]["request_headers"] is None
+    assert records[0]["model_calls"][0]["request_body"] is None
+    assert records[0]["model_calls"][0]["response_body"] is None
+    assert records[0]["model_calls"][0]["request_url"] == "http://litellm:4000/v1/chat/completions"
+    assert records[0]["model_calls"][0]["response_status_code"] == 200
     assert records[0]["usage"]["total_tokens"] == 14
 
 

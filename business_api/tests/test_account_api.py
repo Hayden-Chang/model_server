@@ -19,9 +19,11 @@ from app.migrate_guest_quota import snapshots
 from app.planning_auth import PlanningCredentials, body_hash
 from app.quota_store import QuotaStore
 from app.usage_store import UsageStore
-from app.model_client import ModelGatewayUnavailable, ModelGatewayResponseError
+from app.model_client import (ModelGatewayUnavailable, ModelGatewayResponseError,
+                              ModelHTTPExchange)
 from test_time_fragment_api import (settings, FakeModelClient, request_payload, operations_output,
-                                    raw_output, guest_headers, TOKEN_SECRET, ADMIN_KEY, API_KEY)
+                                    model_add, raw_output, guest_headers, TOKEN_SECRET, ADMIN_KEY,
+                                    API_KEY)
 
 SECRET = "independent-private-planning-secret-with-32-characters"
 ACCOUNT = Actor("account:" + str(uuid4()), str(uuid4()))
@@ -59,8 +61,8 @@ class Backend:
             raise self.quota_error
         return {"supportCode":"TF-AAAA-AAAA","used":1,"limit":50,"remaining":49,"enabled":False}
 
-    async def plan(self, actor, payload, attempt, request_id):
-        self.calls.append(("plan",actor,payload,attempt,request_id))
+    async def plan(self, actor, payload, attempt, request_id, diagnostic_trace_id=None):
+        self.calls.append(("plan",actor,payload,attempt,request_id,diagnostic_trace_id))
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
@@ -165,6 +167,40 @@ def test_admin_quota_still_requires_admin_key(configuration):
         assert client.post("/admin/time-fragment/quotas/reset-all",headers={"Authorization":raw}).status_code==401
         backend.quota_error=failure("AI_REQUEST_IN_PROGRESS",409)
         assert client.post("/admin/time-fragment/quotas/reset-all",headers={"Authorization":"Bearer "+ADMIN_KEY}).status_code==409
+
+
+def test_admin_issues_device_bound_diagnostic_trace_token(configuration):
+    backend=Backend()
+    trace_id="ai-chain-report-123"
+    with TestClient(create_account_api(configuration,backend)) as client:
+        assert client.post("/admin/time-fragment/diagnostics/trace-token",
+                           json={"device_id":DEVICE,"trace_id":trace_id}).status_code==401
+        issued=client.post("/admin/time-fragment/diagnostics/trace-token",
+                           headers={"Authorization":"Bearer "+ADMIN_KEY},
+                           json={"device_id":DEVICE,"trace_id":trace_id})
+        assert issued.status_code==200
+        assert issued.json()["expires_in"]==900
+        token=issued.json()["trace_token"]
+        planned=client.post("/api/plan/parse",
+                            headers={**guest_headers(client,DEVICE),"X-Request-ID":trace_id,
+                                     "X-AI-Trace-Token":token},json=request_payload())
+        assert planned.status_code==200
+        assert next(call for call in backend.calls if call[0]=="plan")[5]==trace_id
+
+
+def test_diagnostic_trace_token_rejects_other_device_or_request_id(configuration):
+    backend=Backend();trace_id="ai-chain-report-123"
+    with TestClient(create_account_api(configuration,backend)) as client:
+        issued=client.post("/admin/time-fragment/diagnostics/trace-token",
+                           headers={"Authorization":"Bearer "+ADMIN_KEY},
+                           json={"device_id":DEVICE,"trace_id":trace_id})
+        token=issued.json()["trace_token"]
+        for device_id,request_id in (("different-test-device-1234",trace_id),(DEVICE,"other-request-id")):
+            result=client.post("/api/plan/parse",
+                               headers={**guest_headers(client,device_id),"X-Request-ID":request_id,
+                                        "X-AI-Trace-Token":token},json=request_payload())
+            assert result.status_code==401
+    assert not any(call[0]=="plan" for call in backend.calls)
 
 
 def test_request_id_is_echoed_when_valid_and_replaced_when_invalid(configuration):
@@ -394,6 +430,49 @@ def test_internal_observability_retains_usage_but_not_account_content(settings,c
         dump="\n".join(db.iterdump())
         assert "PRIVATE_ACCOUNT_TEXT" not in dump
         assert ACCOUNT.principal in dump
+
+
+def test_internal_diagnostic_trace_retains_exact_model_http_exchange(settings,configuration,tmp_path):
+    path=tmp_path/"usage.sqlite3";store=UsageStore(str(path),30)
+    output=operations_output([
+        model_add("吃饭","五点吃饭",duration_slots=4,start_time="17:00",start_evidence="五点")
+    ],usage={"prompt_tokens":10,"completion_tokens":20,"total_tokens":30})
+
+    class TracedModelClient(FakeModelClient):
+        async def complete_with_http_trace(self,pipeline,user_input):
+            result=await self.complete(pipeline,user_input)
+            return result.__class__(content=result.content,provider_model=result.provider_model,usage=result.usage,
+                http_exchange=ModelHTTPExchange(request_method="POST",
+                    request_url="http://litellm:4000/v1/chat/completions",
+                    request_headers={"Authorization":"Bearer ${LITELLM_MASTER_KEY}","Content-Type":"application/json"},
+                    request_body={"model":"deepseek/deepseek-flash","messages":[{"role":"user","content":user_input}],
+                                  "temperature":0.0,"max_tokens":20000,"thinking":{"type":"disabled"},
+                                  "response_format":{"type":"json_object"}},
+                    response_status_code=200,
+                    response_body={"choices":[{"message":{"content":result.content}}],"model":"deepseek-chat"}))
+
+    model=TracedModelClient([output]);payload=request_payload(text="五点吃饭")
+    trace_id="ai-chain-report-123"
+    cred=PlanningCredentials(SECRET).issue(ACCOUNT.principal,payload,str(uuid4()),diagnostic_trace_id=trace_id)
+    configured=settings.model_copy(update={"planning_internal_secret":configuration.planning_internal_secret})
+    with TestClient(create_app(configured,model,usage_store=store)) as client:
+        result=client.post("/internal/time-fragment/plan",json=payload,
+                           headers={"Authorization":"Bearer "+cred,"X-Request-ID":trace_id})
+        assert result.status_code==200
+        record=client.get("/admin/observability/requests",headers={"Authorization":"Bearer "+ADMIN_KEY},
+                          params={"request_id":trace_id}).json()["records"][0]
+    assert record["request_content"]["text"]=="五点吃饭"
+    assert record["response_content"]==result.json()
+    call=record["model_calls"][0]
+    assert call["input_content"]==model.calls[0][1]
+    assert call["output_content"]==output.content
+    assert call["duration_ms"]>=0
+    assert call["request_method"]=="POST"
+    assert call["request_url"]=="http://litellm:4000/v1/chat/completions"
+    assert call["request_headers"]["Authorization"]=="Bearer ${LITELLM_MASTER_KEY}"
+    assert call["request_body"]["messages"][0]["content"]==model.calls[0][1]
+    assert call["response_status_code"]==200
+    assert call["response_body"]["model"]=="deepseek-chat"
 
 
 def test_legacy_snapshot_preserves_free_member_counts_and_receipts(tmp_path):

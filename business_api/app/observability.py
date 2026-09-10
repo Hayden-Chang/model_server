@@ -28,11 +28,18 @@ class ModelCallCapture:
     usage_complete: bool
     error_type: str | None
     error_message: str | None
+    request_method: str | None = None
+    request_url: str | None = None
+    request_headers: dict[str, str] | None = None
+    request_body: dict[str, Any] | None = None
+    response_status_code: int | None = None
+    response_body: dict[str, Any] | None = None
 
 
 class TrackedModelClient:
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, capture_http: bool = False) -> None:
         self._client = client
+        self._capture_http = capture_http
         self.calls: list[ModelCallCapture] = []
 
     async def complete(self, pipeline: Any, user_input: str) -> ModelOutput:
@@ -40,7 +47,11 @@ class TrackedModelClient:
         started_clock = time.perf_counter()
         call_index = len(self.calls) + 1
         try:
-            output = await self._client.complete(pipeline, user_input)
+            traced_complete = getattr(self._client, "complete_with_http_trace", None)
+            if self._capture_http and traced_complete is not None:
+                output = await traced_complete(pipeline, user_input)
+            else:
+                output = await self._client.complete(pipeline, user_input)
         except (Exception, asyncio.CancelledError) as error:
             completed_at = datetime.now(timezone.utc)
             self.calls.append(
@@ -63,6 +74,7 @@ class TrackedModelClient:
 
         completed_at = datetime.now(timezone.utc)
         usage, usage_complete = normalize_usage(output.usage)
+        exchange = output.http_exchange if self._capture_http else None
         self.calls.append(
             ModelCallCapture(
                 call_index=call_index,
@@ -77,6 +89,12 @@ class TrackedModelClient:
                 usage_complete=usage_complete,
                 error_type=None,
                 error_message=None,
+                request_method=None if exchange is None else exchange.request_method,
+                request_url=None if exchange is None else exchange.request_url,
+                request_headers=None if exchange is None else exchange.request_headers,
+                request_body=None if exchange is None else exchange.request_body,
+                response_status_code=None if exchange is None else exchange.response_status_code,
+                response_body=None if exchange is None else exchange.response_body,
             )
         )
         return output

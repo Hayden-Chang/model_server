@@ -16,10 +16,21 @@ class ModelGatewayResponseError(Exception):
 
 
 @dataclass(frozen=True)
+class ModelHTTPExchange:
+    request_method: str
+    request_url: str
+    request_headers: dict[str, str]
+    request_body: dict[str, Any]
+    response_status_code: int
+    response_body: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ModelOutput:
     content: str
     provider_model: str | None
     usage: dict[str, Any] | None
+    http_exchange: ModelHTTPExchange | None = None
 
 
 class LiteLLMClient:
@@ -39,6 +50,18 @@ class LiteLLMClient:
             return False
 
     async def complete(self, pipeline: Pipeline, user_input: str) -> ModelOutput:
+        return await self._complete(pipeline, user_input, capture_http=False)
+
+    async def complete_with_http_trace(self, pipeline: Pipeline, user_input: str) -> ModelOutput:
+        return await self._complete(pipeline, user_input, capture_http=True)
+
+    async def _complete(
+        self,
+        pipeline: Pipeline,
+        user_input: str,
+        *,
+        capture_http: bool,
+    ) -> ModelOutput:
         payload: dict[str, Any] = {
             "model": self._settings.litellm_model_alias,
             "messages": pipeline.messages(user_input),
@@ -97,6 +120,17 @@ class LiteLLMClient:
             content=content,
             provider_model=body.get("model"),
             usage=usage if isinstance(usage, dict) else None,
+            http_exchange=ModelHTTPExchange(
+                request_method="POST",
+                request_url=url,
+                request_headers={
+                    "Authorization": "Bearer ${LITELLM_MASTER_KEY}",
+                    "Content-Type": "application/json",
+                },
+                request_body=payload,
+                response_status_code=response.status_code,
+                response_body=body,
+            ) if capture_http else None,
         )
 
     def _authorization_header(self) -> dict[str, str]:

@@ -14,11 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .account_backend import (SAFE_ERROR_CODES, AccountAPISettings, AccountBackend, Actor,
                               failure, support_code)
 from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipResponse,
+                        TimeFragmentDiagnosticTraceRequest, TimeFragmentDiagnosticTraceResponse,
                         TimeFragmentGuestRequest, TimeFragmentGuestResponse,
                         TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2,
                         TimeFragmentQuotaStatusResponse, TimeFragmentQuotaResetAllResponse)
 from .guest_auth import GuestTokenCodec, GuestTokenError
-from .planning_auth import body_hash
+from .planning_auth import PlanningCredentials, body_hash
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 LOGGER = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class ClaimGuestRequest(BaseModel):
 def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     backend = backend or AccountBackend(settings)
     tokens = GuestTokenCodec(settings.time_fragment_token_secret.get_secret_value(), settings.time_fragment_token_ttl_seconds)
+    planning_credentials = PlanningCredentials(settings.planning_internal_secret.get_secret_value())
     development = frozenset(tokens.device_key(value.strip())
                             for value in settings.time_fragment_development_device_ids.split(",") if value.strip())
     development_support = frozenset(support_code(value) for value in development)
@@ -140,14 +142,32 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         payload: TimeFragmentPlanRequestV2,
         request: Request,
         current: Actor = Depends(actor),
+        diagnostic_trace_token: str | None = Header(default=None, alias="X-AI-Trace-Token"),
     ):
+        diagnostic_trace_id = None
+        if diagnostic_trace_token is not None:
+            try:
+                diagnostic_trace_id = planning_credentials.verify_diagnostic(
+                    diagnostic_trace_token,
+                    current.principal,
+                )
+            except ValueError as error:
+                raise failure("UNAUTHORIZED", 401) from error
+            if diagnostic_trace_id != request.state.request_id:
+                raise failure("UNAUTHORIZED", 401)
         body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         attempt = str(uuid4())
         await quota("reserve", current, diagnostic_request_id=request.state.request_id,
                     requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
         try:
             response = TimeFragmentPlanResponseV2.model_validate(
-                await backend.plan(current, body, attempt, request.state.request_id)
+                await backend.plan(
+                    current,
+                    body,
+                    attempt,
+                    request.state.request_id,
+                    diagnostic_trace_id,
+                )
             )
             if response.request_id != payload.request_id:
                 raise ValueError("response request mismatch")
@@ -158,6 +178,19 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         await quota("finish", current, diagnostic_request_id=request.state.request_id,
                     requestID=payload.request_id, attempt=attempt, consume=response.proposal is not None)
         return response
+
+    @app.post(
+        "/admin/time-fragment/diagnostics/trace-token",
+        response_model=TimeFragmentDiagnosticTraceResponse,
+        dependencies=[Depends(admin)],
+    )
+    async def diagnostic_trace_token(
+        payload: TimeFragmentDiagnosticTraceRequest,
+    ) -> TimeFragmentDiagnosticTraceResponse:
+        principal = tokens.device_key(payload.device_id)
+        return TimeFragmentDiagnosticTraceResponse(
+            trace_token=planning_credentials.issue_diagnostic(principal, payload.trace_id)
+        )
 
     @app.exception_handler(ValidationError)
     @app.exception_handler(ValueError)
