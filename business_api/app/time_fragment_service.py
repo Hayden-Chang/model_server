@@ -7,7 +7,7 @@ from typing import Any
 
 from .contracts import TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2
 from .model_client import ModelGatewayUnavailable
-from .pipelines import get_pipeline
+from .pipelines import Pipeline, get_pipeline
 from .time_fragment import (
     build_time_fragment_parse_failed_response,
     plan_time_fragment,
@@ -41,10 +41,19 @@ async def execute_time_fragment_plan(
     request: TimeFragmentPlanRequestV2,
     *,
     max_input_chars: int,
+    pipeline: Pipeline | None = None,
 ) -> TimeFragmentPlanResponseV2:
+    if pipeline is None:
+        pipeline = get_pipeline("time-fragment-plan-v2")
+        assert pipeline is not None
     try:
         async with asyncio.timeout(_PLAN_TIMEOUT_SECONDS):
-            return await _execute_time_fragment_plan(model_client, request, max_input_chars=max_input_chars)
+            return await _execute_time_fragment_plan(
+                model_client,
+                request,
+                max_input_chars=max_input_chars,
+                pipeline=pipeline,
+            )
     except TimeoutError as error:
         raise ModelGatewayUnavailable("model gateway request timed out") from error
 
@@ -54,10 +63,9 @@ async def _execute_time_fragment_plan(
     request: TimeFragmentPlanRequestV2,
     *,
     max_input_chars: int,
+    pipeline: Pipeline,
 ) -> TimeFragmentPlanResponseV2:
     _validate_temporal_request(request)
-    pipeline = get_pipeline("time-fragment-plan-v2")
-    assert pipeline is not None
     pipeline = replace(pipeline, timeout_seconds=_INITIAL_MODEL_TIMEOUT_SECONDS)
     model_request = project_time_fragment_request_for_model(request)
     if request.earliest_start_slot is not None:
@@ -107,7 +115,7 @@ async def _execute_time_fragment_plan(
 
     _ensure_input_within_limit(correction_input, max_input_chars)
     fallback_pipeline = replace(
-        pipeline, thinking_mode="disabled", reasoning_effort=None, timeout_seconds=_CORRECTION_TIMEOUT_SECONDS,
+        pipeline, timeout_seconds=_CORRECTION_TIMEOUT_SECONDS,
     )
     async with asyncio.timeout(_CORRECTION_TIMEOUT_SECONDS):
         second_output = await model_client.complete(fallback_pipeline, correction_input)

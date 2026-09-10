@@ -70,7 +70,8 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
                 for route in ["/api/auth/guest","/api/plan/parse","/api/account/quota","/api/development/membership",
                               "/admin/time-fragment/quotas/reset-all"]:
                     assert client.get(route).text=="account"
-                for route in ["/health/live","/v1/pipelines/general-text-v1:run","/admin/observability"]:
+                for route in ["/health/live","/v1/pipelines/general-text-v1:run","/admin/observability",
+                              "/admin/runtime/pipelines/time-fragment-plan-v2"]:
                     assert client.get(route).text=="planner"
                 for route in ["/internal","/internal/time-fragment/plan","/internal//time-fragment/plan","/%69nternal/time-fragment/plan"]:
                     assert client.get(route).status_code==404

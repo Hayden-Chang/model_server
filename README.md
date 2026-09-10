@@ -43,6 +43,9 @@ POST /api/plan/parse
 GET  /admin/observability/requests
 GET  /admin/observability/summary
 GET  /admin/observability
+GET  /admin/runtime/pipelines/time-fragment-plan-v2
+PUT  /admin/runtime/pipelines/time-fragment-plan-v2
+POST /admin/runtime/pipelines/time-fragment-plan-v2/rollback
 GET  /health/live
 GET  /health/ready
 ```
@@ -120,13 +123,17 @@ Existing-object authorization and the public proposal schema are unchanged.
 Solver-ready legacy operations and shared golden fixtures are internal only;
 the live model parser never falls back to that schema or legacy prose recovery.
 
-The first model call explicitly disables thinking and only extracts structured
-operations; the deterministic planner computes any split time segments locally.
+The default V2 runtime configuration explicitly disables thinking for both the
+initial extraction and the single correction attempt; the deterministic planner
+computes any split time segments locally. An administrator can atomically change
+the V2 model alias, thinking mode, and reasoning effort without rebuilding or
+restarting a container, as described below.
 Tasks that no longer fit or whose requested time has already passed remain in
 the candidate with empty `segments` and warning issues; these normal scheduling
 outcomes never trigger correction. If parsing or error-level semantic validation
-fails, the service enables thinking for one correction request containing only
-error issues. A parseable second result that is still semantically invalid is
+fails, the service makes one correction request containing only error issues and
+uses the same runtime model settings captured for the initial request. A parseable
+second result that is still semantically invalid is
 returned with HTTP 200 as a complete proposal and structured issues. A second
 result that cannot be parsed is returned with HTTP 200 as `proposal: null` and
 `PARSE_FAILED`. Authentication, request-size, request-shape, and
@@ -191,6 +198,43 @@ never persisted. The SQLite database lives in a dedicated Docker volume.
 Run the dynamic production smoke in [deployment.md](docs/deployment.md) to
 exercise guest authentication and the full V2 planning response without
 printing or writing the guest token.
+
+## V2 runtime model configuration
+
+The `time-fragment-plan-v2` model alias and reasoning settings are stored in the
+existing persistent SQLite volume. Each request reads one configuration snapshot,
+so its initial and correction calls always use the same values. Updates use an
+optimistic `expectedVersion`, keep an immutable history, and survive container
+restarts. These endpoints require `ADMIN_API_KEY`:
+
+```text
+GET  /admin/runtime/pipelines/time-fragment-plan-v2
+PUT  /admin/runtime/pipelines/time-fragment-plan-v2
+GET  /admin/runtime/pipelines/time-fragment-plan-v2/history
+POST /admin/runtime/pipelines/time-fragment-plan-v2/rollback
+```
+
+Use the operator script instead of calling the mutation endpoint directly. It
+reads the current version, applies the change, runs a real V2 probe, and restores
+the previous configuration automatically if that probe fails:
+
+```bash
+export PIPELINE_RUNTIME_BASE_URL="https://${PUBLIC_DOMAIN}"
+export PIPELINE_RUNTIME_ADMIN_KEY_FILE="/secure/path/admin-key"
+
+scripts/set-pipeline-runtime.py time-fragment-plan-v2 \
+  --thinking enabled \
+  --effort low \
+  --model-alias deepseek-flash
+
+scripts/set-pipeline-runtime.py time-fragment-plan-v2 \
+  --thinking disabled
+```
+
+`primary-model` remains the default alias. `deepseek-flash` is preconfigured as
+`deepseek/deepseek-flash`; any additional runtime alias must first be explicitly
+added to LiteLLM's server-owned `model_list`. Client requests can never choose a
+provider model directly.
 
 ## Local development
 

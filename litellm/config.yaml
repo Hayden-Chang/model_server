@@ -4,6 +4,11 @@ model_list:
       model: os.environ/LLM_MODEL
       api_base: os.environ/LLM_API_BASE
       api_key: os.environ/LLM_API_KEY
+  - model_name: deepseek-flash
+    litellm_params:
+      model: deepseek/deepseek-flash
+      api_base: os.environ/LLM_API_BASE
+      api_key: os.environ/LLM_API_KEY
 
 litellm_settings:
   drop_params: true
@@ -11,4 +16,3 @@ litellm_settings:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   disable_spend_logs: true
-

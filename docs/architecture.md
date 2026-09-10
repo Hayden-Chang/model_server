@@ -241,10 +241,12 @@ ExternalEvent 标题属于来源事实，不能通过规划接口修改。钉住
 - `deletedOccurrenceIDs` 和 `deletedExternalEventIDs`；
 - 当天完整 `candidatePlan` 及每个已排期对象的完整 `segments`。
 
-首轮模型调用显式关闭 thinking，只提取结构化 operations；任务跨空闲区间形成的
+V2 默认对首轮与纠错调用都显式关闭 thinking；管理员可通过持久化运行时配置原子地
+修改内部模型别名、thinking 和 reasoning effort。一次业务请求开始时取得同一份配置
+快照，因此首轮和纠错不会跨版本。任务跨空闲区间形成的
 `segments` 由确定性排程器在本地计算。任务排不下或当天指定时间已经过去时，
 服务保留该任务并返回空 `segments` 和 warning，不进入纠错。模型输出第一次无法解析
-或存在 error 级语义问题时，服务只把 error 放入一次开启 thinking 的纠错请求；单次
+或存在 error 级语义问题时，服务只把 error 放入一次纠错请求；单次
 API 调用最多调用模型两次。
 第二次可解析但仍有语义错误时，接口仍以 HTTP 200 返回
 完整第二版 proposal、`attempts: 2` 和结构化 issues，便于 App 展示和继续调整。第二
@@ -275,6 +277,17 @@ GET /admin/observability/summary
 状态、耗时和 Token 元数据继续保留。鉴权头和 Bearer Token 不进入 SQLite。
 
 `ready` 只验证到 LiteLLM 的连通性，不会实际向外部模型发送一次推理请求。
+
+### 5.5 V2 运行时模型配置
+
+`pipeline_runtime.py` 在现有 SQLite Volume 中保存 `time-fragment-plan-v2` 的内部模型
+别名、thinking 模式、reasoning effort、单调递增版本和完整变更历史。管理接口要求
+`ADMIN_API_KEY`，写入要求客户端提交 `expectedVersion`，过期写入返回 409。服务重启后
+继续读取已保存配置；没有 override 时回退到 `pipelines.py` 的代码默认值。
+
+`scripts/set-pipeline-runtime.py` 是推荐的修改入口：先读取当前版本，再原子更新，随后
+经过公开账号链路执行一次真实 V2 探针；如果探针失败，它用刚返回的新版本号恢复原
+配置。正常切换不修改 Git、不构建镜像，也不重启 Business API、LiteLLM 或 Caddy。
 
 ## 6. Pipeline 是业务层的版本化配置
 
@@ -406,18 +419,20 @@ LLM_API_KEY
 
 ### 新增不同的模型适配
 
-当前所有 Pipeline 都读取同一个全局 `primary-model`，所以当前实现是：
+未配置运行时 override 的 Pipeline 读取全局 `primary-model`。V2 可以选择 LiteLLM
+已经预注册的内部别名，所以当前实现是：
 
 ```text
-多个业务 Pipeline -> 一个模型别名 -> 一个供应商模型
+通用业务 Pipeline -> primary-model -> 默认供应商模型
+Time Fragment V2 -> 运行时内部别名 -> 对应供应商模型
 ```
 
-“业务 Pipeline A 使用模型别名 1，业务 Pipeline B 使用模型别名 2”尚未实现。实现时需要：
+增加新的可选模型时需要：
 
 1. 在 LiteLLM `model_list` 增加新的内部模型别名。
-2. 给 `Pipeline` 增加 `model_alias` 字段。
-3. 让 `model_client.py` 使用 `pipeline.model_alias`，不再只使用全局别名。
-4. 为每个映射增加单元测试和供应商冒烟测试。
+2. 用管理员接口更新 V2 的 `modelAlias`，不要把供应商模型名暴露给 App。
+3. 运行 `set-pipeline-runtime.py` 的真实探针；失败时保留脚本完成的自动回滚。
+4. 为每个新映射增加单元测试和供应商冒烟测试。
 
 公网仍只暴露业务 Pipeline，不应允许客户端绕过业务层任意指定模型。
 
@@ -429,7 +444,7 @@ LLM_API_KEY
 
 以下限制适用于原有 AI 服务；独立 Supabase 账号同步服务的范围见上文：
 
-- 每个 Pipeline 独立选择模型别名。
+- 除 `time-fragment-plan-v2` 外的 Pipeline 尚不能独立选择模型别名。
 - 多模型负载均衡、供应商回退和基础设施自动重试策略；Time Fragment 仅有一次内容纠错调用。
 - 流式响应、异步任务和批处理接口。
 - 数据库、对话历史、缓存和持久化费用记录。

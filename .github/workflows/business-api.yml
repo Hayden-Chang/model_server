@@ -1,0 +1,53 @@
+name: Business API
+
+"on":
+  pull_request:
+    paths:
+      - "business_api/**"
+      - "scripts/**"
+      - "litellm/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/business-api.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "business_api/**"
+      - "scripts/**"
+      - "litellm/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/business-api.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: business-api-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            business_api/requirements.txt
+            business_api/requirements-dev.txt
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r business_api/requirements-dev.txt
+
+      - name: Run Business API tests
+        working-directory: business_api
+        run: python -m pytest -q
+
+      - name: Verify runtime switch CLI
+        run: python scripts/set-pipeline-runtime.py --help

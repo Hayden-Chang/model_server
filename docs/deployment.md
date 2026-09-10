@@ -113,6 +113,22 @@ projection used by iOS (`currentPlan` plus
 default as two 15-minute slots. Every curl call has explicit connection and
 overall timeouts, with a longer overall timeout for the model-backed request.
 
+After this one-time deployment, change only the V2 model behavior without a
+container restart by using the persisted runtime switcher:
+
+```bash
+cd /opt/model_server
+set -a
+. ./.env
+set +a
+PIPELINE_RUNTIME_BASE_URL="https://${PUBLIC_DOMAIN}" \
+  scripts/set-pipeline-runtime.py time-fragment-plan-v2 --thinking disabled
+```
+
+For enabled thinking, add `--effort low`, `--effort high`, or `--effort max`.
+The script performs a real public V2 probe and automatically restores the prior
+version if the new model alias or reasoning parameters are rejected.
+
 The V2 assertion helper checks the echoed request ID and fingerprint, supported
 algorithm version, candidate date and complete item set, one-or-two model-call
 count, the exact `Production Smoke` title in both the add operation and candidate,

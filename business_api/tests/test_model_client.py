@@ -45,6 +45,25 @@ def test_structured_output_mode_is_applied(monkeypatch: pytest.MonkeyPatch, mode
     assert captured["response_format"]["type"] == expected_type
 
 
+def test_pipeline_model_alias_overrides_the_server_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    async def fake_post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        captured.update(kwargs["json"])  # type: ignore[index]
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"model": "provider/model-a", "choices": [{"message": {"content": "ok"}}]},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    pipeline = replace(PIPELINES["general-text-v1"], model_alias="deepseek-flash")
+
+    asyncio.run(LiteLLMClient(make_settings("json_object")).complete(pipeline, "test"))
+
+    assert captured["model"] == "deepseek-flash"
+
+
 def test_correction_forwards_low_effort_and_bounds_timeout(monkeypatch):
     async def fake_post(self, url, **kwargs):
         assert self.timeout.read == 30.0

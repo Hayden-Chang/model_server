@@ -104,6 +104,7 @@ def test_verify_production_sends_ios_canonical_fingerprint_and_curl_timeouts(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     captured_request = tmp_path / "request.json"
+    captured_http_request_id = tmp_path / "http-request-id.txt"
     curl_log = tmp_path / "curl.jsonl"
     fake_curl = fake_bin / "curl"
     fake_curl.write_text(
@@ -135,6 +136,10 @@ elif url.endswith("/api/plan/parse"):
         header.split(": ", 1)[1]
         for index, header in enumerate(args)
         if index > 0 and args[index - 1] == "-H" and header.startswith("X-Request-ID: ")
+    )
+    Path(os.environ["CAPTURED_HTTP_REQUEST_ID"]).write_text(
+        request_id_header,
+        encoding="utf-8",
     )
     Path(option("--dump-header")).write_text(
         f"HTTP/1.1 200 OK\\r\\nX-Request-ID: {request_id_header}\\r\\n\\r\\n",
@@ -174,6 +179,25 @@ elif url.endswith("/api/plan/parse"):
         "validation": {"valid": True, "attempts": 1, "issues": []},
     }
     Path(option("--output")).write_text(json.dumps(response), encoding="utf-8")
+elif "/admin/observability/summary?" in url:
+    summary = {
+        "totals": {
+            "request_count": 1,
+            "model_call_count": 1,
+            "token_reported_requests": 1,
+            "total_tokens": 9,
+        }
+    }
+    Path(option("--output")).write_text(json.dumps(summary), encoding="utf-8")
+elif "/admin/observability/requests?" in url:
+    request_id = Path(os.environ["CAPTURED_HTTP_REQUEST_ID"]).read_text(encoding="utf-8")
+    detail = {
+        "records": [{
+            "request_id": request_id,
+            "usage": {"total_tokens": 9},
+        }]
+    }
+    Path(option("--output")).write_text(json.dumps(detail), encoding="utf-8")
 else:
     print("{}")
 """,
@@ -183,9 +207,11 @@ else:
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-        "PUBLIC_IP": "smoke.example.test",
+        "PUBLIC_DOMAIN": "smoke.example.test",
         "BUSINESS_API_KEY": "business-key",
+        "ADMIN_API_KEY": "admin-key",
         "CAPTURED_REQUEST": str(captured_request),
+        "CAPTURED_HTTP_REQUEST_ID": str(captured_http_request_id),
         "CURL_LOG": str(curl_log),
     }
 
@@ -214,7 +240,7 @@ else:
     ).hexdigest()
 
     curl_calls = [json.loads(line) for line in curl_log.read_text(encoding="utf-8").splitlines()]
-    assert len(curl_calls) == 5
+    assert len(curl_calls) == 7
     for call in curl_calls:
         assert "--connect-timeout" in call
         assert "--max-time" in call

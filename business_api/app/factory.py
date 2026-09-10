@@ -15,6 +15,10 @@ from .contracts import (
     DevelopmentMembershipRequest,
     DevelopmentMembershipResponse,
     ModelMetadata,
+    PipelineRuntimeConfigResponse,
+    PipelineRuntimeHistoryResponse,
+    PipelineRuntimeRollbackRequest,
+    PipelineRuntimeUpdateRequest,
     RunRequest,
     RunResponse,
     TimeFragmentGuestRequest,
@@ -34,7 +38,15 @@ from .model_client import (
     ModelOutput,
 )
 from .observability import TrackedModelClient, aggregate_usage
-from .pipelines import get_pipeline
+from .pipeline_runtime import (
+    PipelineRuntimeConfig,
+    PipelineRuntimeInvalidConfig,
+    PipelineRuntimeNoPreviousVersion,
+    PipelineRuntimeNotConfigurable,
+    PipelineRuntimeStore,
+    PipelineRuntimeVersionConflict,
+)
+from .pipelines import Pipeline
 from .planning_auth import PlanningCredentials
 from .postprocessors import ModelOutputInvalid, process_structured, process_text
 from .quota_store import (
@@ -65,6 +77,7 @@ def create_app(
     model_client: Any | None = None,
     usage_store: UsageStore | None = None,
     quota_store: QuotaStore | None = None,
+    pipeline_runtime_store: PipelineRuntimeStore | None = None,
 ) -> FastAPI:
     if settings.planning_internal_only and settings.planning_internal_secret is None:
         raise ValueError("Internal planning requires its own credential secret")
@@ -84,12 +97,17 @@ def create_app(
         settings.time_fragment_guest_quota_limit,
         development_principals=development_principals,
     )
+    runtime_pipelines = pipeline_runtime_store or PipelineRuntimeStore(
+        settings.usage_db_path,
+        settings.litellm_model_alias,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> Any:
         yield
         store.close()
         quotas.close()
+        runtime_pipelines.close()
 
     app = FastAPI(title="Model Server Business API", version="1.0.0", lifespan=lifespan)
     guest_tokens = GuestTokenCodec(
@@ -148,8 +166,8 @@ def create_app(
         pipeline_id: str,
         user_input: str,
         model_gateway: Any,
-    ) -> tuple[str | dict[str, Any], ModelOutput]:
-        pipeline = get_pipeline(pipeline_id)
+    ) -> tuple[str | dict[str, Any], ModelOutput, Pipeline]:
+        pipeline = runtime_pipelines.resolve(pipeline_id)
         if pipeline is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -164,8 +182,8 @@ def create_app(
         try:
             output = await model_gateway.complete(pipeline, user_input)
             if pipeline.response_schema is None:
-                return process_text(output.content), output
-            return process_structured(output.content, pipeline.response_schema), output
+                return process_text(output.content), output, pipeline
+            return process_structured(output.content, pipeline.response_schema), output, pipeline
         except ModelGatewayUnavailable as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -232,6 +250,84 @@ def create_app(
     @app.get("/admin/observability/ui", response_class=HTMLResponse, include_in_schema=False)
     async def observability_dashboard() -> HTMLResponse:
         return HTMLResponse(ADMIN_DASHBOARD_HTML, headers=ADMIN_DASHBOARD_HEADERS)
+
+    @app.get(
+        "/admin/runtime/pipelines/{pipeline_id}",
+        response_model=PipelineRuntimeConfigResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def get_pipeline_runtime_config(pipeline_id: str) -> PipelineRuntimeConfigResponse:
+        try:
+            return _pipeline_runtime_response(runtime_pipelines.get(pipeline_id))
+        except PipelineRuntimeNotConfigurable as error:
+            raise _pipeline_runtime_not_configurable() from error
+
+    @app.put(
+        "/admin/runtime/pipelines/{pipeline_id}",
+        response_model=PipelineRuntimeConfigResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def update_pipeline_runtime_config(
+        pipeline_id: str,
+        payload: PipelineRuntimeUpdateRequest,
+    ) -> PipelineRuntimeConfigResponse:
+        try:
+            config = runtime_pipelines.update(
+                pipeline_id,
+                model_alias=payload.model_alias,
+                thinking_mode=payload.thinking_mode,
+                reasoning_effort=payload.reasoning_effort,
+                expected_version=payload.expected_version,
+            )
+        except PipelineRuntimeNotConfigurable as error:
+            raise _pipeline_runtime_not_configurable() from error
+        except PipelineRuntimeVersionConflict as error:
+            raise _pipeline_runtime_version_conflict(error) from error
+        except PipelineRuntimeInvalidConfig as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"code": "PIPELINE_RUNTIME_INVALID", "message": str(error)},
+            ) from error
+        return _pipeline_runtime_response(config)
+
+    @app.post(
+        "/admin/runtime/pipelines/{pipeline_id}/rollback",
+        response_model=PipelineRuntimeConfigResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def rollback_pipeline_runtime_config(
+        pipeline_id: str,
+        payload: PipelineRuntimeRollbackRequest,
+    ) -> PipelineRuntimeConfigResponse:
+        try:
+            config = runtime_pipelines.rollback(
+                pipeline_id,
+                expected_version=payload.expected_version,
+            )
+        except PipelineRuntimeNotConfigurable as error:
+            raise _pipeline_runtime_not_configurable() from error
+        except PipelineRuntimeVersionConflict as error:
+            raise _pipeline_runtime_version_conflict(error) from error
+        except PipelineRuntimeNoPreviousVersion as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "PIPELINE_RUNTIME_NO_PREVIOUS_VERSION", "message": str(error)},
+            ) from error
+        return _pipeline_runtime_response(config)
+
+    @app.get(
+        "/admin/runtime/pipelines/{pipeline_id}/history",
+        response_model=PipelineRuntimeHistoryResponse,
+        dependencies=[Depends(require_admin_key)],
+    )
+    async def list_pipeline_runtime_history(pipeline_id: str) -> PipelineRuntimeHistoryResponse:
+        try:
+            records = runtime_pipelines.history(pipeline_id)
+        except PipelineRuntimeNotConfigurable as error:
+            raise _pipeline_runtime_not_configurable() from error
+        return PipelineRuntimeHistoryResponse(
+            records=[_pipeline_runtime_response(record) for record in records]
+        )
 
     @app.post("/api/auth/guest", response_model=TimeFragmentGuestResponse)
     async def time_fragment_guest(payload: TimeFragmentGuestRequest) -> TimeFragmentGuestResponse:
@@ -346,10 +442,13 @@ def create_app(
             raise failure from error
         assert reservation is not None
         try:
+            pipeline = runtime_pipelines.resolve("time-fragment-plan-v2")
+            assert pipeline is not None
             response = await execute_time_fragment_plan(
                 tracker,
                 payload,
                 max_input_chars=settings.max_input_chars,
+                pipeline=pipeline,
             )
         except TimeFragmentRequestInvalid as error:
             quotas.refund(reservation)
@@ -468,7 +567,14 @@ def create_app(
         started_at, started_clock = datetime.now(timezone.utc), time.perf_counter()
         status_code = 200
         try:
-            return await execute_time_fragment_plan(tracker, payload, max_input_chars=settings.max_input_chars)
+            pipeline = runtime_pipelines.resolve("time-fragment-plan-v2")
+            assert pipeline is not None
+            return await execute_time_fragment_plan(
+                tracker,
+                payload,
+                max_input_chars=settings.max_input_chars,
+                pipeline=pipeline,
+            )
         except TimeFragmentRequestInvalid as error:
             status_code = 422
             raise HTTPException(422, detail={"code": error.code, "message": error.message}) from error
@@ -514,9 +620,8 @@ def create_app(
         request_device_key = (
             "unattributed" if installation_id is None else guest_tokens.device_key(installation_id)
         )
-        pipeline = get_pipeline(pipeline_id)
         try:
-            result, output = await complete_pipeline(pipeline_id, payload.input, tracker)
+            result, output, pipeline = await complete_pipeline(pipeline_id, payload.input, tracker)
         except HTTPException as error:
             persist_inference(
                 request_id=request.state.request_id,
@@ -531,14 +636,12 @@ def create_app(
                 tracker=tracker,
             )
             raise
-        assert pipeline is not None
-
         response = RunResponse(
             pipeline=pipeline.pipeline_id,
             request_id=request.state.request_id,
             result=result,
             model=ModelMetadata(
-                alias=settings.litellm_model_alias,
+                alias=pipeline.model_alias or settings.litellm_model_alias,
                 provider_model=output.provider_model,
                 usage=output.usage,
             ),
@@ -650,6 +753,40 @@ def create_app(
         )
 
     return app
+
+
+def _pipeline_runtime_response(config: PipelineRuntimeConfig) -> PipelineRuntimeConfigResponse:
+    return PipelineRuntimeConfigResponse(
+        pipeline_id=config.pipeline_id,
+        model_alias=config.model_alias,
+        thinking_mode=config.thinking_mode,
+        reasoning_effort=config.reasoning_effort,
+        version=config.version,
+        source=config.source,
+        updated_at=config.updated_at,
+    )
+
+
+def _pipeline_runtime_not_configurable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "PIPELINE_RUNTIME_NOT_CONFIGURABLE",
+            "message": "pipeline does not support runtime configuration",
+        },
+    )
+
+
+def _pipeline_runtime_version_conflict(error: PipelineRuntimeVersionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "PIPELINE_RUNTIME_VERSION_CONFLICT",
+            "message": str(error),
+            "expectedVersion": error.expected,
+            "actualVersion": error.actual,
+        },
+    )
 
 
 def _resolve_device_filter(
