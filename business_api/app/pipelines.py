@@ -147,6 +147,8 @@ PIPELINES: dict[str, Pipeline] = {
             "set endTime and endEvidence to null and encode duration in durationSlots; if only an end and "
             "duration are stated, set startTime and startEvidence to null. For 在 13:00 插入一个 30 分钟的电话, "
             "use startTime=13:00, endTime=null, startEvidence=13:00, endEvidence=null, durationSlots=2; "
+            "likewise, 五点吃饭 without an end or duration phrase has only a start boundary: resolve 五点 from "
+            "the whole narrative, keep endTime and endEvidence null, and use the default durationSlots=2. "
             "the solver computes the finish time and shifts affected tasks. "
             "Resolve omitted AM/PM from the whole narrative, not from now. For example 8:50 起床 is 08:50; "
             "12点午饭 followed by 1点上班 means 12:00 then 13:00. Midnight after 23:00 is 24:00, never noon "

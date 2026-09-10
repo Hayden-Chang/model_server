@@ -98,7 +98,9 @@ async def _execute_time_fragment_plan(
             correction_issues,
             first_response,
         )
-        if first_operations.temporal_relations:
+        if first_operations.temporal_relations or any(
+            issue.field == "timeConstraint" for issue in correction_issues
+        ):
             with_extraction = build_time_fragment_correction_input(
                 model_request, correction_issues, first_response, first_operations,
             )

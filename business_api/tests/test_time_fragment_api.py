@@ -30,6 +30,8 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
     assert pipeline is not None
     assert pipeline.max_tokens == 20_000
     assert pipeline.thinking_mode == "disabled"
+    assert "五点吃饭" in pipeline.system_prompt
+    assert "keep endTime and endEvidence null" in pipeline.system_prompt
 
 
 @dataclass
@@ -1074,6 +1076,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         }
     ]
     assert correction["firstCandidate"]["candidatePlan"]["items"][0]["itemId"] == "occurrence-1"
+    assert "firstExtraction" not in correction
     for serialized in (fake.calls[0][1], fake.calls[1][1]):
         assert "domainRef" not in serialized
         assert "private-task-id" not in serialized
@@ -1387,6 +1390,63 @@ def test_two_unparseable_outputs_return_parse_failed_and_never_make_a_third_call
     assert "firstCandidate" not in correction
     assert len(fake.calls) == 2
     assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+
+
+def test_single_clock_correction_receives_the_invalid_extracted_boundary(
+    settings: Settings,
+) -> None:
+    invalid = model_add(
+        "吃饭",
+        "五点吃饭",
+        start_time="17:00",
+        end_time="23:00",
+        start_evidence="五点吃饭",
+        end_evidence="五点吃饭",
+    )
+    corrected = model_add(
+        "吃饭",
+        "五点吃饭",
+        start_time="17:00",
+        start_evidence="五点吃饭",
+    )
+    invalid_output = operations_output([invalid])
+    corrected_output = operations_output([corrected])
+
+    class ContextAwareModelClient(FakeModelClient):
+        async def complete(self, pipeline: Any, user_input: str) -> ModelOutput:
+            self.calls.append((pipeline, user_input))
+            if len(self.calls) == 1:
+                return invalid_output
+            correction = json.loads(user_input)
+            extraction = correction.get("firstExtraction", {})
+            operations = extraction.get("operations", [])
+            if operations and operations[0].get("timeConstraint", {}).get("endTime") == "23:00":
+                return corrected_output
+            return invalid_output
+
+    fake = ContextAwareModelClient([])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text="五点吃饭",
+                date="2026-09-13",
+                earliest_start_slot=36,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    correction = json.loads(fake.calls[1][1])
+    timing = correction["firstExtraction"]["operations"][0]["timeConstraint"]
+    assert timing == {
+        "startTime": "17:00",
+        "endTime": "23:00",
+        "startEvidence": "五点吃饭",
+        "endEvidence": "五点吃饭",
+    }
 
 
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(
