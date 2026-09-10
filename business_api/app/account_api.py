@@ -1,11 +1,13 @@
 """Public DayMosaic API. Identity/quota are resolved before private planning."""
 
+import json
+import logging
 import secrets
 import re
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -18,6 +20,18 @@ from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+LOGGER = logging.getLogger(__name__)
+
+
+def log_http_failure(request: Request, status: int, detail) -> None:
+    code = detail.get("code") if isinstance(detail, dict) else None
+    record = {"event": "account_api_failure", "requestID": request.state.request_id,
+              "method": request.method,
+              "route": getattr(request.scope.get("route"), "path", request.url.path),
+              "status": status,
+              "code": code if isinstance(code, str) and ERROR_CODE_PATTERN.fullmatch(code) else "HTTP_ERROR"}
+    LOGGER.warning(json.dumps(record, separators=(",", ":")))
 
 
 class ClaimGuestRequest(BaseModel):
@@ -38,6 +52,11 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         await backend.close()
 
     app = FastAPI(title="DayMosaic Account API", lifespan=lifespan)
+
+    @app.exception_handler(HTTPException)
+    async def logged_http_exception(request: Request, error: HTTPException):
+        log_http_failure(request, error.status_code, error.detail)
+        return JSONResponse(status_code=error.status_code, content={"detail": error.detail}, headers=error.headers)
 
     @app.middleware("http")
     async def private_responses(request: Request, call_next):
@@ -76,8 +95,9 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
             raise failure("DEVELOPMENT_MEMBERSHIP_DISABLED", 403)
         return current
 
-    async def quota(action: str, current: Actor, **data):
-        return await backend.quota(action, current, developmentAllowed=current.principal in development, **data)
+    async def quota(action: str, current: Actor, diagnostic_request_id: str | None = None, **data):
+        return await backend.quota(action, current, diagnostic_request_id=diagnostic_request_id,
+                                   developmentAllowed=current.principal in development, **data)
 
     @app.get("/health/live")
     async def live():
@@ -123,7 +143,8 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     ):
         body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         attempt = str(uuid4())
-        await quota("reserve", current, requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
+        await quota("reserve", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
         try:
             response = TimeFragmentPlanResponseV2.model_validate(
                 await backend.plan(current, body, attempt, request.state.request_id)
@@ -131,14 +152,17 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
             if response.request_id != payload.request_id:
                 raise ValueError("response request mismatch")
         except Exception:
-            await quota("finish", current, requestID=payload.request_id, attempt=attempt, consume=False)
+            await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                        requestID=payload.request_id, attempt=attempt, consume=False)
             raise
-        await quota("finish", current, requestID=payload.request_id, attempt=attempt, consume=response.proposal is not None)
+        await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, attempt=attempt, consume=response.proposal is not None)
         return response
 
     @app.exception_handler(ValidationError)
     @app.exception_handler(ValueError)
     async def invalid_upstream(request: Request, error):
+        log_http_failure(request, 502, {"code": "MODEL_GATEWAY_ERROR"})
         return JSONResponse(status_code=502, content={"detail": {"code": "MODEL_GATEWAY_ERROR", "message": "invalid planning response"}})
 
     @app.get("/admin/time-fragment/quotas/{code}", response_model=TimeFragmentQuotaStatusResponse, dependencies=[Depends(admin)])

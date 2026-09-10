@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import sqlite3
 from uuid import uuid4
 
@@ -52,7 +53,7 @@ class Backend:
             raise failure("UNAUTHORIZED",401)
         return ACCOUNT
 
-    async def quota(self, action, actor=None, **data):
+    async def quota(self, action, actor=None, diagnostic_request_id=None, **data):
         self.calls.append((action,actor,data))
         if self.quota_error:
             raise self.quota_error
@@ -215,6 +216,82 @@ def test_authentication_fails_closed_and_sanitizes_upstream_errors(configuration
         finally:
             await backend.close()
     asyncio.run(run())
+
+
+def test_supabase_failure_log_has_operation_class_and_no_response_body(configuration, caplog):
+    async def run():
+        backend = AccountBackend(configuration, httpx.MockTransport(
+            lambda _: httpx.Response(503, text="private-upstream-body")
+        ))
+        try:
+            with pytest.raises(Exception):
+                await backend.quota("reserve", ACCOUNT, diagnostic_request_id="probe-run-123-plan",
+                                    requestID="private-logical-request")
+        finally:
+            await backend.close()
+    with caplog.at_level(logging.WARNING, logger="app.account_backend"):
+        asyncio.run(run())
+    record = json.loads(caplog.records[-1].message)
+    assert record["event"] == "account_backend_failure"
+    assert record["component"] == "supabase"
+    assert record["operation"] == "ai_quota_service.reserve"
+    assert record["errorClass"] == "http_status"
+    assert record["upstreamStatus"] == 503
+    assert record["requestID"] == "probe-run-123-plan"
+    assert record["attempts"] == 1 and record["durationMs"] >= 0
+    assert "private" not in caplog.records[-1].message
+
+
+def test_supabase_timeout_log_records_bounded_retry_count(configuration, caplog):
+    async def run():
+        backend = AccountBackend(configuration, httpx.MockTransport(
+            lambda _: (_ for _ in ()).throw(httpx.ReadTimeout("private-timeout-detail"))
+        ))
+        try:
+            with pytest.raises(Exception):
+                await backend.quota("reserve", ACCOUNT)
+        finally:
+            await backend.close()
+    with caplog.at_level(logging.WARNING, logger="app.account_backend"):
+        asyncio.run(run())
+    record = json.loads(caplog.records[-1].message)
+    assert record["errorClass"] == "timeout" and record["attempts"] == 2
+    assert "upstreamStatus" not in record and "private" not in caplog.records[-1].message
+
+
+def test_internal_planning_failure_log_keeps_trace_and_upstream_code(configuration, caplog):
+    async def run():
+        backend = AccountBackend(configuration, httpx.MockTransport(
+            lambda _: httpx.Response(503, json={"detail": {
+                "code": "MODEL_GATEWAY_UNAVAILABLE", "message": "private-model-detail"}})
+        ))
+        try:
+            with pytest.raises(Exception):
+                await backend.plan(ACCOUNT, request_payload(), "attempt", "probe-run-123-plan")
+        finally:
+            await backend.close()
+    with caplog.at_level(logging.WARNING, logger="app.account_backend"):
+        asyncio.run(run())
+    record = json.loads(caplog.records[-1].message)
+    assert record["component"] == "planning" and record["operation"] == "internal_time_fragment_plan"
+    assert record["requestID"] == "probe-run-123-plan"
+    assert record["upstreamStatus"] == 503 and record["upstreamCode"] == "MODEL_GATEWAY_UNAVAILABLE"
+    assert "private" not in caplog.records[-1].message
+
+
+def test_account_api_failure_log_keeps_http_trace_and_safe_code(configuration, caplog):
+    backend = Backend()
+    backend.quota_error = failure("ACCOUNT_SERVICE_UNAVAILABLE", 503, message="private-upstream-message")
+    with caplog.at_level(logging.WARNING, logger="app.account_api"):
+        with TestClient(create_account_api(configuration, backend)) as client:
+            response = client.post("/api/plan/parse", headers={**account_headers(), "X-Request-ID": "probe-run-123-plan"},
+                                   json=request_payload())
+    assert response.status_code == 503
+    record = json.loads(caplog.records[-1].message)
+    assert record == {"event": "account_api_failure", "requestID": "probe-run-123-plan",
+                      "method": "POST", "route": "/api/plan/parse", "status": 503,
+                      "code": "ACCOUNT_SERVICE_UNAVAILABLE"}
+    assert "private" not in caplog.records[-1].message
 
 
 def test_internal_planner_rejects_guest_business_token_changed_body_and_old_public_route(settings,configuration):

@@ -2,6 +2,9 @@ import copy
 import fcntl
 import importlib.util
 import json
+import socket
+import ssl
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -80,14 +83,57 @@ def test_http_200_does_not_hide_invalid_or_wrong_plan(mutate):
     assert failure.value.code == "INVALID_PLAN"
 
 
-@pytest.mark.parametrize("status,code", [(502, "MODEL_GATEWAY_ERROR"), (503, "MODEL_GATEWAY_UNAVAILABLE"), (401, "not_a_safe_code")])
-def test_model_or_auth_failures_do_not_retry_or_print_upstream_secrets(status, code):
+@pytest.mark.parametrize("status,code,expected", [(502, "MODEL_GATEWAY_ERROR", "MODEL_GATEWAY_ERROR"),
+    (503, "MODEL_GATEWAY_UNAVAILABLE", "MODEL_GATEWAY_UNAVAILABLE"),
+    (401, "not_a_safe_code", "HTTP_ERROR"), (500, "PRIVATE_SECRET", "HTTP_ERROR")])
+def test_model_or_auth_failures_do_not_retry_or_print_upstream_secrets(status, code, expected):
     http = FakeHTTP(status, {"code": code, "message": "private-key-and-prompt"})
     with pytest.raises(PROBE.ProbeFailure) as failure:
         PROBE.check(http, DEVICE, NOW)
     assert len([c for c in http.calls if c[0] == "/api/plan/parse"]) == 1
     assert failure.value.status == status
+    assert failure.value.code == expected
     assert "private" not in repr(vars(failure.value))
+
+
+def test_account_failure_keeps_safe_error_and_trace_ids_without_message():
+    http = FakeHTTP(503, {"code": "ACCOUNT_SERVICE_UNAVAILABLE", "message": "private-upstream-secret"})
+    with pytest.raises(PROBE.ProbeFailure) as failure:
+        PROBE.check(http, DEVICE, NOW, run_id="probe-run-123")
+    assert failure.value.code == "ACCOUNT_SERVICE_UNAVAILABLE"
+    assert failure.value.request_id == "probe-run-123-plan"
+    assert failure.value.response_request_id == "probe-run-123-plan"
+    assert "private" not in repr(vars(failure.value))
+
+
+@pytest.mark.parametrize("reason,code", [
+    (socket.gaierror("private-host-detail"), "DNS_ERROR"),
+    (ssl.SSLError("private-certificate-detail"), "TLS_ERROR"),
+    (TimeoutError("private-timeout-detail"), "NETWORK_TIMEOUT"),
+    (ConnectionRefusedError("private-connection-detail"), "CONNECTION_ERROR"),
+    (OSError("private-network-detail"), "NETWORK_ERROR"),
+])
+def test_transport_failures_are_classified_without_raw_exception(monkeypatch, reason, code):
+    client = PROBE.HTTPClient("https://api.keeline.xyz")
+    monkeypatch.setattr(client.opener, "open", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(urllib.error.URLError(reason)))
+    with pytest.raises(PROBE.ProbeFailure) as failure:
+        client.request("/health/ready", request_id="probe-run-123-health")
+    assert failure.value.code == code
+    assert failure.value.request_id == "probe-run-123-health"
+    assert "private" not in repr(vars(failure.value))
+
+
+def test_quota_diagnostics_use_route_template_without_support_code(tmp_path):
+    key = tmp_path / "key"
+    key.write_text("private-admin-key")
+    http = PROBE.ObservedHTTP(FakeHTTP(429, {"code": "AI_QUOTA_EXHAUSTED", "supportCode": CODE}))
+    result = PROBE.check(http, DEVICE, NOW, CODE, key, "probe-run-123")
+    assert result["status"] == "healthy"
+    reset = next(step for step in http.checks if step["stage"] == "probe_quota")
+    assert reset["route"] == "/admin/time-fragment/quotas/{supportCode}/reset"
+    assert CODE not in json.dumps(http.checks)
+    assert "private-admin-key" not in json.dumps(http.checks)
 
 
 @pytest.mark.parametrize("response_code,bound_code,error_code", [
@@ -167,6 +213,13 @@ def test_run_persists_sanitized_result_and_status_transition(tmp_path, monkeypat
     assert record == json.loads(output)
     assert record["event"] == event
     assert "checkedAt" in record and record["durationSeconds"] >= 0
+    assert record["probeRunID"]
+    assert [step["stage"] for step in record["checks"]] == ["health", "auth", "plan"]
+    assert all(step["durationMs"] >= 0 and step["requestID"] for step in record["checks"])
+    if fails:
+        assert record["requestID"] == record["checks"][-1]["requestID"]
+        assert record["responseRequestID"] == record["checks"][-1]["responseRequestID"]
+        assert record["checks"][-1]["code"] == "MODEL_GATEWAY_ERROR"
     assert "private" not in output
     assert not (tmp_path / "latest.tmp").exists()
 

@@ -1,5 +1,9 @@
 import base64
 import hashlib
+import json
+import logging
+import re
+import time
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -9,6 +13,47 @@ from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .planning_auth import PlanningCredentials
+
+LOGGER = logging.getLogger(__name__)
+SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def error_class(error: Exception) -> str:
+    if isinstance(error, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(error, httpx.ConnectError):
+        return "connection"
+    if isinstance(error, httpx.TransportError):
+        return "transport"
+    if isinstance(error, httpx.HTTPStatusError):
+        return "http_status"
+    return "invalid_response"
+
+
+def response_error_code(response: httpx.Response | None) -> str | None:
+    try:
+        body = response.json() if response is not None else {}
+        detail = body.get("detail", {}) if isinstance(body, dict) else {}
+        code = detail.get("code") if isinstance(detail, dict) else None
+        return code if isinstance(code, str) and SAFE_CODE.fullmatch(code) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def log_failure(component: str, operation: str, error: Exception, started: float,
+                attempts: int, response: httpx.Response | None = None, request_id: str | None = None) -> None:
+    record = {"event": "account_backend_failure", "component": component, "operation": operation,
+              "errorClass": error_class(error), "attempts": attempts,
+              "durationMs": round((time.perf_counter() - started) * 1000)}
+    if response is not None:
+        record["upstreamStatus"] = response.status_code
+        code = response_error_code(response)
+        if code:
+            record["upstreamCode"] = code
+    if isinstance(request_id, str) and SAFE_REQUEST_ID.fullmatch(request_id):
+        record["requestID"] = request_id
+    LOGGER.warning(json.dumps(record, separators=(",", ":"), sort_keys=True))
 
 
 class AccountAPISettings(BaseSettings):
@@ -67,7 +112,9 @@ class AccountBackend:
     async def close(self) -> None:
         await self.http.aclose()
 
-    async def _rpc(self, name: str, data: dict, token: str | None = None) -> dict:
+    async def _rpc(self, name: str, data: dict, token: str | None = None,
+                   request_id: str | None = None) -> dict:
+        started, attempts, response = time.perf_counter(), 0, None
         key = (self.settings.supabase_publishable_key if token else self.settings.supabase_service_role_key).get_secret_value()
         headers = {"apikey": key, "Authorization": "Bearer " + (token or key)}
         try:
@@ -75,6 +122,7 @@ class AccountBackend:
             # is replaced by a newly generated reservation or a fresh model call.
             for retry in range(2):
                 try:
+                    attempts += 1
                     response = await self.http.post(str(self.settings.supabase_url).rstrip("/") + "/rest/v1/rpc/" + name,
                                                     headers=headers, json=data)
                     break
@@ -89,6 +137,9 @@ class AccountBackend:
                 raise ValueError
             return result
         except (httpx.HTTPError, ValueError) as error:
+            action = data.get("p_action") if name == "ai_quota_service" else None
+            operation = name + ("." + action if isinstance(action, str) and SAFE_REQUEST_ID.fullmatch(action) else "")
+            log_failure("supabase", operation, error, started, attempts, response, request_id)
             raise failure("ACCOUNT_SERVICE_UNAVAILABLE", 503) from error
 
     async def account(self, token: str) -> Actor:
@@ -98,11 +149,13 @@ class AccountBackend:
         except (KeyError, TypeError, ValueError) as error:
             raise failure("ACCOUNT_SERVICE_UNAVAILABLE", 503) from error
 
-    async def quota(self, action: str, actor: Actor | None = None, **data) -> dict:
+    async def quota(self, action: str, actor: Actor | None = None,
+                    diagnostic_request_id: str | None = None, **data) -> dict:
         if actor:
             data.update(principal=actor.principal, sessionID=actor.session_id,
                         supportCode=support_code(actor.principal), freeLimit=self.settings.time_fragment_guest_quota_limit)
-        result = await self._rpc("ai_quota_service", {"p_action": action, "p_data": data})
+        result = await self._rpc("ai_quota_service", {"p_action": action, "p_data": data},
+                                 request_id=diagnostic_request_id)
         code = result.pop("code", None)
         if code:
             status = {"AI_QUOTA_EXHAUSTED": 429, "AI_DAILY_QUOTA_EXHAUSTED": 429,
@@ -115,6 +168,7 @@ class AccountBackend:
         return result
 
     async def plan(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
+        started, response = time.perf_counter(), None
         token = self.credentials.issue(actor.principal, payload, attempt)
         try:
             response = await self.http.post(str(self.settings.planning_base_url).rstrip("/") + "/internal/time-fragment/plan",
@@ -127,4 +181,5 @@ class AccountBackend:
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+            log_failure("planning", "internal_time_fragment_plan", error, started, 1, response, request_id)
             raise failure("MODEL_GATEWAY_UNAVAILABLE", 503) from error
