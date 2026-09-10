@@ -33,6 +33,53 @@ class RunResponse(BaseModel):
     model: ModelMetadata
 
 
+class PipelineRuntimeUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    model_alias: str = Field(
+        alias="modelAlias",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+    )
+    thinking_mode: Literal["enabled", "disabled"] = Field(alias="thinkingMode")
+    reasoning_effort: Literal["low", "high", "max"] | None = Field(
+        default=None,
+        alias="reasoningEffort",
+    )
+    expected_version: int = Field(alias="expectedVersion", ge=0)
+
+    @model_validator(mode="after")
+    def reasoning_must_match_thinking_mode(self) -> "PipelineRuntimeUpdateRequest":
+        if self.thinking_mode == "enabled" and self.reasoning_effort is None:
+            raise ValueError("enabled thinking requires reasoningEffort")
+        if self.thinking_mode == "disabled" and self.reasoning_effort is not None:
+            raise ValueError("disabled thinking requires reasoningEffort to be null")
+        return self
+
+
+class PipelineRuntimeRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    expected_version: int = Field(alias="expectedVersion", ge=0)
+
+
+class PipelineRuntimeConfigResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    pipeline_id: str = Field(alias="pipelineId")
+    model_alias: str = Field(alias="modelAlias")
+    thinking_mode: Literal["enabled", "disabled"] = Field(alias="thinkingMode")
+    reasoning_effort: Literal["low", "high", "max"] | None = Field(alias="reasoningEffort")
+    version: int = Field(ge=0)
+    source: Literal["default", "override"]
+    updated_at: datetime | None = Field(alias="updatedAt")
+
+
+class PipelineRuntimeHistoryResponse(BaseModel):
+    records: list[PipelineRuntimeConfigResponse]
+
+
 class TokenUsageMetadata(BaseModel):
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)

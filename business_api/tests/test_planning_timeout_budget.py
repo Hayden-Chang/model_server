@@ -1,10 +1,12 @@
 import asyncio
+from dataclasses import replace
 import pytest
 
 from app import time_fragment_service as service
 from app.contracts import TimeFragmentPlanRequestV2
 from app.model_client import ModelGatewayUnavailable
 from app.observability import TrackedModelClient
+from app.pipelines import get_pipeline
 from test_time_fragment_api import FakeModelClient, operations_output, request_payload, settings
 
 
@@ -87,6 +89,30 @@ def test_normal_correction_keeps_one_retry_with_explicit_phase_budgets():
     assert response.validation.attempts == 2
     assert [pipeline.timeout_seconds for pipeline, _ in fake.calls] == [30.0, 15.0]
     assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+
+
+def test_runtime_pipeline_configuration_applies_to_initial_and_correction_calls():
+    fake = FakeModelClient([operations_output([{"type": "unknown"}]), operations_output([])])
+    pipeline = get_pipeline("time-fragment-plan-v2")
+    assert pipeline is not None
+    runtime_pipeline = replace(
+        pipeline,
+        model_alias="deepseek-flash",
+        thinking_mode="enabled",
+        reasoning_effort="low",
+    )
+
+    response = asyncio.run(service.execute_time_fragment_plan(
+        fake,
+        request(),
+        max_input_chars=100000,
+        pipeline=runtime_pipeline,
+    ))
+
+    assert response.validation.attempts == 2
+    assert [candidate.model_alias for candidate, _ in fake.calls] == ["deepseek-flash", "deepseek-flash"]
+    assert [candidate.thinking_mode for candidate, _ in fake.calls] == ["enabled", "enabled"]
+    assert [candidate.reasoning_effort for candidate, _ in fake.calls] == ["low", "low"]
 
 
 def test_external_cancellation_propagates_without_turning_into_a_retry():

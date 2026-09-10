@@ -40,7 +40,7 @@ class LiteLLMClient:
 
     async def complete(self, pipeline: Pipeline, user_input: str) -> ModelOutput:
         payload: dict[str, Any] = {
-            "model": self._settings.litellm_model_alias,
+            "model": pipeline.model_alias or self._settings.litellm_model_alias,
             "messages": pipeline.messages(user_input),
             "temperature": pipeline.temperature,
             "max_tokens": pipeline.max_tokens,

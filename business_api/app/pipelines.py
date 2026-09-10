@@ -60,6 +60,7 @@ class Pipeline:
     system_prompt: str
     temperature: float
     max_tokens: int
+    model_alias: str | None = None
     response_schema: dict[str, Any] | None = None
     thinking_mode: Literal["enabled", "disabled"] | None = None
     reasoning_effort: Literal["low", "high", "max"] | None = None
