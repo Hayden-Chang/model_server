@@ -87,7 +87,7 @@ def test_normal_correction_keeps_one_retry_with_explicit_phase_budgets():
     assert response.validation.attempts == 2
     assert [pipeline.timeout_seconds for pipeline, _ in fake.calls] == [30.0, 15.0]
     assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["enabled", "enabled"]
-    assert [pipeline.reasoning_effort for pipeline, _ in fake.calls] == ["high", "high"]
+    assert [pipeline.reasoning_effort for pipeline, _ in fake.calls] == ["low", "low"]
 
 
 def test_external_cancellation_propagates_without_turning_into_a_retry():

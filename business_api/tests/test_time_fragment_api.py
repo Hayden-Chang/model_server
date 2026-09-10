@@ -30,7 +30,7 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
     assert pipeline is not None
     assert pipeline.max_tokens == 20_000
     assert pipeline.thinking_mode == "enabled"
-    assert pipeline.reasoning_effort == "high"
+    assert pipeline.reasoning_effort == "low"
 
 
 @dataclass
@@ -325,7 +325,7 @@ def test_plan_parse_returns_complete_v2_envelope_for_empty_current_plan(settings
     pipeline, first_input = fake.calls[0]
     assert pipeline.pipeline_id == "time-fragment-plan-v2"
     assert pipeline.thinking_mode == "enabled"
-    assert pipeline.reasoning_effort == "high"
+    assert pipeline.reasoning_effort == "low"
     assert json.loads(first_input) == {
         "text": payload["text"],
         "currentPlan": {"date": "2026-08-24", "items": []},

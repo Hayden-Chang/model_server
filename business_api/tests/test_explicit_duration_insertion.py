@@ -44,7 +44,7 @@ def test_explicit_start_and_duration_correction_preserves_insertion_and_shifted_
     assert len(fake.calls) == 2
     pipeline, _ = fake.calls[1]
     assert pipeline.thinking_mode == "enabled" and pipeline.timeout_seconds == 15
-    assert pipeline.reasoning_effort == "high"
+    assert pipeline.reasoning_effort == "low"
     assert "Never compute an unstated boundary from duration" in pipeline.system_prompt
     assert [(item["title"], item["segments"]) for item in body["proposal"]["candidatePlan"]["items"]] == [
         ("打游戏", [{"startSlot": 80, "endSlot": 83}]),

@@ -107,7 +107,7 @@ async def _execute_time_fragment_plan(
 
     _ensure_input_within_limit(correction_input, max_input_chars)
     fallback_pipeline = replace(
-        pipeline, thinking_mode="enabled", reasoning_effort="high", timeout_seconds=_CORRECTION_TIMEOUT_SECONDS,
+        pipeline, thinking_mode="enabled", reasoning_effort="low", timeout_seconds=_CORRECTION_TIMEOUT_SECONDS,
     )
     async with asyncio.timeout(_CORRECTION_TIMEOUT_SECONDS):
         second_output = await model_client.complete(fallback_pipeline, correction_input)

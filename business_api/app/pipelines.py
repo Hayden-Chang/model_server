@@ -223,7 +223,7 @@ PIPELINES: dict[str, Pipeline] = {
         max_tokens=20_000,
         response_schema=TIME_FRAGMENT_OPERATIONS_SCHEMA,
         thinking_mode="enabled",
-        reasoning_effort="high",
+        reasoning_effort="low",
     ),
 }
 
