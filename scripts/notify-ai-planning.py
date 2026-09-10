@@ -40,7 +40,7 @@ def send_mail(config, kind, result, incident=None):
     message["Subject"] = "[DayMosaic] " + titles[kind]
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid()
-    lines = [titles[kind], "", "服务：https://api.keeline.xyz"]
+    lines = [titles[kind], "", "服务：DayMosaic AI 规划"]
     if kind == "test":
         lines += ["这是一封配置验证邮件，没有触发模型调用。", "以后只在探测发现故障和恢复时通知，正常运行不发信。"]
     else:

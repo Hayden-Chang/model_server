@@ -76,6 +76,38 @@ def test_recovery_email_keeps_original_incident_trace_ids(monkeypatch, configure
     assert "probe-run-123" in bodies[0] and "probe-run-123-plan" in bodies[0]
 
 
+def test_email_bodies_are_self_contained_without_urls(monkeypatch, configured_mail):
+    bodies = {}
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        def login(self, *args):
+            pass
+        def send_message(self, message, **kwargs):
+            bodies[str(message["Subject"])] = message.get_content()
+        def close(self):
+            pass
+    monkeypatch.setattr(MAIL.smtplib, "SMTP_SSL", Client)
+    config = configured_mail | {"port": 465}
+    MAIL.send_mail(config, "failure", FAILURE)
+    MAIL.send_mail(config, "recovery", HEALTHY, FAILURE)
+    MAIL.send_mail(config, "test", {})
+
+    assert len(bodies) == 3
+    assert all("http://" not in body and "https://" not in body for body in bodies.values())
+    assert all("服务：DayMosaic AI 规划" in body for body in bodies.values())
+    failure = bodies["[DayMosaic] AI 规划服务检测异常"]
+    assert all(value in failure for value in
+               (FAILURE["checkedAt"], "阶段：plan", "错误码：MODEL_GATEWAY_ERROR", "HTTP 状态：502",
+                "检测运行 ID：probe-run-123", "请求 ID：probe-run-123-plan"))
+    recovery = bodies["[DayMosaic] AI 规划服务已恢复"]
+    assert all(value in recovery for value in
+               (HEALTHY["checkedAt"], "首次异常：" + FAILURE["checkedAt"], "真实排程已通过：08:00–08:30。",
+                "异常检测运行 ID：probe-run-123", "异常请求 ID：probe-run-123-plan"))
+    test = bodies["[DayMosaic] AI 规划告警邮箱验证"]
+    assert "配置验证邮件" in test and "没有触发模型调用" in test and "正常运行不发信" in test
+
+
 def test_failed_recovery_delivery_retries_on_next_healthy_run(tmp_path, monkeypatch, configured_mail):
     monkeypatch.setattr(MAIL, "send_mail", lambda *args: None)
     MAIL.notify(tmp_path, FAILURE)
