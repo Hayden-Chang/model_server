@@ -68,7 +68,7 @@ def test_adjustment_clock_coverage_still_rejects_missing_or_unrelated_boundaries
     assert any(issue["field"] == "timeConstraint" for issue in body["validation"]["issues"])
 
 
-def test_missing_move_quote_is_corrected_once_without_ineffective_reasoning_effort(settings):
+def test_missing_move_quote_correction_uses_high_reasoning_effort(settings):
     fixture = adjustment_fixture()
     invalid = json.loads(json.dumps(fixture["operations"]))
     for operation in invalid:
@@ -81,6 +81,6 @@ def test_missing_move_quote_is_corrected_once_without_ineffective_reasoning_effo
     assert len(fake.calls) == 2
     correction, prompt = fake.calls[1]
     assert "未被时间依据覆盖" in prompt
-    assert correction.thinking_mode == "disabled"
-    assert correction.reasoning_effort is None
+    assert correction.thinking_mode == "enabled"
+    assert correction.reasoning_effort == "high"
     assert correction.timeout_seconds == 15

@@ -37,7 +37,7 @@ def test_wrong_model_clock_never_becomes_a_valid_free_schedule(settings, evidenc
     body = response.json()
     assert response.status_code == 200
     assert body["validation"]["valid"] is False
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["enabled", "enabled"]
 
 
 def run_clock_request(settings, text, operations, *, corrected=None, items=None, earliest=None):
@@ -90,7 +90,7 @@ def test_semantic_clock_errors_retain_unscheduled_candidate_and_correct_only_onc
     assert len(body["proposal"]["operations"]) == 1
     assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == []
     assert any(issue["field"] == "timeConstraint" for issue in body["validation"]["issues"])
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["enabled", "enabled"]
     candidate_json = json.dumps(json.loads(fake.calls[1][1])["firstCandidate"])
     for private_field in ("sourceText", "timeConstraint", "startEvidence", "authorizationText", "domainRef"):
         assert private_field not in candidate_json

@@ -47,8 +47,8 @@ def test_wrong_task_clock_still_requires_correction(settings):
     body, fake = run_clock_request(settings, text, [operation], earliest=36)
     assert body["validation"]["valid"] is False
     assert len(fake.calls) == 2
-    assert fake.calls[1][0].thinking_mode == "disabled"
-    assert fake.calls[1][0].reasoning_effort is None
+    assert fake.calls[1][0].thinking_mode == "enabled"
+    assert fake.calls[1][0].reasoning_effort == "high"
     assert fake.calls[1][0].timeout_seconds == 15.0
 
 

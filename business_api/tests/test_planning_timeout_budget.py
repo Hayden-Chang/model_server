@@ -86,7 +86,8 @@ def test_normal_correction_keeps_one_retry_with_explicit_phase_budgets():
     response = asyncio.run(service.execute_time_fragment_plan(fake, request(), max_input_chars=100000))
     assert response.validation.attempts == 2
     assert [pipeline.timeout_seconds for pipeline, _ in fake.calls] == [30.0, 15.0]
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["enabled", "enabled"]
+    assert [pipeline.reasoning_effort for pipeline, _ in fake.calls] == ["high", "high"]
 
 
 def test_external_cancellation_propagates_without_turning_into_a_retry():

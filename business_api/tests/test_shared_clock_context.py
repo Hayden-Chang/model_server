@@ -139,5 +139,6 @@ def test_shared_clock_guidance_is_sent_in_prompt_and_model_schema():
     properties = TIME_FRAGMENT_OPERATIONS_SCHEMA["$defs"]["TimeFragmentExtractedAddOperation"]["properties"]
     assert "shared clock" in properties["sourceText"].get("description", "")
     assert "shared clock" in properties["timeConstraint"].get("description", "")
-    assert pipeline.temperature == 0 and pipeline.thinking_mode == "disabled"
+    assert pipeline.temperature == 0 and pipeline.thinking_mode == "enabled"
+    assert pipeline.reasoning_effort == "high"
     assert pipeline.max_tokens == 20000

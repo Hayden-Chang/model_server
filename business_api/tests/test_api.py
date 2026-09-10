@@ -130,12 +130,20 @@ def test_text_pipeline_assembles_server_owned_parameters(settings: Settings) -> 
     assert pipeline.messages(user_input)[0]["role"] == "system"
 
 
+def test_time_fragment_v2_enables_high_effort_reasoning() -> None:
+    pipeline = get_pipeline("time-fragment-plan-v2")
+
+    assert pipeline is not None
+    assert pipeline.thinking_mode == "enabled"
+    assert pipeline.reasoning_effort == "high"
+
+
 @pytest.mark.parametrize(
     ("pipeline_id", "thinking_override", "expected_thinking"),
     [
         ("general-text-v1", None, None),
-        ("time-fragment-plan-v2", None, {"type": "disabled"}),
-        ("time-fragment-plan-v2", "enabled", {"type": "enabled"}),
+        ("time-fragment-plan-v2", None, {"type": "enabled"}),
+        ("time-fragment-plan-v2", "disabled", {"type": "disabled"}),
     ],
 )
 def test_litellm_client_forwards_pipeline_thinking_mode(
