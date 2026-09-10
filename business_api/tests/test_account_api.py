@@ -294,6 +294,18 @@ def test_account_api_failure_log_keeps_http_trace_and_safe_code(configuration, c
     assert "private" not in caplog.records[-1].message
 
 
+def test_account_api_failure_log_rejects_unknown_uppercase_code(configuration, caplog):
+    backend = Backend()
+    backend.quota_error = failure("PRIVATE_SECRET", 503)
+    with caplog.at_level(logging.WARNING, logger="app.account_api"):
+        with TestClient(create_account_api(configuration, backend)) as client:
+            response = client.post("/api/plan/parse", headers=account_headers(), json=request_payload())
+    assert response.status_code == 503
+    record = json.loads(caplog.records[-1].message)
+    assert record["code"] == "HTTP_ERROR"
+    assert "PRIVATE_SECRET" not in caplog.records[-1].message
+
+
 def test_internal_planner_rejects_guest_business_token_changed_body_and_old_public_route(settings,configuration):
     model=FakeModelClient([])
     internal=settings.model_copy(update={"planning_internal_secret":configuration.planning_internal_secret,"planning_internal_only":True})

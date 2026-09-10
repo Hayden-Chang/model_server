@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -108,14 +109,14 @@ class HTTPClient:
             response = self.opener.open(request, timeout=60 if path == "/api/plan/parse" else 10)
         except urllib.error.HTTPError as error:
             response = error
-        except (OSError, urllib.error.URLError) as error:
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
             raise ProbeFailure(path, transport_error_code(error), request_id=safe_request_id(request_id)) from None
         try:
             with response:
                 status = response.status
                 response_request_id = safe_request_id(response.headers.get("X-Request-ID"))
                 raw = response.read(1_048_577)
-        except (OSError, urllib.error.URLError) as error:
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
             raise ProbeFailure(path, transport_error_code(error), request_id=safe_request_id(request_id)) from None
         if len(raw) > 1_048_576:
             raise ProbeFailure(path, "RESPONSE_TOO_LARGE", status, safe_request_id(request_id), response_request_id)
@@ -184,14 +185,18 @@ def check(client, device_id, now, support_code="", admin_key_file=None, run_id=N
     if not re.fullmatch(r"ai-planning-hourly-probe-[a-f0-9-]{36}", device_id):
         raise ProbeFailure("configuration", "DEDICATED_PROBE_ID_REQUIRED")
     health_id = run_id + "-health"
-    health = require_success("health", client.request("/health/ready", request_id=health_id), health_id)
+    health_response = client.request("/health/ready", request_id=health_id)
+    health = require_success("health", health_response, health_id)
     if not isinstance(health, dict) or health.get("status") != "ready":
-        raise ProbeFailure("health", "NOT_READY", request_id=health_id)
+        raise ProbeFailure("health", "NOT_READY", request_id=health_id,
+                           response_request_id=health_response[2])
     auth_id = run_id + "-auth"
-    auth = require_success("auth", client.request("/api/auth/guest", {"device_id": device_id}, request_id=auth_id), auth_id)
+    auth_response = client.request("/api/auth/guest", {"device_id": device_id}, request_id=auth_id)
+    auth = require_success("auth", auth_response, auth_id)
     token = auth.get("access_token") if isinstance(auth, dict) else None
     if not isinstance(token, str) or not token:
-        raise ProbeFailure("auth", "MISSING_TOKEN", request_id=auth_id)
+        raise ProbeFailure("auth", "MISSING_TOKEN", request_id=auth_id,
+                           response_request_id=auth_response[2])
     payload, http_id = make_payload(now), run_id + "-plan"
     response = client.request("/api/plan/parse", payload, token, http_id)
     detail = response[1].get("detail", {}) if isinstance(response[1], dict) else {}
@@ -199,10 +204,12 @@ def check(client, device_id, now, support_code="", admin_key_file=None, run_id=N
     if response[0] == 429 and isinstance(detail, dict) and detail.get("code") == "AI_QUOTA_EXHAUSTED":
         # Only replenish this deployment's pre-bound probe identity, never a user or a global quota.
         if not re.fullmatch(r"TF-[A-Z2-7]{4}-[A-Z2-7]{4}", support_code) or detail.get("supportCode") != support_code or admin_key_file is None:
-            raise ProbeFailure("probe_quota", "PROBE_QUOTA_CONFIGURATION_REQUIRED", 429)
+            raise ProbeFailure("probe_quota", "PROBE_QUOTA_CONFIGURATION_REQUIRED", 429,
+                               http_id, response[2])
         key = Path(admin_key_file).read_text().strip()
         if not key:
-            raise ProbeFailure("probe_quota", "MISSING_ADMIN_CREDENTIAL")
+            raise ProbeFailure("probe_quota", "MISSING_ADMIN_CREDENTIAL",
+                               request_id=http_id, response_request_id=response[2])
         reset_id = run_id + "-quota-reset"
         require_success("probe_quota", client.request("/admin/time-fragment/quotas/" + support_code + "/reset",
                                                       {}, key, reset_id), reset_id)

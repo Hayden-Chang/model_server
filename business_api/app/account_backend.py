@@ -15,8 +15,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .planning_auth import PlanningCredentials
 
 LOGGER = logging.getLogger(__name__)
-SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+SAFE_ERROR_CODES = frozenset({
+    "ACCOUNT_SERVICE_UNAVAILABLE", "ACCOUNT_UNAVAILABLE", "AI_ACCOUNT_REQUIRED",
+    "AI_DAILY_QUOTA_EXHAUSTED", "AI_QUOTA_EXHAUSTED", "AI_REQUEST_ALREADY_COMPLETED",
+    "AI_REQUEST_ID_CONFLICT", "AI_REQUEST_IN_PROGRESS", "DEVELOPMENT_MEMBERSHIP_DISABLED",
+    "EARLIEST_START_REQUIRED", "INPUT_TOO_LARGE", "INTERNAL_PLANNING_DISABLED",
+    "INVALID_TIME_RANGE", "MODEL_GATEWAY_ERROR", "MODEL_GATEWAY_UNAVAILABLE",
+    "PLANNING_DATE_NOT_ALLOWED", "SUPPORT_CODE_NOT_FOUND", "UNAUTHORIZED",
+})
 
 
 def error_class(error: Exception) -> str:
@@ -36,7 +43,7 @@ def response_error_code(response: httpx.Response | None) -> str | None:
         body = response.json() if response is not None else {}
         detail = body.get("detail", {}) if isinstance(body, dict) else {}
         code = detail.get("code") if isinstance(detail, dict) else None
-        return code if isinstance(code, str) and SAFE_CODE.fullmatch(code) else None
+        return code if code in SAFE_ERROR_CODES else None
     except (ValueError, TypeError):
         return None
 

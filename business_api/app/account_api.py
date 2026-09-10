@@ -11,7 +11,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .account_backend import AccountAPISettings, AccountBackend, Actor, failure, support_code
+from .account_backend import (SAFE_ERROR_CODES, AccountAPISettings, AccountBackend, Actor,
+                              failure, support_code)
 from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipResponse,
                         TimeFragmentGuestRequest, TimeFragmentGuestResponse,
                         TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2,
@@ -20,7 +21,6 @@ from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -30,7 +30,7 @@ def log_http_failure(request: Request, status: int, detail) -> None:
               "method": request.method,
               "route": getattr(request.scope.get("route"), "path", request.url.path),
               "status": status,
-              "code": code if isinstance(code, str) and ERROR_CODE_PATTERN.fullmatch(code) else "HTTP_ERROR"}
+              "code": code if code in SAFE_ERROR_CODES else "HTTP_ERROR"}
     LOGGER.warning(json.dumps(record, separators=(",", ":")))
 
 

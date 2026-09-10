@@ -1,5 +1,6 @@
 import copy
 import fcntl
+import http.client
 import importlib.util
 import json
 import socket
@@ -124,6 +125,16 @@ def test_transport_failures_are_classified_without_raw_exception(monkeypatch, re
     assert "private" not in repr(vars(failure.value))
 
 
+def test_incomplete_http_response_is_safely_classified(monkeypatch):
+    client = PROBE.HTTPClient("https://api.keeline.xyz")
+    monkeypatch.setattr(client.opener, "open", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(http.client.IncompleteRead(b"private-partial", 100)))
+    with pytest.raises(PROBE.ProbeFailure) as failure:
+        client.request("/health/ready", request_id="probe-run-123-health")
+    assert failure.value.code == "NETWORK_ERROR"
+    assert "private" not in repr(vars(failure.value))
+
+
 def test_quota_diagnostics_use_route_template_without_support_code(tmp_path):
     key = tmp_path / "key"
     key.write_text("private-admin-key")
@@ -145,8 +156,10 @@ def test_quota_recovery_never_resets_an_unbound_or_membership_identity(response_
     key = tmp_path / "key"
     key.write_text("private-admin-key")
     http = FakeHTTP(429, {"code": error_code, "supportCode": response_code})
-    with pytest.raises(PROBE.ProbeFailure):
+    with pytest.raises(PROBE.ProbeFailure) as failure:
         PROBE.check(http, DEVICE, NOW, bound_code, key)
+    assert failure.value.request_id == failure.value.response_request_id
+    assert failure.value.request_id.endswith("-plan")
     assert not any(c[0].startswith("/admin/") for c in http.calls)
 
 
