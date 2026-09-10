@@ -30,6 +30,8 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
     assert pipeline is not None
     assert pipeline.max_tokens == 20_000
     assert pipeline.thinking_mode == "disabled"
+    assert "性能" in pipeline.system_prompt
+    assert "title、sourceText 原样保留" in pipeline.system_prompt
 
 
 @dataclass
@@ -1389,6 +1391,130 @@ def test_two_unparseable_outputs_return_parse_failed_and_never_make_a_third_call
     assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
 
 
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        [raw_output("not-json"), raw_output('{"operations":"still-invalid"}')],
+        [operations_output([]), operations_output([])],
+        [
+            operations_output([model_add("性能优化", "性能")]),
+            operations_output([model_add("优化性能", "性能")]),
+        ],
+    ],
+    ids=["unparseable", "empty-operations", "rewritten-title"],
+)
+def test_two_model_failures_fall_back_for_a_bare_task_title(
+    settings: Settings,
+    outputs: list[ModelOutput],
+) -> None:
+    fake = FakeModelClient(outputs + [operations_output([])])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text="性能",
+                date="2026-08-25",
+                earliest_start_slot=36,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    assert len(body["proposal"]["operations"]) == 1
+    operation = body["proposal"]["operations"][0]
+    assert operation["type"] == "add"
+    assert operation["title"] == "性能"
+    assert operation["durationSlots"] == 2
+    assert operation["priority"] is None
+    assert body["proposal"]["candidatePlan"]["items"] == [
+        {
+            "itemId": operation["temporaryId"],
+            "objectType": "internalTask",
+            "domainRef": None,
+            "title": "性能",
+            "durationSlots": 2,
+            "segments": [{"startSlot": 36, "endSlot": 38}],
+            "isPinned": False,
+            "isCompleted": False,
+        }
+    ]
+    assert len(fake.calls) == 2
+
+
+def test_bare_task_title_fallback_retains_an_unplaced_todo(
+    settings: Settings,
+) -> None:
+    full_day_items = [
+        {
+            "itemId": f"existing-{index}",
+            "objectType": "internalTask",
+            "domainRef": {
+                "taskId": f"task-{index}",
+                "occurrenceId": f"existing-{index}",
+                "scheduledTaskId": f"scheduled-{index}",
+            },
+            "title": f"已有任务 {index + 1}",
+            "durationSlots": 4,
+            "segments": [{"startSlot": index * 4, "endSlot": index * 4 + 4}],
+            "isPinned": False,
+            "isCompleted": False,
+        }
+        for index in range(24)
+    ]
+    fake = FakeModelClient([raw_output("not-json"), raw_output("still-not-json")])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text="性能",
+                date="2026-08-25",
+                items=full_day_items,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"]["valid"] is True
+    assert body["validation"]["attempts"] == 2
+    assert {
+        (issue["code"], issue["severity"])
+        for issue in body["validation"]["issues"]
+    } == {("UNPLACED", "warning")}
+    added = next(
+        item
+        for item in body["proposal"]["candidatePlan"]["items"]
+        if item["title"] == "性能"
+    )
+    assert added["durationSlots"] == 2
+    assert added["segments"] == []
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("text", ["删除性能", "把性能移到下午"])
+def test_two_unparseable_outputs_do_not_treat_commands_as_bare_task_titles(
+    settings: Settings,
+    text: str,
+) -> None:
+    fake = FakeModelClient([raw_output("not-json"), raw_output("still-not-json")])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(text=text),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["proposal"] is None
+    assert body["validation"]["valid"] is False
+    assert body["validation"]["attempts"] == 2
+    assert [issue["code"] for issue in body["validation"]["issues"]] == ["PARSE_FAILED"]
+    assert len(fake.calls) == 2
+
+
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(
     settings: Settings,
 ) -> None:
@@ -1585,6 +1711,37 @@ def test_duplicate_consumed_request_id_is_rejected_without_another_model_call(
     assert duplicate.json()["detail"]["code"] == "AI_REQUEST_ALREADY_COMPLETED"
     assert new_request.status_code == 429
     assert len(fake.calls) == 1
+
+
+def test_bare_title_fallback_consumes_quota_and_request_id(
+    settings: Settings,
+) -> None:
+    limited_settings = settings.model_copy(update={"time_fragment_guest_quota_limit": 1})
+    fake = FakeModelClient([raw_output("not-json"), raw_output("still-not-json")])
+    with TestClient(create_app(limited_settings, fake)) as client:
+        headers = guest_headers(client, "time-fragment-ios-bare-title-device")
+        first = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(text="性能", request_id="bare-title-request"),
+        )
+        duplicate = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(text="性能", request_id="bare-title-request"),
+        )
+        new_request = client.post(
+            "/api/plan/parse",
+            headers=headers,
+            json=request_payload(text="性能", request_id="new-bare-title-request"),
+        )
+
+    assert first.status_code == 200
+    assert first.json()["proposal"] is not None
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "AI_REQUEST_ALREADY_COMPLETED"
+    assert new_request.status_code == 429
+    assert len(fake.calls) == 2
 
 
 def test_quota_admin_reset_all_requires_admin_key(settings: Settings) -> None:

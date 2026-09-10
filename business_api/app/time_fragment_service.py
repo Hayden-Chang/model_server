@@ -1,11 +1,17 @@
 import asyncio
 import json
+import re
 from dataclasses import replace
 from datetime import date as Date
 from datetime import datetime
 from typing import Any
 
-from .contracts import TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2
+from .contracts import (
+    TimeFragmentExtractedAddOperation,
+    TimeFragmentExtractedOperations,
+    TimeFragmentPlanRequestV2,
+    TimeFragmentPlanResponseV2,
+)
 from .model_client import ModelGatewayUnavailable
 from .pipelines import get_pipeline
 from .time_fragment import (
@@ -14,6 +20,7 @@ from .time_fragment import (
     project_time_fragment_request_for_model,
 )
 from .time_fragment_postprocessor import (
+    TimeFragmentCorrectionIssue,
     TimeFragmentModelOutputInvalid,
     build_time_fragment_correction_input,
     parse_time_fragment_model_operations,
@@ -23,6 +30,16 @@ from .time_fragment_postprocessor import (
 _PLAN_TIMEOUT_SECONDS = 45.0
 _INITIAL_MODEL_TIMEOUT_SECONDS = 30.0
 _CORRECTION_TIMEOUT_SECONDS = 15.0
+_BARE_TITLE_MAX_LENGTH = 20
+_BARE_TITLE_COMMAND_PREFIX = re.compile(
+    r"^(?:把|将|请|帮我|麻烦|删除|删掉|移除|取消|移动|移到|挪到|改到|调到|调整|"
+    r"改标题|修改标题|重命名|改名|安排|新增|添加|插入|不要|保持)"
+)
+_BARE_TITLE_SENTENCE_BREAK = re.compile(r"[\r\n，,。；;！？!?：:、]")
+_BARE_TITLE_SCHEDULING_DETAIL = re.compile(
+    r"\d|今天|明天|后天|上午|中午|下午|晚上|凌晨|早上|清晨|点钟|分钟|小时|刻钟|"
+    r"然后|之后|以前|之前|以后|直到|接着|随后|先.+再"
+)
 
 
 class TimeFragmentInputTooLarge(Exception):
@@ -56,6 +73,7 @@ async def _execute_time_fragment_plan(
     max_input_chars: int,
 ) -> TimeFragmentPlanResponseV2:
     _validate_temporal_request(request)
+    bare_title = _bare_task_title(request.text)
     pipeline = get_pipeline("time-fragment-plan-v2")
     assert pipeline is not None
     pipeline = replace(pipeline, timeout_seconds=_INITIAL_MODEL_TIMEOUT_SECONDS)
@@ -83,27 +101,37 @@ async def _execute_time_fragment_plan(
             None,
         )
     else:
-        first_response = plan_time_fragment(request, first_operations, attempts=1)
-        if first_response.validation.valid:
-            return first_response
-        correction_issues = [
-            issue
-            for issue in first_response.validation.issues
-            if issue.severity == "error"
-        ]
-        if not correction_issues:
-            return first_response
-        correction_input = build_time_fragment_correction_input(
-            model_request,
-            correction_issues,
-            first_response,
-        )
-        if first_operations.temporal_relations:
-            with_extraction = build_time_fragment_correction_input(
-                model_request, correction_issues, first_response, first_operations,
+        if bare_title is not None and not _matches_bare_title_contract(
+            first_operations, bare_title,
+        ):
+            correction_input = build_time_fragment_correction_input(
+                model_request,
+                [_bare_title_correction_issue()],
+                None,
+                first_operations,
             )
-            if len(with_extraction) <= max_input_chars:
-                correction_input = with_extraction
+        else:
+            first_response = plan_time_fragment(request, first_operations, attempts=1)
+            if first_response.validation.valid:
+                return first_response
+            correction_issues = [
+                issue
+                for issue in first_response.validation.issues
+                if issue.severity == "error"
+            ]
+            if not correction_issues:
+                return first_response
+            correction_input = build_time_fragment_correction_input(
+                model_request,
+                correction_issues,
+                first_response,
+            )
+            if first_operations.temporal_relations:
+                with_extraction = build_time_fragment_correction_input(
+                    model_request, correction_issues, first_response, first_operations,
+                )
+                if len(with_extraction) <= max_input_chars:
+                    correction_input = with_extraction
 
     _ensure_input_within_limit(correction_input, max_input_chars)
     fallback_pipeline = replace(
@@ -114,11 +142,76 @@ async def _execute_time_fragment_plan(
     try:
         second_operations = parse_time_fragment_model_operations(second_output.content)
     except TimeFragmentModelOutputInvalid:
+        if bare_title is not None:
+            return _plan_bare_title(request, bare_title)
         return build_time_fragment_parse_failed_response(
             request.request_id,
             attempts=2,
         )
+    if bare_title is not None and not _matches_bare_title_contract(
+        second_operations, bare_title,
+    ):
+        return _plan_bare_title(request, bare_title)
     return plan_time_fragment(request, second_operations, attempts=2)
+
+
+def _bare_task_title(text: str) -> str | None:
+    title = text.strip()
+    if not 1 <= len(title) <= _BARE_TITLE_MAX_LENGTH:
+        return None
+    if _BARE_TITLE_SENTENCE_BREAK.search(title):
+        return None
+    if _BARE_TITLE_COMMAND_PREFIX.search(title):
+        return None
+    if _BARE_TITLE_SCHEDULING_DETAIL.search(title):
+        return None
+    return title
+
+
+def _matches_bare_title_contract(
+    operations: TimeFragmentExtractedOperations,
+    title: str,
+) -> bool:
+    if operations.temporal_relations or len(operations.operations) != 1:
+        return False
+    operation = operations.operations[0]
+    return (
+        isinstance(operation, TimeFragmentExtractedAddOperation)
+        and operation.title == title
+        and operation.source_text == title
+        and operation.duration_slots == 2
+        and operation.priority is None
+        and operation.input_order == 0
+        and operation.time_constraint is None
+    )
+
+
+def _bare_title_correction_issue() -> TimeFragmentCorrectionIssue:
+    return TimeFragmentCorrectionIssue(
+        "BARE_TITLE_MISMATCH",
+        "纯任务标题必须原样返回唯一 add，使用默认 30 分钟且不添加时间、优先级或关系",
+    )
+
+
+def _plan_bare_title(
+    request: TimeFragmentPlanRequestV2,
+    title: str,
+) -> TimeFragmentPlanResponseV2:
+    operations = TimeFragmentExtractedOperations(
+        operations=[
+            TimeFragmentExtractedAddOperation(
+                type="add",
+                title=title,
+                durationSlots=2,
+                priority=None,
+                inputOrder=0,
+                sourceText=title,
+                timeConstraint=None,
+            )
+        ],
+        temporalRelations=[],
+    )
+    return plan_time_fragment(request, operations, attempts=2)
 
 
 def _ensure_input_within_limit(user_input: str, max_input_chars: int) -> None:
