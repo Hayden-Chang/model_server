@@ -49,9 +49,11 @@ node scripts/build-contract.mjs --check
 
 Once a migration is deployed, add a new migration; do not rewrite applied files.
 The contract generator rejects keywords unsupported by the restricted SQL
-validator. V1 only is supported: no previous Cloud DTO has shipped, and there are
-no supported schema migration edges yet. Adding v2 requires its own checkpointed,
-CAS-protected migration and fixtures, rather than writing v2 with an ordinary op.
+validator. V1 remains the only schema accepted by any write path: v2 contract
+files are registered under the `cloud-state-v2`/`operation-v2` contract names,
+but no RPC reads them yet. The checkpointed, CAS-protected `migrate_sync_state`
+RPC that must exist before v2 state can be stored is a separate upcoming change;
+until it lands, writing v2 with an ordinary op is impossible by design.
 
 ## Local Supabase and hosted deployment
 

@@ -1,0 +1,187 @@
+[
+  {
+    "name": "v2-empty",
+    "state": {
+      "schemaVersion": 2,
+      "tasks": [],
+      "occurrences": [],
+      "scheduledTasks": [],
+      "externalEvents": [],
+      "focusSessions": [],
+      "activeFocusSessionID": null,
+      "puzzle": {
+        "fragments": 0,
+        "rewardedTaskIDs": [],
+        "unlockedArtworkIDs": [],
+        "dayArtworkIDs": {},
+        "completedTaskIDs": [],
+        "works": [],
+        "celebratedDays": [],
+        "dayFinishState": null,
+        "automaticRandom": false
+      }
+    },
+    "canonical": "{\"activeFocusSessionID\":null,\"externalEvents\":[],\"focusSessions\":[],\"occurrences\":[],\"puzzle\":{\"automaticRandom\":false,\"celebratedDays\":[],\"completedTaskIDs\":[],\"dayArtworkIDs\":{},\"dayFinishState\":null,\"fragments\":0,\"rewardedTaskIDs\":[],\"unlockedArtworkIDs\":[],\"works\":[]},\"scheduledTasks\":[],\"schemaVersion\":2,\"tasks\":[]}",
+    "hash": "sha256:e08fdfef07f598f42181f365b50cf0daf37c613471ac83f4e3e6b07c45b357a3"
+  },
+  {
+    "name": "v2-puzzle-task-fields",
+    "state": {
+      "schemaVersion": 2,
+      "tasks": [
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "title": "读书 📚",
+          "note": "quote \" and newline\n",
+          "estimatedDurationSlots": 2,
+          "repeatRule": "none",
+          "repeatForWeeks": 2,
+          "repeatWeekdays": [],
+          "isPinned": true,
+          "colorHex": "#AABBCC",
+          "startReminder": "10",
+          "customColorHex": "#12AB34",
+          "createdAt": "2026-09-08T10:00:00.000Z",
+          "updatedAt": "2026-09-08T10:00:00.000Z"
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000002",
+          "title": "跑步",
+          "note": "",
+          "estimatedDurationSlots": 1,
+          "repeatRule": "none",
+          "repeatForWeeks": 2,
+          "repeatWeekdays": [],
+          "isPinned": false,
+          "colorHex": "#CCDDEE",
+          "startReminder": "off",
+          "customColorHex": null,
+          "createdAt": "2026-09-08T10:00:00.000Z",
+          "updatedAt": "2026-09-08T10:00:00.000Z"
+        }
+      ],
+      "occurrences": [
+        {
+          "id": "00000000-0000-0000-0000-000000000003",
+          "taskID": "00000000-0000-0000-0000-000000000001",
+          "occurrenceDate": "2026-09-08",
+          "unscheduledDate": null,
+          "isAllDay": false,
+          "continuationSourceOccurrenceID": null,
+          "orderKey": "0:0000000000000000:00000000-0000-0000-0000-000000000003",
+          "status": "scheduled",
+          "completedAt": null,
+          "overrides": null
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000004",
+          "taskID": "00000000-0000-0000-0000-000000000002",
+          "occurrenceDate": "2026-09-08",
+          "unscheduledDate": null,
+          "isAllDay": false,
+          "continuationSourceOccurrenceID": null,
+          "orderKey": "0:0000000000000000:00000000-0000-0000-0000-000000000004",
+          "status": "todo",
+          "completedAt": null,
+          "overrides": {
+            "title": "跑步",
+            "note": "",
+            "estimatedDurationSlots": 1,
+            "repeatRule": "none",
+            "repeatForWeeks": 2,
+            "repeatWeekdays": [],
+            "isPinned": false,
+            "startReminder": "5",
+            "customColorHex": null
+          }
+        }
+      ],
+      "scheduledTasks": [
+        {
+          "id": "00000000-0000-0000-0000-000000000005",
+          "taskOccurrenceID": "00000000-0000-0000-0000-000000000003",
+          "date": "2026-09-08",
+          "startSlot": 8,
+          "plannedDurationSlots": 2,
+          "segments": [
+            {
+              "id": "00000000-0000-0000-0000-000000000006",
+              "scheduledTaskID": "00000000-0000-0000-0000-000000000005",
+              "startSlot": 8,
+              "endSlot": 10
+            }
+          ]
+        }
+      ],
+      "externalEvents": [
+        {
+          "id": "00000000-0000-0000-0000-000000000007",
+          "title": "牙医",
+          "date": "2026-09-08",
+          "sourceStartSlot": 20,
+          "sourceEndSlot": 22,
+          "plannedDurationSlots": 2,
+          "segments": [
+            {
+              "id": "00000000-0000-0000-0000-000000000008",
+              "externalEventID": "00000000-0000-0000-0000-000000000007",
+              "startSlot": 20,
+              "endSlot": 22
+            }
+          ],
+          "isAllDay": false,
+          "importedAt": "2026-09-08T08:00:00.000Z",
+          "isFixed": true,
+          "originPlatform": "ios",
+          "originDeviceID": "00000000-0000-0000-0000-0000000000aa",
+          "sourceFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "focusSessions": [],
+      "activeFocusSessionID": null,
+      "puzzle": {
+        "fragments": 42,
+        "rewardedTaskIDs": [
+          "00000000-0000-0000-0000-000000000001"
+        ],
+        "unlockedArtworkIDs": [
+          "artwork-2026-001"
+        ],
+        "dayArtworkIDs": {
+          "2026-09-08": "artwork-2026-001"
+        },
+        "completedTaskIDs": [
+          "00000000-0000-0000-0000-000000000001"
+        ],
+        "works": [
+          {
+            "day": "2026-09-08",
+            "artworkID": "artwork-2026-001",
+            "tasks": [
+              {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "title": "读书 📚",
+                "slots": [
+                  8,
+                  9
+                ],
+                "isPinned": true
+              }
+            ],
+            "imagePath": "works/2026-09-08/00000000-0000-0000-0000-000000000001.png"
+          }
+        ],
+        "celebratedDays": [
+          "2026-09-08"
+        ],
+        "dayFinishState": {
+          "completedCount": 2,
+          "streakDays": 3
+        },
+        "automaticRandom": true
+      }
+    },
+    "canonical": "{\"activeFocusSessionID\":null,\"externalEvents\":[{\"date\":\"2026-09-08\",\"id\":\"00000000-0000-0000-0000-000000000007\",\"importedAt\":\"2026-09-08T08:00:00.000Z\",\"isAllDay\":false,\"isFixed\":true,\"originDeviceID\":\"00000000-0000-0000-0000-0000000000aa\",\"originPlatform\":\"ios\",\"plannedDurationSlots\":2,\"segments\":[{\"endSlot\":22,\"externalEventID\":\"00000000-0000-0000-0000-000000000007\",\"id\":\"00000000-0000-0000-0000-000000000008\",\"startSlot\":20}],\"sourceEndSlot\":22,\"sourceFingerprint\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceStartSlot\":20,\"title\":\"牙医\"}],\"focusSessions\":[],\"occurrences\":[{\"completedAt\":null,\"continuationSourceOccurrenceID\":null,\"id\":\"00000000-0000-0000-0000-000000000003\",\"isAllDay\":false,\"occurrenceDate\":\"2026-09-08\",\"orderKey\":\"0:0000000000000000:00000000-0000-0000-0000-000000000003\",\"overrides\":null,\"status\":\"scheduled\",\"taskID\":\"00000000-0000-0000-0000-000000000001\",\"unscheduledDate\":null},{\"completedAt\":null,\"continuationSourceOccurrenceID\":null,\"id\":\"00000000-0000-0000-0000-000000000004\",\"isAllDay\":false,\"occurrenceDate\":\"2026-09-08\",\"orderKey\":\"0:0000000000000000:00000000-0000-0000-0000-000000000004\",\"overrides\":{\"customColorHex\":null,\"estimatedDurationSlots\":1,\"isPinned\":false,\"note\":\"\",\"repeatForWeeks\":2,\"repeatRule\":\"none\",\"repeatWeekdays\":[],\"startReminder\":\"5\",\"title\":\"跑步\"},\"status\":\"todo\",\"taskID\":\"00000000-0000-0000-0000-000000000002\",\"unscheduledDate\":null}],\"puzzle\":{\"automaticRandom\":true,\"celebratedDays\":[\"2026-09-08\"],\"completedTaskIDs\":[\"00000000-0000-0000-0000-000000000001\"],\"dayArtworkIDs\":{\"2026-09-08\":\"artwork-2026-001\"},\"dayFinishState\":{\"completedCount\":2,\"streakDays\":3},\"fragments\":42,\"rewardedTaskIDs\":[\"00000000-0000-0000-0000-000000000001\"],\"unlockedArtworkIDs\":[\"artwork-2026-001\"],\"works\":[{\"artworkID\":\"artwork-2026-001\",\"day\":\"2026-09-08\",\"imagePath\":\"works/2026-09-08/00000000-0000-0000-0000-000000000001.png\",\"tasks\":[{\"id\":\"00000000-0000-0000-0000-000000000001\",\"isPinned\":true,\"slots\":[8,9],\"title\":\"读书 📚\"}]}]},\"scheduledTasks\":[{\"date\":\"2026-09-08\",\"id\":\"00000000-0000-0000-0000-000000000005\",\"plannedDurationSlots\":2,\"segments\":[{\"endSlot\":10,\"id\":\"00000000-0000-0000-0000-000000000006\",\"scheduledTaskID\":\"00000000-0000-0000-0000-000000000005\",\"startSlot\":8}],\"startSlot\":8,\"taskOccurrenceID\":\"00000000-0000-0000-0000-000000000003\"}],\"schemaVersion\":2,\"tasks\":[{\"colorHex\":\"#AABBCC\",\"createdAt\":\"2026-09-08T10:00:00.000Z\",\"customColorHex\":\"#12AB34\",\"estimatedDurationSlots\":2,\"id\":\"00000000-0000-0000-0000-000000000001\",\"isPinned\":true,\"note\":\"quote \\\" and newline\\n\",\"repeatForWeeks\":2,\"repeatRule\":\"none\",\"repeatWeekdays\":[],\"startReminder\":\"10\",\"title\":\"读书 📚\",\"updatedAt\":\"2026-09-08T10:00:00.000Z\"},{\"colorHex\":\"#CCDDEE\",\"createdAt\":\"2026-09-08T10:00:00.000Z\",\"customColorHex\":null,\"estimatedDurationSlots\":1,\"id\":\"00000000-0000-0000-0000-000000000002\",\"isPinned\":false,\"note\":\"\",\"repeatForWeeks\":2,\"repeatRule\":\"none\",\"repeatWeekdays\":[],\"startReminder\":\"off\",\"title\":\"跑步\",\"updatedAt\":\"2026-09-08T10:00:00.000Z\"}]}",
+    "hash": "sha256:eb1afd2344d552d0508d53f2a05182ad58008c9dfba8d6b0f5f7f895130f8cd3"
+  }
+]

@@ -1,0 +1,831 @@
+{
+  "description": "DayMosaic cloud state, schema version 2. Extends v1 with the puzzle object, per-task startReminder and customColorHex. Everything else, including canonical JSON rules (keys sorted by Unicode code point, no whitespace, integers without fractional part, null keys written and never omitted, top-level arrays ascending by primary entity id, repeatWeekdays ascending duplicate-free, segments by (startSlot, endSlot, id)) and the sha256: canonical hash, is unchanged from v1.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      },
+      "maxItems": 10000
+    },
+    "occurrences": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/occurrence"
+      },
+      "maxItems": 10000
+    },
+    "scheduledTasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scheduledTask"
+      },
+      "maxItems": 10000
+    },
+    "externalEvents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/externalEvent"
+      },
+      "maxItems": 10000
+    },
+    "focusSessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/focusSession"
+      },
+      "maxItems": 10000
+    },
+    "activeFocusSessionID": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "puzzle": {
+      "$ref": "#/$defs/puzzle"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "tasks",
+    "occurrences",
+    "scheduledTasks",
+    "externalEvents",
+    "focusSessions",
+    "activeFocusSessionID",
+    "puzzle"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:daymosaic:cloud-state:2",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "fields": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        },
+        "startReminder": {
+          "type": "string",
+          "enum": [
+            "off",
+            "atStart",
+            "5",
+            "10",
+            "15"
+          ],
+          "description": "Reminder before the task's scheduled start: no reminder, at start, or the given number of minutes before start."
+        },
+        "customColorHex": {
+          "description": "Optional user-chosen color overriding colorHex; null when unset. The key is always written; null is never omitted.",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "note",
+        "estimatedDurationSlots",
+        "repeatRule",
+        "repeatForWeeks",
+        "repeatWeekdays",
+        "isPinned",
+        "startReminder",
+        "customColorHex"
+      ],
+      "additionalProperties": false
+    },
+    "fieldPatch": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        },
+        "startReminder": {
+          "type": "string",
+          "enum": [
+            "off",
+            "atStart",
+            "5",
+            "10",
+            "15"
+          ]
+        },
+        "customColorHex": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "task": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "estimatedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "repeatRule": {
+          "type": "string",
+          "enum": [
+            "none",
+            "daily",
+            "weekly"
+          ]
+        },
+        "repeatForWeeks": {
+          "type": "integer",
+          "enum": [
+            2,
+            4,
+            8,
+            12
+          ]
+        },
+        "repeatWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "isPinned": {
+          "type": "boolean"
+        },
+        "colorHex": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "startReminder": {
+          "type": "string",
+          "enum": [
+            "off",
+            "atStart",
+            "5",
+            "10",
+            "15"
+          ],
+          "description": "Reminder before the task's scheduled start: no reminder, at start, or the given number of minutes before start. Required for every task in v2; a v1 to v2 state migration fills \"off\" for tasks created before v2."
+        },
+        "customColorHex": {
+          "description": "Optional user-chosen color overriding colorHex; null when unset. The key is always written; null is never omitted.",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$ref": "#/$defs/time"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/time"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "note",
+        "estimatedDurationSlots",
+        "repeatRule",
+        "repeatForWeeks",
+        "repeatWeekdays",
+        "isPinned",
+        "colorHex",
+        "startReminder",
+        "customColorHex",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "taskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "occurrenceDate": {
+          "$ref": "#/$defs/date"
+        },
+        "unscheduledDate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isAllDay": {
+          "type": "boolean"
+        },
+        "continuationSourceOccurrenceID": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orderKey": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "scheduled",
+            "completed"
+          ]
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/fields"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "taskID",
+        "occurrenceDate",
+        "unscheduledDate",
+        "isAllDay",
+        "continuationSourceOccurrenceID",
+        "orderKey",
+        "status",
+        "completedAt",
+        "overrides"
+      ],
+      "additionalProperties": false
+    },
+    "segment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scheduledTaskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 191
+        },
+        "endSlot": {
+          "type": "integer",
+          "minimum": -95,
+          "maximum": 192
+        }
+      },
+      "required": [
+        "id",
+        "scheduledTaskID",
+        "startSlot",
+        "endSlot"
+      ],
+      "additionalProperties": false
+    },
+    "scheduledTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "taskOccurrenceID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 192
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/segment"
+          },
+          "maxItems": 96
+        }
+      },
+      "required": [
+        "id",
+        "taskOccurrenceID",
+        "date",
+        "startSlot",
+        "plannedDurationSlots",
+        "segments"
+      ],
+      "additionalProperties": false
+    },
+    "externalSegment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "externalEventID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "startSlot": {
+          "type": "integer",
+          "minimum": -96,
+          "maximum": 191
+        },
+        "endSlot": {
+          "type": "integer",
+          "minimum": -95,
+          "maximum": 192
+        }
+      },
+      "required": [
+        "id",
+        "externalEventID",
+        "startSlot",
+        "endSlot"
+      ],
+      "additionalProperties": false
+    },
+    "externalEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "sourceStartSlot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 95
+        },
+        "sourceEndSlot": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 96
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/externalSegment"
+          },
+          "maxItems": 96
+        },
+        "isAllDay": {
+          "type": "boolean"
+        },
+        "importedAt": {
+          "$ref": "#/$defs/time"
+        },
+        "isFixed": {
+          "const": true
+        },
+        "originPlatform": {
+          "type": "string",
+          "enum": [
+            "ios",
+            "android"
+          ]
+        },
+        "originDeviceID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceFingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "date",
+        "sourceStartSlot",
+        "sourceEndSlot",
+        "plannedDurationSlots",
+        "segments",
+        "isAllDay",
+        "importedAt",
+        "isFixed",
+        "originPlatform",
+        "originDeviceID",
+        "sourceFingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "focusSession": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scheduledTaskID": {
+          "$ref": "#/$defs/uuid"
+        },
+        "plannedDurationSlots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 35040
+        },
+        "startedAt": {
+          "$ref": "#/$defs/time"
+        },
+        "remainingSecondsAtAnchor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31536000
+        },
+        "anchorAt": {
+          "$ref": "#/$defs/time"
+        },
+        "pausedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "paused",
+            "ended",
+            "completed"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "scheduledTaskID",
+        "plannedDurationSlots",
+        "startedAt",
+        "remainingSecondsAtAnchor",
+        "anchorAt",
+        "pausedAt",
+        "endedAt",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "artworkID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable product identifier of an artwork; its catalog and image assets live in the client, not in this contract."
+    },
+    "dayFinishState": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": true,
+      "description": "Per-day finish state payload. Deliberately loose in v2: the client's final structure is not settled yet, so any keys are accepted. It must be tightened into explicit properties (with unknown keys rejected) before v2 data is written by the migrate path; until then treat unknown content as opaque."
+    },
+    "puzzle": {
+      "description": "Puzzle game progress. Canonical encoding of its inner arrays, which encoders must emit before hashing and validators may rely on: rewardedTaskIDs, unlockedArtworkIDs, completedTaskIDs and celebratedDays are ascending and duplicate-free; works ascend by day with at most one entry per day; works[].tasks ascend by id; works[].tasks[].slots ascend as integers. dayArtworkIDs keys are YYYY-MM-DD dates and follow the normal object key ordering. rewardedTaskIDs and completedTaskIDs hold task UUIDs.",
+      "type": "object",
+      "properties": {
+        "fragments": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "Current puzzle fragment currency."
+        },
+        "rewardedTaskIDs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "unlockedArtworkIDs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artworkID"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "dayArtworkIDs": {
+          "type": "object",
+          "maxProperties": 10000,
+          "additionalProperties": {
+            "$ref": "#/$defs/artworkID"
+          }
+        },
+        "completedTaskIDs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "works": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/work"
+          },
+          "maxItems": 10000
+        },
+        "celebratedDays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/date"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "dayFinishState": {
+          "description": "Latest per-day finish state; null when no day finish state exists. The key is always written; null is never omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/dayFinishState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "automaticRandom": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fragments",
+        "rewardedTaskIDs",
+        "unlockedArtworkIDs",
+        "dayArtworkIDs",
+        "completedTaskIDs",
+        "works",
+        "celebratedDays",
+        "dayFinishState",
+        "automaticRandom"
+      ],
+      "additionalProperties": false
+    },
+    "work": {
+      "type": "object",
+      "description": "Snapshot of one finished day's puzzle work. imagePath references the completed artwork in object storage and is uploaded before the state carrying it is committed; the binary itself never travels through this contract.",
+      "properties": {
+        "day": {
+          "$ref": "#/$defs/date"
+        },
+        "artworkID": {
+          "$ref": "#/$defs/artworkID"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workTask"
+          },
+          "maxItems": 1000
+        },
+        "imagePath": {
+          "description": "Object storage path of the finished artwork, or null when no image was produced. The key is always written; null is never omitted.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "day",
+        "artworkID",
+        "tasks",
+        "imagePath"
+      ],
+      "additionalProperties": false
+    },
+    "workTask": {
+      "type": "object",
+      "description": "Task snapshot inside a work entry; a denormalized copy that stays meaningful even if the task is later deleted from tasks[].",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 96
+        },
+        "isPinned": {
+          "type": "boolean",
+          "description": "Optional; omitted means false."
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "slots"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
