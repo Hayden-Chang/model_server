@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test:protocol": "node --test --test-concurrency=1 tests/protocol.test.mjs",
-    "test:sync": "node --test --test-concurrency=1 tests/protocol.test.mjs tests/sync.test.mjs tests/deletion-worker.test.mjs tests/maintenance.test.mjs tests/background-worker.test.mjs",
+    "test:sync": "node --test --test-concurrency=1 tests/protocol.test.mjs tests/sync.test.mjs tests/deletion-worker.test.mjs tests/maintenance.test.mjs tests/background-worker.test.mjs tests/billing.test.mjs",
     "test:hosted": "node --test tests/hosted.test.mjs"
   },
   "devDependencies": {
