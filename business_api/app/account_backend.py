@@ -76,6 +76,13 @@ class AccountAPISettings(BaseSettings):
     time_fragment_guest_quota_limit: int = Field(default=50, ge=1, le=10000)
     time_fragment_development_device_ids: str = ""
     admin_api_key: SecretStr = Field(min_length=16)
+    apple_environment: str = "sandbox"
+    apple_key_id: str = ""
+    apple_issuer_id: str = ""
+    apple_bundle_id: str = "com.hayden.timefragment"
+    apple_private_key: SecretStr | None = None
+    apple_product_ids: str = "com.hayden.daymosaic.plus.monthly,com.hayden.daymosaic.plus.yearly"
+    store_reference_key: SecretStr | None = None
 
     @model_validator(mode="after")
     def independent_planning_secret(self):
