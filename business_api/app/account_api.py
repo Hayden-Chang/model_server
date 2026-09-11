@@ -5,7 +5,8 @@ import logging
 import secrets
 import re
 from contextlib import asynccontextmanager
-from uuid import uuid4
+from typing import Literal
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -37,6 +38,46 @@ def log_http_failure(request: Request, status: int, detail) -> None:
 class ClaimGuestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     guest_token: str = Field(min_length=1, max_length=4096)
+
+
+class BillingClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    provider: Literal["apple"]
+    product_id: str = Field(min_length=1, max_length=200, alias="productId")
+    claim_id: UUID | None = Field(default=None, alias="claimId")
+
+
+class BillingClaimResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    claim_id: UUID = Field(alias="claimId")
+    app_account_token: UUID = Field(alias="appAccountToken")
+    expires_at: str = Field(alias="expiresAt")
+
+
+class AiQuotaStatus(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    limit: int
+    used: int
+    remaining: int
+    resets_at: str | None = Field(default=None, alias="resetsAt")
+
+
+class BillingSource(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    provider: str
+    product_id: str = Field(alias="productId")
+    expires_at: str | None = Field(default=None, alias="expiresAt")
+
+
+class EntitlementResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    plan: str
+    status: str
+    valid_until: str | None = Field(default=None, alias="validUntil")
+    service_end_at: str | None = Field(default=None, alias="serviceEndAt")
+    entitlement_revision: int = Field(alias="entitlementRevision")
+    ai_quota: AiQuotaStatus = Field(alias="aiQuota")
+    billing_sources: list[BillingSource] = Field(default=[], alias="billingSources")
 
 
 def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
@@ -126,6 +167,26 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         # Existing pre-cutover tokens may never have made a charged request.
         # Import is already complete before a new zero-use guest can be created.
         return await quota("claim", current, guest=guest_id, guestSupportCode=support_code(guest_id))
+
+    async def billing_account(authorization: str | None = Header(default=None)) -> Actor:
+        # Billing requires a real Supabase account; guest tokens are rejected
+        # locally so they never reach the store APIs (account/cloud §9.1).
+        token = bearer(authorization)
+        if token.count(".") != 2:
+            raise failure("ACCOUNT_REQUIRED", 401)
+        return await backend.account(token)
+
+    @app.post("/billing/claims", response_model=BillingClaimResponse)
+    async def billing_claim_create(payload: BillingClaimRequest,
+                                   current: Actor = Depends(billing_account)):
+        data = await backend.billing("claim_register", current, provider=payload.provider,
+                                     productId=payload.product_id,
+                                     claimId=str(payload.claim_id) if payload.claim_id else None)
+        return BillingClaimResponse.model_validate(data)
+
+    @app.get("/billing/entitlement", response_model=EntitlementResponse)
+    async def billing_entitlement(current: Actor = Depends(billing_account)):
+        return EntitlementResponse.model_validate(await backend.billing("entitlement", current))
 
     @app.get("/api/development/membership", response_model=DevelopmentMembershipResponse)
     async def membership(current: Actor = Depends(developer)):
