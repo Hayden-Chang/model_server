@@ -1,5 +1,6 @@
 fastapi==0.141.1
 httpx==0.28.1
+cryptography==44.0.1
 jsonschema==4.25.1
 ortools==9.15.6755
 pydantic-settings==2.15.0
