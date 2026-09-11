@@ -9,6 +9,75 @@ after(async () => { await db?.close(); });
 
 const TABLES = ['store_purchases','billing_claims','billing_events','account_entitlements'];
 
+async function account() {
+  const user=await db.account(); const device=await user.device();
+  return {principal:'account:'+user.id, sessionID:device.session, device, user};
+}
+const billingRpc=(action,data={})=>db.rpc(null,'billing_service',[action,data],'service_role');
+const PRODUCT_MONTHLY='com.hayden.daymosaic.plus.monthly';
+
+test('billing service rejects guests and unprivileged roles',async()=>{
+  const guest='guest_'+'a'.repeat(24);
+  assert.equal((await billingRpc('entitlement',{principal:guest,sessionID:randomUUID()})).code,'ACCOUNT_REQUIRED');
+  const a=await account();
+  for(const role of ['anon','authenticated']){
+    await assert.rejects(db.rpc(a.device,'billing_service',['entitlement',{principal:a.principal}],role),/permission denied/);
+  }
+});
+
+test('unavailable accounts cannot read billing state',async()=>{
+  const noSession=await account();
+  await db.admin.query('delete from auth.sessions where id=$1',[noSession.sessionID]);
+  assert.equal((await billingRpc('entitlement',{principal:noSession.principal,sessionID:noSession.sessionID})).code,'ACCOUNT_UNAVAILABLE');
+  const pending=await account();
+  await db.admin.query('insert into sync_private.accounts(user_id,deletion_pending) values($1,true)',[pending.user.id]);
+  assert.equal((await billingRpc('entitlement',{principal:pending.principal,sessionID:pending.sessionID})).code,'ACCOUNT_UNAVAILABLE');
+});
+
+test('claim registration is idempotent with a stable per-account token',async()=>{
+  const a=await account(); const claimId=randomUUID();
+  const first=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId});
+  assert.equal(first.claimId,claimId);
+  assert.equal(/^[0-9a-f-]{36}$/.test(first.appAccountToken),true);
+  const second=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId});
+  assert.equal(second.appAccountToken,first.appAccountToken);
+  assert.equal(second.expiresAt,first.expiresAt);
+  const sameClaimOtherProduct=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+    provider:'apple',productId:'com.hayden.daymosaic.plus.yearly',claimId});
+  assert.equal(sameClaimOtherProduct.code,'CLAIM_CONFLICT');
+  const other=await account();
+  const otherAccountSameClaim=await billingRpc('claim_register',{principal:other.principal,sessionID:other.sessionID,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId});
+  assert.equal(otherAccountSameClaim.code,'CLAIM_CONFLICT');
+  const status=await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,claimId});
+  assert.equal(status.status,'pending');
+  assert.equal((await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,
+    claimId:randomUUID()})).code,'CLAIM_NOT_FOUND');
+});
+
+test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>{
+  const a=await account();
+  const entitlement=await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
+  assert.equal(entitlement.plan,'free');
+  assert.equal(entitlement.status,'expired');
+  assert.equal(entitlement.entitlementRevision,0);
+  assert.equal(entitlement.aiQuota.limit,50);
+  assert.equal(entitlement.aiQuota.remaining,50);
+  assert.deepEqual(entitlement.billingSources,[]);
+  await db.admin.query(
+    `insert into ai_private.principals(id,user_id,support_code,free_limit)
+      values($1,$2,'TF-BILL-TEST',50) on conflict (id) do nothing`,
+    [a.principal,a.user.id]);
+  await db.admin.query(
+    `insert into ai_private.buckets(principal,period,used) values($1,'free',21)
+      on conflict (principal,period) do update set used=excluded.used`,[a.principal]);
+  const after=await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
+  assert.equal(after.aiQuota.used,21);
+  assert.equal(after.aiQuota.remaining,29);
+});
+
 test('billing tables deny every role including service_role',async()=>{
   const a=await db.account();
   for(const table of TABLES){
