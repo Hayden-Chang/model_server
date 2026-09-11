@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .account_backend import (SAFE_ERROR_CODES, AccountAPISettings, AccountBackend, Actor,
                               failure, support_code)
+from .appstore_client import AppStoreServerAPIClient
+from .billing_verify import verify_apple_purchase
 from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipResponse,
                         TimeFragmentGuestRequest, TimeFragmentGuestResponse,
                         TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2,
@@ -80,8 +82,22 @@ class EntitlementResponse(BaseModel):
     billing_sources: list[BillingSource] = Field(default=[], alias="billingSources")
 
 
+class BillingVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    signed_transaction: str = Field(min_length=32, max_length=16384, alias="signedTransaction")
+    product_id: str = Field(min_length=1, max_length=200, alias="productId")
+    claim_id: UUID | None = Field(default=None, alias="claimId")
+
+
 def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     backend = backend or AccountBackend(settings)
+    apple_client = None
+    if settings.apple_private_key is not None:
+        apple_client = AppStoreServerAPIClient(
+            environment=settings.apple_environment,
+            key_p8=settings.apple_private_key.get_secret_value().encode(),
+            key_id=settings.apple_key_id, issuer_id=settings.apple_issuer_id,
+            bundle_id=settings.apple_bundle_id)
     tokens = GuestTokenCodec(settings.time_fragment_token_secret.get_secret_value(), settings.time_fragment_token_ttl_seconds)
     development = frozenset(tokens.device_key(value.strip())
                             for value in settings.time_fragment_development_device_ids.split(",") if value.strip())
@@ -91,6 +107,8 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     async def lifespan(_):
         yield
         await backend.close()
+        if apple_client is not None:
+            await apple_client.aclose()
 
     app = FastAPI(title="DayMosaic Account API", lifespan=lifespan)
 
@@ -187,6 +205,15 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     @app.get("/billing/entitlement", response_model=EntitlementResponse)
     async def billing_entitlement(current: Actor = Depends(billing_account)):
         return EntitlementResponse.model_validate(await backend.billing("entitlement", current))
+
+    @app.post("/billing/apple/verify", response_model=EntitlementResponse)
+    async def billing_apple_verify(payload: BillingVerifyRequest,
+                                   current: Actor = Depends(billing_account)):
+        if apple_client is None or settings.store_reference_key is None:
+            raise failure("BILLING_NOT_CONFIGURED", 503)
+        return EntitlementResponse.model_validate(await verify_apple_purchase(
+            backend=backend, apple_client=apple_client, settings=settings,
+            actor=current, payload_body=payload))
 
     @app.get("/api/development/membership", response_model=DevelopmentMembershipResponse)
     async def membership(current: Actor = Depends(developer)):

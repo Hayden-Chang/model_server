@@ -78,6 +78,62 @@ test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>
   assert.equal(after.aiQuota.remaining,29);
 });
 
+test('apple verify binds the chain, aggregates plus and confirms the claim',async()=>{
+  const a=await account(); const claimId=randomUUID();
+  const claim=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId});
+  const result=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
+    originalTransactionId:'900001',productId:PRODUCT_MONTHLY,appAccountToken:claim.appAccountToken,
+    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId});
+  assert.equal(result.plan,'plus');
+  assert.equal(result.status,'active');
+  assert.equal(result.entitlementRevision,1);
+  assert.equal(result.validUntil,'2026-12-01T00:00:00.000Z');
+  assert.equal(result.billingSources.length,1);
+  assert.equal(result.billingSources[0].provider,'apple');
+  assert.equal(result.billingSources[0].productId,PRODUCT_MONTHLY);
+  const status=await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,claimId});
+  assert.equal(status.status,'verified');
+  const chain=(await db.admin.query(
+    `select user_id,store_status from billing_private.store_purchases
+      where purchase_key_hash=$1`,[status.purchaseKeyHash])).rows;
+  assert.equal(chain.length,1);
+  assert.equal(String(chain[0].user_id),a.user.id);
+});
+
+test('apple verify guards tokens, re-binding and updates expired chains',async()=>{
+  const a=await account(); const b=await account();
+  await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
+  await billingRpc('entitlement',{principal:b.principal,sessionID:b.sessionID});
+  const tokenA=(await db.admin.query(
+    `select purchase_account_token from billing_private.account_entitlements where user_id=$1`,[a.user.id])).rows[0].purchase_account_token;
+  const tokenB=(await db.admin.query(
+    `select purchase_account_token from billing_private.account_entitlements where user_id=$1`,[b.user.id])).rows[0].purchase_account_token;
+  const bound=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
+    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
+    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId:null});
+  assert.equal(bound.plan,'plus');
+  assert.equal(bound.status,'active');
+  const mismatch=await billingRpc('apple_verify',{principal:b.principal,sessionID:b.sessionID,
+    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
+    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId:null});
+  assert.equal(mismatch.code,'ACCOUNT_MISMATCH');
+  const rebind=await billingRpc('apple_verify',{principal:b.principal,sessionID:b.sessionID,
+    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenB,
+    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId:null});
+  assert.equal(rebind.code,'TRANSACTION_ALREADY_BOUND');
+  const expired=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
+    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
+    environment:'sandbox',storeStatus:'expired',expiresAt:'2026-09-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId:null});
+  assert.equal(expired.plan,'free');
+  assert.equal(expired.status,'expired');
+  assert.equal(expired.entitlementRevision,bound.entitlementRevision+1);
+});
 test('billing tables deny every role including service_role',async()=>{
   const a=await db.account();
   for(const table of TABLES){
