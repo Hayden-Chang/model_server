@@ -5,6 +5,7 @@ import logging
 import secrets
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .account_backend import (SAFE_ERROR_CODES, AccountAPISettings, AccountBackend, Actor,
-                              failure, support_code)
+                              failure, resolve_apple_key_p8, support_code)
 from .appstore_client import AppStoreServerAPIClient
 from .billing_verify import verify_apple_purchase
 from .billing_worker import handle_apple_webhook
@@ -93,10 +94,10 @@ class BillingVerifyRequest(BaseModel):
 def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     backend = backend or AccountBackend(settings)
     apple_client = None
-    if settings.apple_private_key is not None:
+    apple_key_p8 = resolve_apple_key_p8(settings)
+    if apple_key_p8 is not None:
         apple_client = AppStoreServerAPIClient(
-            environment=settings.apple_environment,
-            key_p8=settings.apple_private_key.get_secret_value().encode(),
+            environment=settings.apple_environment, key_p8=apple_key_p8,
             key_id=settings.apple_key_id, issuer_id=settings.apple_issuer_id,
             bundle_id=settings.apple_bundle_id)
     tokens = GuestTokenCodec(settings.time_fragment_token_secret.get_secret_value(), settings.time_fragment_token_ttl_seconds)

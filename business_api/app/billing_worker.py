@@ -14,7 +14,7 @@ import os
 from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 
-from .account_backend import Actor, failure
+from .account_backend import Actor, failure, resolve_apple_key_p8
 from .billing_verify import decrypt_reference, subscription_state
 from .appstore_client import (
     AppStoreRejected,
@@ -173,10 +173,10 @@ async def main_async() -> None:
     backend = AccountBackend(settings)
     interval = int(os.environ.get("BILLING_WORKER_INTERVAL_SECONDS", "300"))
     apple_client = None
-    if settings.apple_private_key is not None:
+    apple_key_p8 = resolve_apple_key_p8(settings)
+    if apple_key_p8 is not None:
         apple_client = AppStoreServerAPIClient(
-            environment=settings.apple_environment,
-            key_p8=settings.apple_private_key.get_secret_value().encode(),
+            environment=settings.apple_environment, key_p8=apple_key_p8,
             key_id=settings.apple_key_id, issuer_id=settings.apple_issuer_id,
             bundle_id=settings.apple_bundle_id)
     while True:
