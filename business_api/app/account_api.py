@@ -16,6 +16,7 @@ from .account_backend import (SAFE_ERROR_CODES, AccountAPISettings, AccountBacke
                               failure, support_code)
 from .appstore_client import AppStoreServerAPIClient
 from .billing_verify import verify_apple_purchase
+from .billing_worker import handle_apple_webhook
 from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipResponse,
                         TimeFragmentGuestRequest, TimeFragmentGuestResponse,
                         TimeFragmentPlanRequestV2, TimeFragmentPlanResponseV2,
@@ -205,6 +206,20 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     @app.get("/billing/entitlement", response_model=EntitlementResponse)
     async def billing_entitlement(current: Actor = Depends(billing_account)):
         return EntitlementResponse.model_validate(await backend.billing("entitlement", current))
+
+    @app.post("/webhooks/apple")
+    async def apple_webhook(request: Request):
+        try:
+            body = await request.json()
+        except Exception as error:
+            raise HTTPException(400, detail={"code": "MALFORMED_NOTIFICATION"}) from error
+        signed_payload = body.get("signedPayload") if isinstance(body, dict) else None
+        if not isinstance(signed_payload, str) or not signed_payload:
+            raise HTTPException(400, detail={"code": "MALFORMED_NOTIFICATION"})
+        result = await handle_apple_webhook(backend=backend, apple_client=apple_client,
+            settings=settings, signed_payload=signed_payload,
+            pinned_roots=getattr(apple_client, "pinned_roots", None))
+        return {"received": result.get("received", True)}
 
     @app.post("/billing/apple/verify", response_model=EntitlementResponse)
     async def billing_apple_verify(payload: BillingVerifyRequest,
