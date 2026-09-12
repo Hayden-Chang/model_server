@@ -2,13 +2,13 @@
 -- member pool is driven by the billing entitlement (30/day default, account
 -- timezone reset) instead of the retired development allowlist. The
 -- development_enabled column is kept for history but no longer grants quota.
+-- ai_quota_service is re-based on the 202609090008 safeupdate-compliant body.
 
 alter table billing_private.account_entitlements
   add column account_timezone text not null default 'Asia/Shanghai'
   check(length(account_timezone) between 1 and 64);
 
--- Only the trusted business API can mutate the AI ledger. Client JWTs may
--- resolve their own live account identity, but cannot reserve or grant quota.
+
 create or replace function ai_private.quota_status(actor text, dev_allowed boolean, member_limit integer) returns jsonb
 language plpgsql set search_path='' as $$
 declare p ai_private.principals; period_key text; quota_limit integer; used_count integer;
@@ -39,8 +39,6 @@ begin
     'period',period_key);
 end $$;
 
--- Caller is service_role, never an App-supplied user ID. The API first resolves
--- account IDs with ai_account_identity, then passes both IDs for a live recheck.
 create or replace function public.ai_quota_service(p_action text,p_data jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare
@@ -53,7 +51,7 @@ begin
   if p_action in ('import','finish_import') then
     perform 1 from ai_private.runtime for update;
     if p_action='finish_import' then
-      update ai_private.runtime set legacy_import_complete=true;
+      update ai_private.runtime set legacy_import_complete=true where singleton;
       return jsonb_build_object('ok',true);
     end if;
     if (select legacy_import_complete from ai_private.runtime) then
@@ -101,7 +99,7 @@ begin
     if exists(select 1 from ai_private.requests where state='reserved') then
       return jsonb_build_object('code','AI_REQUEST_IN_PROGRESS');
     end if;
-    update ai_private.buckets set used=0;
+    update ai_private.buckets set used=0 where used > 0;
     select count(*) into total from ai_private.principals where not claimed;
     return jsonb_build_object('refreshedInstallations',total);
   end if;
@@ -206,4 +204,24 @@ begin
 end $$;
 revoke all on function public.ai_quota_service(text,jsonb) from public,anon,authenticated;
 grant execute on function public.ai_quota_service(text,jsonb) to service_role;
-revoke all on all functions in schema ai_private from public,anon,authenticated,service_role;
+
+create or replace function public.ai_quota_rollback() returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare refunded integer;
+begin
+  perform 1 from ai_private.runtime for update;
+  with expired as (
+    update ai_private.requests set state='refunded'
+    where state='reserved' returning bucket_id
+  ), totals as (
+    select bucket_id, count(*)::integer n from expired group by bucket_id
+  ), adjusted as (
+    update ai_private.buckets b set used=greatest(0,b.used-t.n)
+    from totals t where b.id=t.bucket_id returning 1
+  )
+  select coalesce(sum(n),0) into refunded from totals;
+  update ai_private.runtime set legacy_import_complete=false where singleton;
+  return jsonb_build_object('gateOpen',false,'refundedReservations',refunded);
+end $$;
+revoke all on function public.ai_quota_rollback() from public,anon,authenticated;
+grant execute on function public.ai_quota_rollback() to service_role;

@@ -107,7 +107,31 @@ test('refund and expiry decrement once; stale attempts cannot finish a replaceme
   assert.equal((await rpc('status',p)).used,1);
 });
 
+test('active plus entitlement grants the member daily pool in the account timezone',async()=>{
+  const a=await account();
+  await db.admin.query(
+    `insert into billing_private.account_entitlements(user_id,plan,status,account_timezone)
+      values($1,'plus','active','Asia/Shanghai')
+      on conflict (user_id) do update set plan='plus',status='active'`,[a.user.id]);
+  await db.admin.query(
+    `insert into ai_private.principals(id,user_id,support_code,free_limit)
+      values($1,$2,'TF-MEMBER-01',50) on conflict (id) do nothing`,[a.principal,a.user.id]);
+  const status=await rpc('status',{...a,memberLimit:30});
+  assert.equal(status.period.startsWith('member:'),true);
+  assert.equal(status.limit,30);
+  assert.equal(status.remaining,30);
+  assert.ok(status.resetsAt.endsWith('+08:00'));
+  await use({...a,memberLimit:30},2);
+  const after=await rpc('status',{...a,memberLimit:30});
+  assert.equal(after.used,2);
+  assert.equal(after.remaining,28);
+  const freePool=(await db.admin.query(
+    `select used from ai_private.buckets where principal=$1 and period='free'`,[a.principal])).rows;
+  assert.equal(freePool.length,0);
+});
+
 test('retired development flag no longer grants a daily pool',async()=>{
+  const p=guest();
   await rpc('membership',{...p,developmentAllowed:true,enabled:true});
   await use({...p,developmentAllowed:true},3);
   const status=await rpc('status',{...p,developmentAllowed:true});
