@@ -194,6 +194,16 @@ class AccountBackend:
         result.pop("period", None)
         return result
 
+    async def billing_event(self, action: str, **data) -> dict:
+        result = await self._rpc("billing_service", {"p_action": action, "p_data": data})
+        code = result.pop("code", None)
+        if code:
+            status = {"EVENT_CONFLICT": 409, "CLAIM_NOT_FOUND": 404,
+                      "ACCOUNT_TOKEN_UNKNOWN": 404, "ACCOUNT_REQUIRED": 401,
+                      "ACCOUNT_UNAVAILABLE": 401}.get(code, 409)
+            raise failure(code, status, **result)
+        return result
+
     async def billing(self, action: str, actor: Actor,
                       diagnostic_request_id: str | None = None, **data) -> dict:
         data.update(principal=actor.principal, sessionID=actor.session_id)
