@@ -26,15 +26,19 @@ EXPIRES_ISO = datetime.fromtimestamp(EXPIRES_MS / 1000, timezone.utc).strftime("
 
 @pytest.fixture(scope="module")
 def certs():
+    # Validity windows follow the real clock so the suite never expires.
+    real_now = datetime.now(timezone.utc)
     root_key = ec.generate_private_key(ec.SECP256R1())
     root_certificate = tsc._certificate(tsc._name("Test Root"), tsc._name("Test Root"),
                                         root_key.public_key(), root_key,
-                                        NOW - timedelta(days=365), NOW + timedelta(days=365))
+                                        real_now - timedelta(days=365),
+                                        real_now + timedelta(days=365))
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     leaf_certificate = tsc._certificate(tsc._name("Apple Test Signer"),
                                         root_certificate.subject,
                                         leaf_key.public_key(), root_key,
-                                        NOW - timedelta(days=1), NOW + timedelta(days=1))
+                                        real_now - timedelta(days=1),
+                                        real_now + timedelta(days=365))
     return tsc.CertChain(root_key=root_key, root_certificate=root_certificate,
                          leaf_key=leaf_key, leaf_certificate=leaf_certificate)
 
@@ -255,3 +259,20 @@ def test_app_store_client_wraps_transport_errors(certs):
 
     with pytest.raises(AppStoreUnavailable):
         asyncio.run(run())
+
+
+def test_private_key_resolution_follows_path_then_inline(configuration, tmp_path):
+    from app.account_backend import resolve_apple_key_p8
+    key_pem = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        tsc.Encoding.PEM, tsc.PrivateFormat.PKCS8, tsc.NoEncryption()).decode()
+    key_file = tmp_path / "apple.p8"
+    key_file.write_text(key_pem)
+    settings = configuration.model_copy(update={
+        "apple_private_key": None, "apple_private_key_path": str(key_file)})
+    assert resolve_apple_key_p8(settings) == key_pem.encode()
+    inline = configuration.model_copy(update={
+        "apple_private_key_path": "",
+        "apple_private_key": SecretStr(key_pem)})
+    assert resolve_apple_key_p8(inline) == key_pem.encode()
+    assert resolve_apple_key_p8(configuration.model_copy(update={
+        "apple_private_key": None, "apple_private_key_path": ""})) is None

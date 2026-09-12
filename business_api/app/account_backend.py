@@ -82,6 +82,7 @@ class AccountAPISettings(BaseSettings):
     apple_issuer_id: str = ""
     apple_bundle_id: str = "com.hayden.timefragment"
     apple_private_key: SecretStr | None = None
+    apple_private_key_path: str = ""
     apple_product_ids: str = "com.hayden.daymosaic.plus.monthly,com.hayden.daymosaic.plus.yearly"
     store_reference_key: SecretStr | None = None
 
@@ -90,6 +91,16 @@ class AccountAPISettings(BaseSettings):
         if self.planning_internal_secret == self.time_fragment_token_secret:
             raise ValueError("Planning and guest token secrets must be independent")
         return self
+
+
+def resolve_apple_key_p8(settings: "AccountAPISettings") -> bytes | None:
+    """Apple signing key from a mounted file path, or inline PEM fallback."""
+    if settings.apple_private_key_path:
+        from pathlib import Path
+        return Path(settings.apple_private_key_path).read_bytes()
+    if settings.apple_private_key is not None:
+        return settings.apple_private_key.get_secret_value().encode()
+    return None
 
 
 def failure(code: str, status: int, **details) -> HTTPException:
