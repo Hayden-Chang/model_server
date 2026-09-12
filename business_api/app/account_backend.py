@@ -74,6 +74,7 @@ class AccountAPISettings(BaseSettings):
     time_fragment_token_secret: SecretStr = Field(min_length=32)
     time_fragment_token_ttl_seconds: int = Field(default=2592000, ge=300)
     time_fragment_guest_quota_limit: int = Field(default=50, ge=1, le=10000)
+    time_fragment_member_quota_limit: int = Field(default=30, ge=1, le=10000)
     time_fragment_development_device_ids: str = ""
     admin_api_key: SecretStr = Field(min_length=16)
     apple_environment: str = "sandbox"
@@ -167,7 +168,8 @@ class AccountBackend:
                     diagnostic_request_id: str | None = None, **data) -> dict:
         if actor:
             data.update(principal=actor.principal, sessionID=actor.session_id,
-                        supportCode=support_code(actor.principal), freeLimit=self.settings.time_fragment_guest_quota_limit)
+                        supportCode=support_code(actor.principal), freeLimit=self.settings.time_fragment_guest_quota_limit,
+                        memberLimit=self.settings.time_fragment_member_quota_limit)
         result = await self._rpc("ai_quota_service", {"p_action": action, "p_data": data},
                                  request_id=diagnostic_request_id)
         code = result.pop("code", None)

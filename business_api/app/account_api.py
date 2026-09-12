@@ -100,10 +100,6 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
             key_id=settings.apple_key_id, issuer_id=settings.apple_issuer_id,
             bundle_id=settings.apple_bundle_id)
     tokens = GuestTokenCodec(settings.time_fragment_token_secret.get_secret_value(), settings.time_fragment_token_ttl_seconds)
-    development = frozenset(tokens.device_key(value.strip())
-                            for value in settings.time_fragment_development_device_ids.split(",") if value.strip())
-    development_support = frozenset(support_code(value) for value in development)
-
     @asynccontextmanager
     async def lifespan(_):
         yield
@@ -150,14 +146,8 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         if not supplied.isascii() or not secrets.compare_digest(supplied, settings.admin_api_key.get_secret_value()):
             raise failure("UNAUTHORIZED", 401)
 
-    async def developer(current: Actor = Depends(actor)) -> Actor:
-        if current.principal not in development:
-            raise failure("DEVELOPMENT_MEMBERSHIP_DISABLED", 403)
-        return current
-
     async def quota(action: str, current: Actor, diagnostic_request_id: str | None = None, **data):
-        return await backend.quota(action, current, diagnostic_request_id=diagnostic_request_id,
-                                   developmentAllowed=current.principal in development, **data)
+        return await backend.quota(action, current, diagnostic_request_id=diagnostic_request_id, **data)
 
     @app.get("/health/live")
     async def live():
@@ -230,14 +220,6 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
             backend=backend, apple_client=apple_client, settings=settings,
             actor=current, payload_body=payload))
 
-    @app.get("/api/development/membership", response_model=DevelopmentMembershipResponse)
-    async def membership(current: Actor = Depends(developer)):
-        return await quota("status", current)
-
-    @app.post("/api/development/membership", response_model=DevelopmentMembershipResponse)
-    async def toggle(payload: DevelopmentMembershipRequest, current: Actor = Depends(developer)):
-        return await quota("membership", current, enabled=payload.enabled)
-
     @app.post("/api/plan/parse", response_model=TimeFragmentPlanResponseV2)
     async def plan(
         payload: TimeFragmentPlanRequestV2,
@@ -270,11 +252,11 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
 
     @app.get("/admin/time-fragment/quotas/{code}", response_model=TimeFragmentQuotaStatusResponse, dependencies=[Depends(admin)])
     async def admin_status(code: str):
-        return await backend.quota("admin_status", supportCode=code, developmentAllowed=code in development_support)
+        return await backend.quota("admin_status", supportCode=code)
 
     @app.post("/admin/time-fragment/quotas/{code}/reset", response_model=TimeFragmentQuotaStatusResponse, dependencies=[Depends(admin)])
     async def admin_reset(code: str):
-        return await backend.quota("admin_reset", supportCode=code, developmentAllowed=code in development_support)
+        return await backend.quota("admin_reset", supportCode=code)
 
     @app.post("/admin/time-fragment/quotas/reset-all", response_model=TimeFragmentQuotaResetAllResponse, dependencies=[Depends(admin)])
     async def admin_reset_all():
