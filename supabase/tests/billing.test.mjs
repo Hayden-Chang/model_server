@@ -203,3 +203,42 @@ test('billing events dedupe by provider/environment/event id',async()=>{
   assert.equal(rows[0].status,'received');
   assert.equal(rows[0].attempts,0);
 });
+
+test('billing events dedupe, conflict on hash change and list for retry',async()=>{
+  const a=await account(); const eventId=randomUUID();
+  const receive=(hash)=>billingRpc('event_receive',{principal:'account:'+randomUUID(),
+    provider:'apple',environment:'sandbox',eventId,payloadHash:hash,
+    replayMaterialCiphertext:'signed-payload'});
+  const first=await receive('p'.repeat(64));
+  assert.equal(first.received,true);
+  const dup=await receive('p'.repeat(64));
+  assert.equal(dup.received,false);
+  assert.equal((await receive('q'.repeat(64))).code,'EVENT_CONFLICT');
+  const mark=await billingRpc('event_mark',{principal:'account:'+randomUUID(),
+    provider:'apple',environment:'sandbox',eventId,status:'failed',
+    lastErrorCode:'APP_STORE_UNAVAILABLE'});
+  assert.equal(mark.updated,1);
+  const pending=await billingRpc('event_pending',{principal:'account:'+randomUUID(),maxAttempts:8,limit:20});
+  const row=pending.events.find(e=>e.eventId===eventId);
+  assert.equal(row.attempts,1);
+  assert.equal(row.replayMaterialCiphertext,'signed-payload');
+  await billingRpc('event_mark',{principal:'account:'+randomUUID(),
+    provider:'apple',environment:'sandbox',eventId,status:'processed'});
+  const drained=await billingRpc('event_pending',{principal:'account:'+randomUUID(),maxAttempts:8,limit:20});
+  assert.equal(drained.events.find(e=>e.eventId===eventId),undefined);
+});
+
+test('reconcile list exposes bound active chains with their account token',async()=>{
+  const a=await account();
+  const claim=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId:randomUUID()});
+  await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
+    originalTransactionId:'900010',productId:PRODUCT_MONTHLY,appAccountToken:claim.appAccountToken,
+    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    storeReferenceCiphertext:'cipher',claimId:null});
+  const chains=(await billingRpc('reconcile_list',{principal:'account:'+randomUUID()})).chains;
+  const row=chains.find(c=>c.userId===a.user.id);
+  assert.notEqual(row,undefined);
+  assert.equal(row.userId,a.user.id);
+  assert.equal(row.purchaseAccountToken,claim.appAccountToken);
+});
