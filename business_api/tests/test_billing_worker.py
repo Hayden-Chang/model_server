@@ -33,15 +33,19 @@ ACCOUNT_ID = uuid4()
 
 @pytest.fixture(scope="module")
 def certs():
+    # Validity windows follow the real clock so the suite never expires.
+    real_now = datetime.now(timezone.utc)
     root_key = ec.generate_private_key(ec.SECP256R1())
     root_certificate = tsc._certificate(tsc._name("Test Root"), tsc._name("Test Root"),
                                         root_key.public_key(), root_key,
-                                        NOW - timedelta(days=365), NOW + timedelta(days=365))
+                                        real_now - timedelta(days=365),
+                                        real_now + timedelta(days=365))
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     leaf_certificate = tsc._certificate(tsc._name("Apple Test Signer"),
                                         root_certificate.subject,
                                         leaf_key.public_key(), root_key,
-                                        NOW - timedelta(days=1), NOW + timedelta(days=1))
+                                        real_now - timedelta(days=1),
+                                        real_now + timedelta(days=365))
     return tsc.CertChain(root_key=root_key, root_certificate=root_certificate,
                          leaf_key=leaf_key, leaf_certificate=leaf_certificate)
 
