@@ -14,7 +14,7 @@ import os
 from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 
-from .account_backend import Actor, failure, resolve_apple_key_p8
+from .account_backend import AccountBackend, Actor, failure, resolve_apple_key_p8
 from .billing_verify import decrypt_reference, subscription_state
 from .appstore_client import (
     AppStoreRejected,
