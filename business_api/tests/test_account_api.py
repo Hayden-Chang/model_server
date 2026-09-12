@@ -129,17 +129,13 @@ def test_invalid_input_or_guest_signature_never_reserves(configuration):
     assert not any(call[0] in ("reserve","plan") for call in backend.calls)
 
 
-def test_legacy_guest_and_development_contracts_preserved(configuration):
+def test_legacy_guest_contracts_preserved_and_development_endpoint_retired(configuration):
     backend=Backend()
     with TestClient(create_account_api(configuration,backend)) as client:
         headers=guest_headers(client,DEVICE)
-        assert client.post("/api/development/membership",headers=headers,json={"enabled":True}).status_code==200
-        assert client.post("/api/development/membership",headers=headers,json={"enabled":"true"}).status_code==422
-        assert client.get("/api/development/membership",headers=account_headers()).status_code==403
-        other=guest_headers(client)
-        assert client.get("/api/development/membership",headers=other).status_code==403
-    membership=next(call for call in backend.calls if call[0]=="membership")
-    assert membership[2]=={"developmentAllowed":True,"enabled":True}
+        assert client.post("/api/development/membership",headers=headers,json={"enabled":True}).status_code==404
+        assert client.get("/api/development/membership",headers=account_headers()).status_code==404
+        assert client.get("/api/auth/guest",headers=headers).status_code==405
 
 
 def test_claim_requires_both_account_and_signed_guest(configuration):

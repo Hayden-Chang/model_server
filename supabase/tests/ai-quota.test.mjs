@@ -107,21 +107,16 @@ test('refund and expiry decrement once; stale attempts cannot finish a replaceme
   assert.equal((await rpc('status',p)).used,1);
 });
 
-test('development daily bucket preserves free usage and allowlist removal disables benefits',async()=>{
-  const p=guest();await use(p,2);
+test('retired development flag no longer grants a daily pool',async()=>{
   await rpc('membership',{...p,developmentAllowed:true,enabled:true});
   await use({...p,developmentAllowed:true},3);
-  assert.equal((await rpc('status',{...p,developmentAllowed:true})).used,3);
-  assert.equal((await rpc('status',p)).used,2);
-  await rpc('membership',{...p,developmentAllowed:true,enabled:false});
-  await rpc('membership',{...p,developmentAllowed:true,enabled:true});
-  assert.equal((await rpc('status',{...p,developmentAllowed:true})).used,3);
-  assert.equal((await rpc('membership',{...p,enabled:true})).code,'DEVELOPMENT_MEMBERSHIP_DISABLED');
+  const status=await rpc('status',{...p,developmentAllowed:true});
+  assert.equal(status.period,'free');
+  assert.equal(status.used,3);
+  assert.equal(status.limit,50);
+  assert.equal(status.enabled,false);
   const a=await account();
   assert.equal((await rpc('membership',{...a,developmentAllowed:true,enabled:true})).code,'DEVELOPMENT_MEMBERSHIP_DISABLED');
-  const day=await rpc('status',{...p,developmentAllowed:true});assert.ok(day.resetsAt);
-  await db.admin.query("update ai_private.buckets set period='member:2000-01-01' where principal=$1 and period like 'member:%'",[p.principal]);
-  assert.equal((await rpc('status',{...p,developmentAllowed:true})).used,0);
 });
 
 test('claim takes max usage, carries request receipts and is safe to retry',async()=>{
