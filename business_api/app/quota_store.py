@@ -109,6 +109,11 @@ class QuotaStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_active_period "
                 "ON quota_buckets(principal, period_key) WHERE active = 1"
             )
+            self._connection.execute(
+                "UPDATE quota_buckets SET quota_limit = ? "
+                "WHERE period_key = 'free' AND active = 1 AND quota_limit <> ?",
+                (self._default_limit, self._default_limit),
+            )
             self._connection.commit()
 
     def close(self) -> None:

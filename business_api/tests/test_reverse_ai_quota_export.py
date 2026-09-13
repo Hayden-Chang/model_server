@@ -81,6 +81,23 @@ def test_write_reactivates_existing_bucket_without_duplicating_rows(tmp_path):
     assert connection.execute("select count(*) from quota_requests").fetchone()[0] == 1
 
 
+def test_write_defaults_a_missing_free_limit_to_thirty_without_clamping_usage(tmp_path):
+    connection = sqlite3.connect(legacy_database(tmp_path))
+    connection.row_factory = sqlite3.Row
+    principal_id = "guest_" + "e" * 24
+    reverse.write_snapshot(
+        connection,
+        snapshot(principal(principal_id, "TF-EEEE-EEEE", buckets=[{"period": "free", "used": 31}])),
+    )
+
+    bucket = connection.execute(
+        "select quota_limit, used_count from quota_buckets where principal=? and period_key='free'",
+        (principal_id,),
+    ).fetchone()
+    assert bucket["quota_limit"] == 30
+    assert bucket["used_count"] == 31
+
+
 def test_write_deactivates_periods_missing_from_the_export(tmp_path):
     path = legacy_database(tmp_path)
     principal_id = "guest_" + "d" * 24

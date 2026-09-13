@@ -73,7 +73,7 @@ class AccountAPISettings(BaseSettings):
     planning_internal_secret: SecretStr = Field(min_length=32)
     time_fragment_token_secret: SecretStr = Field(min_length=32)
     time_fragment_token_ttl_seconds: int = Field(default=2592000, ge=300)
-    time_fragment_guest_quota_limit: int = Field(default=50, ge=1, le=10000)
+    time_fragment_guest_quota_limit: int = Field(default=30, ge=1, le=10000)
     time_fragment_member_quota_limit: int = Field(default=30, ge=1, le=10000)
     time_fragment_development_device_ids: str = ""
     admin_api_key: SecretStr = Field(min_length=16)

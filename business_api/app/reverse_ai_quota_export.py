@@ -103,7 +103,8 @@ def _write_bucket(
     now: str,
 ) -> tuple[int, bool]:
     period = str(bucket.get("period") or "free")
-    limit = max(1, int(bucket.get("limit") or 50))
+    fallback_limit = 30 if period == "free" else 50
+    limit = max(1, int(bucket.get("limit") or fallback_limit))
     used = max(0, int(bucket.get("used") or 0))
     bucket_id = _bucket_row(connection, principal, period)
     if bucket_id is None:
