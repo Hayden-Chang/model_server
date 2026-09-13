@@ -20,7 +20,7 @@ from .time_fragment import _CLOCK_PERIODS, _CLOCK_TOKEN_SOURCE, _parse_clock_tok
 
 _CLOCK = re.compile(rf"(?<![零〇一二两三四五六七八九十\d]){_CLOCK_TOKEN_SOURCE}(?!\d)")
 _SEPARATOR = re.compile(r"[，,。；;！!？?\n]")
-_NEGATION = re.compile(r"不要|别|无需|不许|不能|禁止")
+_NEGATION = re.compile(r"不要|别|无需|不许|不能|禁止|\b(?:don't|don’t|do\s+not|never)\b", re.IGNORECASE)
 _GLOBAL_START = re.compile(rf"^\s*(?:从|最早从|最早)\s*(?P<clock>{_CLOCK_TOKEN_SOURCE})\s*(?:开始|起|以后|之后)\s*(?:安排.*)?$")
 _CLOCK_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|再|请|做|时)*")
 _SHARED_ENDPOINT_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|请|做|时|给)*")
@@ -100,7 +100,7 @@ def _validate_boundary(
             if original.end() != evidence_end or original.start() > evidence_start:
                 continue
             prefix = text[original.start():evidence_start].strip()
-            if prefix and prefix not in _CLOCK_PERIODS:
+            if prefix and prefix not in _CLOCK_PERIODS and prefix.lower() not in {"at", "to", "from", "until", "by"}:
                 continue
             if _is_global_clock(text, original.start()):
                 continue

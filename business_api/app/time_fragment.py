@@ -14,6 +14,7 @@ from .contracts import (
     TimeFragmentExtractedOperations,
     TimeFragmentInternalTaskItem,
     TimeFragmentModelAddOperation,
+    TimeFragmentModelAuthorization,
     TimeFragmentModelOperation,
     TimeFragmentModelOperations,
     TimeFragmentModelPlanRequest,
@@ -62,11 +63,17 @@ _CLOCK_NUMBER_SOURCE = (
     r"(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九]"
     r"|(?:[01]?\d|2[0-4]))"
 )
+_ENGLISH_CLOCK_SOURCE = (
+    r"(?i:(?<![\w])(?:at|to|from|until|by)\s+(?:[01]?\d|2[0-3])"
+    r"(?::[0-5]\d)?(?:\s*[ap]\.?m\.?)?(?![\w:]|\s*(?:mins?\b|minutes?\b|hours?\b)))"
+    r"|(?i:(?<![\w])(?:0?[1-9]|1[0-2])(?::[0-5]\d)?\s*[ap]\.?m\.?(?!\w))"
+)
 _CLOCK_TOKEN_SOURCE = (
+    rf"(?:{_ENGLISH_CLOCK_SOURCE}|"
     rf"(?:(?:{'|'.join(_CLOCK_PERIODS)})\s*)?"
     rf"(?:{_CLOCK_NUMBER_SOURCE}\s*点"
     rf"(?:\s*(?:半|一刻|三刻|[零〇一二两三四五六七八九十\d]{{1,3}})\s*分?)?"
-    r"|(?:[01]?\d|2[0-3]|24)[:：][0-5]\d)"
+    r"|(?:[01]?\d|2[0-3]|24)[:：][0-5]\d))"
 )
 _CLOCK_TOKEN_PATTERN = re.compile(_CLOCK_TOKEN_SOURCE)
 _CLOCK_RANGE_PATTERN = re.compile(
@@ -311,6 +318,7 @@ def plan_time_fragment(
                     target,
                     operation,
                     getattr(model_operation, "authorization_text", None),
+                    getattr(model_operation, "authorization", None),
                 )
             ):
                 model_derived_move_indexes.add(index)
@@ -384,6 +392,7 @@ def plan_time_fragment(
                 target,
                 operation,
                 getattr(model_operation, "authorization_text", None),
+                getattr(model_operation, "authorization", None),
             )
             for _, operation, model_operation in indexed_operations
         ):
@@ -1130,6 +1139,7 @@ def _normalize_operations(
         if operation.object_type is None and target is not None:
             operation_data["objectType"] = target.object_type
         operation_data.pop("authorizationText", None)
+        operation_data.pop("authorization", None)
         operation_type = {
             "move": TimeFragmentMoveOperation,
             "changeDuration": TimeFragmentChangeDurationOperation,
@@ -1371,6 +1381,20 @@ def _parse_clock_token(
     *,
     inherited_period: str | None = None,
 ) -> tuple[int, str | None] | None:
+    english = re.fullmatch(
+        r"(?:(?:at|to|from|until|by)\s+)?(\d{1,2})(?::([0-5]\d))?\s*([ap]\.?m\.?)?",
+        token.strip(), re.IGNORECASE,
+    )
+    if english is not None and (
+        english[3] or re.match(r"(?:at|to|from|until|by)\s", token.strip(), re.IGNORECASE)
+    ):
+        hour, minute = int(english[1]), int(english[2] or 0)
+        period = english[3].lower().replace(".", "") if english[3] else None
+        if hour > 24 or hour == 24 and minute or period and not 1 <= hour <= 12:
+            return None
+        if period:
+            hour = hour % 12 + (12 if period == "pm" else 0)
+        return hour * 60 + minute, period
     normalized = re.sub(r"\s+", "", token)
     period = next((value for value in _CLOCK_PERIODS if normalized.startswith(value)), None)
     if period is not None:
@@ -1702,14 +1726,18 @@ def _operation_is_explicitly_requested(
     item: TimeFragmentPlanItem,
     operation: TimeFragmentOperation,
     authorization_text: str | None,
+    authorization: TimeFragmentModelAuthorization | None = None,
 ) -> bool:
     if _protected_operation_is_authorized(
         request_text,
         item,
         operation,
         authorization_text,
+        authorization,
     ):
         return True
+    if authorization is not None:
+        return False
     for identifier in (item.title, item.item_id):
         if identifier not in request_text:
             continue
@@ -1729,6 +1757,7 @@ def _protected_operation_is_authorized(
     item: TimeFragmentPlanItem,
     operation: TimeFragmentOperation,
     authorization_text: str | None,
+    authorization: TimeFragmentModelAuthorization | None = None,
 ) -> bool:
     if authorization_text is None:
         return False
@@ -1763,6 +1792,20 @@ def _protected_operation_is_authorized(
     }[operation.type]
     if any(marker in clause for marker in negative_markers + operation_negative_markers):
         return False
+    if re.search(r"\b(?:don't|don’t|do\s+not|never|must\s+not|shouldn't|shouldn’t)\b", clause, re.IGNORECASE):
+        return False
+    if authorization is not None:
+        # Meaning belongs to extraction; IDs, action, source and target binding
+        # remain deterministic. Negative or malformed evidence cannot fall
+        # through to the legacy language-specific authorization path.
+        return (
+            authorization.affirmative
+            and authorization.action == operation.type
+            and authorization.target_item_id == item.item_id
+            and authorization.source_text == authorization_text
+            and authorization.target_text.casefold() in authorization.source_text.casefold()
+            and authorization.target_text.casefold() in {item.title.casefold(), item.item_id.casefold()}
+        )
     intent_terms = {
         "move": ("移动", "移到", "挪到", "改到", "调到", "重排", "安排", "调整"),
         "changeDuration": ("时长", "延长", "缩短", "改成", "调整时长", "修改时长"),

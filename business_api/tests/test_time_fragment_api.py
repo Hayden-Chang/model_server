@@ -776,6 +776,7 @@ def test_inline_explicit_time_range_rejects_negated_add_and_corrects_once(
             )
         ]),
         operations_output([]),
+        raw_output('{"noChangeNeeded":true}'),
     ])
     payload = request_payload(
         text="从 11:15 开始\n不要在 11:30~12:00 打王者。",
@@ -797,8 +798,9 @@ def test_inline_explicit_time_range_rejects_negated_add_and_corrects_once(
     assert body["validation"] == {"valid": True, "attempts": 2, "issues": []}
     assert body["proposal"]["operations"] == []
     assert body["proposal"]["candidatePlan"]["items"] == []
-    assert len(fake.calls) == 2
-    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled", "disabled"]
+    assert len(fake.calls) == 3
+    assert [pipeline.thinking_mode for pipeline, _ in fake.calls] == ["disabled"] * 3
+    assert fake.calls[2][0].pipeline_id == "time-fragment-noop-check-v1"
     correction = json.loads(fake.calls[1][1])
     assert correction["issues"]
     assert all(issue["code"] != "UNPLACED" for issue in correction["issues"])
@@ -1056,7 +1058,8 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
                     }
                 ]
             ),
-            operations_output([]),
+            operations_output([{"type": "move", "targetItemId": "occurrence-1",
+                                "allowedChanges": ["segments"], "inputOrder": 0}]),
         ]
     )
     payload = request_payload(items=[internal_item()])
@@ -1202,7 +1205,8 @@ def test_observability_aggregates_two_model_calls_for_guest_device(settings: Set
                 usage={"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
             ),
             operations_output(
-                [],
+                [{"type": "move", "targetItemId": "occurrence-1",
+                  "allowedChanges": ["segments"], "inputOrder": 0}],
                 usage={"prompt_tokens": 140, "completion_tokens": 10, "total_tokens": 150},
             ),
         ]
@@ -1686,7 +1690,7 @@ def test_structural_correction_prompt_identifies_the_exact_invalid_field(
                     "timeConstraint": None,
                 }
             ]),
-            operations_output([]),
+            operations_output([model_add("缺少顺序", "缺少顺序")]),
         ]
     )
     with TestClient(create_app(settings, fake)) as client:
@@ -1709,7 +1713,9 @@ def test_structural_correction_prompt_identifies_the_exact_invalid_field(
 
 
 def test_first_parse_failure_then_second_valid_returns_attempts_two(settings: Settings) -> None:
-    fake = FakeModelClient([raw_output("[]"), operations_output([])])
+    fake = FakeModelClient([raw_output("[]"), operations_output([
+        model_add("今天的任务", "今天的任务"),
+    ])])
     with TestClient(create_app(settings, fake)) as client:
         response = client.post(
             "/api/plan/parse",
