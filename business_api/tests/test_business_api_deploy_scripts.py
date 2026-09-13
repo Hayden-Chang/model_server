@@ -89,3 +89,21 @@ def test_bare_title_smoke_accepts_only_exact_title_and_earliest_slot() -> None:
     ]
     with pytest.raises(AssertionError):
         smoke.assert_exact_bare_title(misplaced, "爸爸")
+
+
+def test_command_smoke_request_contains_an_existing_target() -> None:
+    smoke = load_smoke()
+    item = {
+        "itemId": "occurrence-1",
+        "objectType": "internalTask",
+        "title": "性能",
+        "durationSlots": 2,
+        "segments": [{"startSlot": 36, "endSlot": 38}],
+        "isPinned": False,
+        "isCompleted": False,
+    }
+
+    request = smoke.planning_request("把性能移到下午", "2026-09-14", [item])
+
+    assert request["currentPlan"]["items"] == [item]
+    assert request["baseFingerprint"] == smoke.fingerprint("2026-09-14", [item])

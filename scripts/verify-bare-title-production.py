@@ -48,13 +48,17 @@ def fingerprint(plan_date: str, items: list[dict[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
-def planning_request(text: str, plan_date: str) -> dict[str, Any]:
-    items: list[dict[str, Any]] = []
+def planning_request(
+    text: str,
+    plan_date: str,
+    items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    current_items = [] if items is None else items
     return {
         "text": text,
         "requestID": str(uuid.uuid4()),
-        "baseFingerprint": fingerprint(plan_date, items),
-        "currentPlan": {"date": plan_date, "items": items},
+        "baseFingerprint": fingerprint(plan_date, current_items),
+        "currentPlan": {"date": plan_date, "items": current_items},
         "now": f"{plan_date}T00:00:00+08:00",
         "earliestStartSlot": 36,
     }
@@ -118,10 +122,26 @@ def run(base_url: str) -> None:
     assert clock_items[0].get("segments") == [{"startSlot": 68, "endSlot": 70}]
     print("PASS Chinese clock: 五点吃饭")
 
+    command_items = [
+        {
+            "itemId": "bare-title-smoke-occurrence",
+            "objectType": "internalTask",
+            "domainRef": {
+                "taskId": "bare-title-smoke-task",
+                "occurrenceId": "bare-title-smoke-occurrence",
+                "scheduledTaskId": "bare-title-smoke-scheduled-task",
+            },
+            "title": "性能",
+            "durationSlots": 2,
+            "segments": [{"startSlot": 36, "endSlot": 38}],
+            "isPinned": False,
+            "isCompleted": False,
+        }
+    ]
     for command in ("删除性能", "把性能移到下午"):
         command_response = post_json(
             f"{base_url}/api/plan/parse",
-            planning_request(command, plan_date),
+            planning_request(command, plan_date, command_items),
             token=token,
         )
         command_operations = operations(command_response, require_valid=False)
