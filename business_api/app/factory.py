@@ -4,7 +4,6 @@ import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -485,8 +484,6 @@ def create_app(
             status_code = 500
             raise
         finally:
-            tracker.calls = [replace(call, input_content="", output_content=None, error_message=None)
-                             for call in tracker.calls]
             persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
                 route="/internal/time-fragment/plan", pipeline="time-fragment-plan-v2",
                 started_at=started_at, started_clock=started_clock, status_code=status_code,
