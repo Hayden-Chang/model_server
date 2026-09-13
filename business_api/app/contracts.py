@@ -393,7 +393,18 @@ class TimeFragmentPlacement(_TimeFragmentV2Model):
 TimeFragmentObjectType = Literal["internalTask", "externalEvent"]
 
 
+class TimeFragmentModelAuthorization(_TimeFragmentV2Model):
+    """Model-owned meaning with source and target bindings checked by the backend."""
+
+    action: Literal["move", "changeDuration", "changeTitle", "delete"]
+    target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
+    target_text: str = Field(alias="targetText", min_length=1, max_length=500)
+    source_text: str = Field(alias="sourceText", min_length=1, max_length=1_000)
+    affirmative: bool = Field(strict=True)
+
+
 class _TimeFragmentExistingModelOperation(_TimeFragmentV2Model):
+    authorization: TimeFragmentModelAuthorization | None = None
     target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
     object_type: TimeFragmentObjectType | None = Field(default=None, alias="objectType")
     priority: int | None = Field(
@@ -478,6 +489,7 @@ class TimeFragmentModelChangeDurationOperation(_TimeFragmentExistingModelOperati
 
 
 class TimeFragmentModelChangeTitleOperation(_TimeFragmentV2Model):
+    authorization: TimeFragmentModelAuthorization | None = None
     type: Literal["changeTitle"]
     target_item_id: str = Field(alias="targetItemId", min_length=1, max_length=200)
     object_type: Literal["internalTask"] = Field(alias="objectType")

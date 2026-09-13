@@ -223,8 +223,11 @@ def test_protected_authorization_uses_internal_evidence_not_a_model_asserted_boo
     public_property_names = _property_names(TimeFragmentPlanProposal.model_json_schema(by_alias=True))
 
     assert "authorizationText" in model_property_names
+    assert "authorization" in model_property_names
     assert "isExplicit" not in model_property_names
     assert "authorizationText" not in public_property_names
+    assert "authorization" not in public_property_names
+    assert "affirmative" not in public_property_names
     assert "isExplicit" not in public_property_names
     operation = TimeFragmentModelOperations.model_validate(
         {

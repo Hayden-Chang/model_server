@@ -66,7 +66,13 @@ def build_time_fragment_correction_input(
     first_extraction: TimeFragmentExtractedOperations | None = None,
 ) -> str:
     correction: dict[str, Any] = {
-        "instruction": "第一次 operations 未通过结构或语义校验。根据具体 issues 修正，并只返回完整替换后的 operations JSON。",
+        "instruction": (
+            "The first extraction failed validation. Re-read originalRequest and return complete replacement "
+            "operations and temporalRelations fixing the issues. Preserve all genuinely requested actions, "
+            "not mistakes from the first extraction. An empty candidate is not evidence that no action was "
+            "requested: rejected operations may have been removed by validation. Do not drop a requested "
+            "task to avoid an error; leave scheduling and splitting to the backend."
+        ),
         "originalRequest": original_request.model_dump(
             mode="json",
             by_alias=True,
@@ -106,6 +112,7 @@ def _remove_private_fields(value: Any) -> Any:
     if isinstance(value, dict):
         forbidden = {
             "authorizationText",
+            "authorization",
             "baseFingerprint",
             "domainRef",
             "requestID",
