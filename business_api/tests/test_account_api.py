@@ -328,6 +328,7 @@ def test_internal_credential_expiry_and_future_issue_time(monkeypatch):
 
 
 def test_configuration_requires_independent_internal_secret(settings,configuration):
+    assert configuration.time_fragment_guest_quota_limit == 30
     with pytest.raises(ValueError,match="independent"):
         AccountAPISettings(**{**configuration.model_dump(),"planning_internal_secret":TOKEN_SECRET})
     with pytest.raises(ValueError,match="own credential"):
