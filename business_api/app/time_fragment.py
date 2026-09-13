@@ -1803,7 +1803,10 @@ def _protected_operation_is_authorized(
             and authorization.action == operation.type
             and authorization.target_item_id == item.item_id
             and authorization.source_text == authorization_text
-            and authorization.target_text.casefold() in authorization.source_text.casefold()
+            and re.search(
+                rf"(?<![a-z0-9_]){re.escape(authorization.target_text.casefold())}(?![a-z0-9_])",
+                authorization.source_text.casefold(),
+            ) is not None
             and authorization.target_text.casefold() in {item.title.casefold(), item.item_id.casefold()}
         )
     intent_terms = {

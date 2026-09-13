@@ -124,11 +124,24 @@ def test_english_external_move_is_only_a_local_candidate_change(settings):
     assert body["proposal"]["deletedExternalEventIDs"] == []
 
 
-def test_structured_authorization_preserves_chinese_negation_guard(settings):
-    text = "请不要把钉住任务移动到下午四点"
+@pytest.mark.parametrize("negated", [False, True])
+def test_structured_authorization_preserves_chinese_negation_guard(settings, negated):
+    text = f"请{'不要' if negated else ''}把钉住任务移动到下午四点"
     item = internal_item(pinned=True)
     operation = protected_move(text)
     operation["authorization"]["targetText"] = item["title"]
+    body, _ = run_clock_request(settings, text, [operation], items=[item])
+    assert body["validation"]["valid"] is not negated
+    expected = item if negated else {**item, "segments": [{"startSlot": 64, "endSlot": 68}]}
+    assert body["proposal"]["candidatePlan"]["items"] == [expected]
+
+
+def test_protected_target_name_cannot_match_inside_a_different_word(settings):
+    text = "move preview to 4"
+    item = internal_item(pinned=True)
+    item["title"] = "Review"
+    operation = protected_move(text)
+    operation["authorization"]["targetText"] = "review"
     body, _ = run_clock_request(settings, text, [operation], items=[item])
     assert body["validation"]["valid"] is False
     assert body["proposal"]["candidatePlan"]["items"] == [item]
