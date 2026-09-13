@@ -63,8 +63,8 @@ test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>
   assert.equal(entitlement.plan,'free');
   assert.equal(entitlement.status,'expired');
   assert.equal(entitlement.entitlementRevision,0);
-  assert.equal(entitlement.aiQuota.limit,50);
-  assert.equal(entitlement.aiQuota.remaining,50);
+  assert.equal(entitlement.aiQuota.limit,30);
+  assert.equal(entitlement.aiQuota.remaining,30);
   assert.deepEqual(entitlement.billingSources,[]);
   await db.admin.query(
     `insert into ai_private.principals(id,user_id,support_code,free_limit)
@@ -75,7 +75,8 @@ test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>
       on conflict (principal,period) do update set used=excluded.used`,[a.principal]);
   const after=await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
   assert.equal(after.aiQuota.used,21);
-  assert.equal(after.aiQuota.remaining,29);
+  assert.equal(after.aiQuota.limit,30,'legacy writes must be clamped to the current free limit');
+  assert.equal(after.aiQuota.remaining,9);
 });
 
 test('apple verify binds the chain, aggregates plus and confirms the claim',async()=>{

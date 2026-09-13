@@ -132,7 +132,7 @@ result that cannot be parsed is returned with HTTP 200 as `proposal: null` and
 `PARSE_FAILED`. Authentication, request-size, request-shape, and
 model-infrastructure failures use HTTP 401, 413, 422, 502, and 503 as applicable.
 
-The route has a persistent per-installation quota of 50 usable AI requests by
+The route has a persistent per-installation quota of 30 usable AI requests by
 default (`TIME_FRAGMENT_GUEST_QUOTA_LIMIT`). It atomically reserves one use by
 App `requestID` before calling the model. Repeating a completed `requestID` is
 rejected without another quota deduction or model call. Invalid input,
@@ -173,7 +173,7 @@ POST /admin/time-fragment/quotas/<support-code>/reset
 POST /admin/time-fragment/quotas/reset-all
 ```
 
-The specific reset starts a fresh 50-use bucket only for the installation that
+The specific reset starts a fresh 30-use bucket only for the installation that
 reported the support code. The reset-all operation starts fresh buckets lazily
 on each installation's next AI request. Both the quota ledger and observability
 records live in the existing `model-server-usage` SQLite volume.

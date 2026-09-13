@@ -104,6 +104,29 @@ def test_legacy_bucket_migration_preserves_consumption(tmp_path: Path) -> None:
         store.close()
 
 
+def test_lower_free_limit_updates_existing_bucket_without_refilling(tmp_path: Path) -> None:
+    database = str(tmp_path / "lower-limit.sqlite3")
+    original = QuotaStore(database, 50)
+    support_code = ""
+    for index in range(31):
+        reservation = original.reserve("guest_one", f"used-{index}")
+        support_code = reservation.support_code
+        original.consume(reservation)
+    original.close()
+
+    lowered = QuotaStore(database, 30)
+    try:
+        status = lowered.status(support_code)
+        assert status is not None
+        assert status.quota_limit == 30
+        assert status.used == 31
+        assert status.remaining == 0
+        with pytest.raises(QuotaExceeded):
+            lowered.reserve("guest_one", "blocked-after-lowering")
+    finally:
+        lowered.close()
+
+
 def test_development_endpoint_requires_authenticated_allowlisted_installation(settings) -> None:
     allowed = settings.model_copy(update={"time_fragment_development_device_ids": "time-fragment-allowed-device"})
     with TestClient(create_app(allowed, FakeModelClient([]))) as client:
@@ -123,7 +146,7 @@ def test_actual_plan_route_uses_member_bucket_and_returns_daily_reset(settings) 
     device = "time-fragment-allowed-device"
     principal = GuestTokenCodec.device_key(device)
     configured = settings.model_copy(update={"time_fragment_development_device_ids": device})
-    quotas = QuotaStore(":memory:", 50, development_principals=frozenset({principal}))
+    quotas = QuotaStore(":memory:", 30, development_principals=frozenset({principal}))
     fake = FakeModelClient([operations_output([]), operations_output([])])
     with TestClient(create_app(configured, fake, quota_store=quotas)) as client:
         headers = guest_headers(client, device)
@@ -137,7 +160,7 @@ def test_actual_plan_route_uses_member_bucket_and_returns_daily_reset(settings) 
         assert exhausted.status_code == 429
         assert exhausted.json()["detail"]["code"] == "AI_DAILY_QUOTA_EXHAUSTED"
         assert exhausted.json()["detail"]["resetsAt"]
-        assert client.post("/api/development/membership", headers=headers, json={"enabled": False}).json()["remaining"] == 50
+        assert client.post("/api/development/membership", headers=headers, json={"enabled": False}).json()["remaining"] == 30
         free = client.post("/api/plan/parse", headers=headers, json=request_payload(request_id="actual-free"))
         assert free.status_code == 200
         assert len(fake.calls) == 2

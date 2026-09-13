@@ -67,6 +67,10 @@ def settings() -> Settings:
     )
 
 
+def test_free_quota_defaults_to_thirty_lifetime_uses(settings: Settings) -> None:
+    assert settings.time_fragment_guest_quota_limit == 30
+
+
 def guest_headers(client: TestClient, device_id: str = "time-fragment-ios-device-1234") -> dict[str, str]:
     response = client.post("/api/auth/guest", json={"device_id": device_id})
     assert response.status_code == 200

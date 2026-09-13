@@ -9,7 +9,7 @@ after(async () => { await db?.close(); });
 const hash='a'.repeat(64);
 function guest() {
   const value=createHash('sha256').update(randomUUID()).digest('hex');
-  return {principal:'guest_'+value.slice(0,24),supportCode:'TF-'+value.slice(24,32),freeLimit:50};
+  return {principal:'guest_'+value.slice(0,24),supportCode:'TF-'+value.slice(24,32),freeLimit:30};
 }
 async function account() {
   const user=await db.account(); const device=await user.device();
@@ -27,11 +27,15 @@ test('migration gate rejects new quota; imports metadata exactly once',async()=>
   const p=guest();
   await assert.rejects(rpc('status',p),/AI_IMPORT_REQUIRED/);
   const data={...p,limit:50,developmentEnabled:true,importHash:'fixed',
-    buckets:[{period:'free',used:21}],completedRequests:['legacy-completed']};
+    buckets:[{period:'free',used:31}],completedRequests:['legacy-completed']};
   await rpc('import',data);await rpc('import',data);
   await assert.rejects(rpc('import',{...data,importHash:'changed'}),/AI_IMPORT_CHANGED/);
   await rpc('finish_import');
-  assert.equal((await rpc('status',p)).used,21);
+  const imported=await rpc('status',p);
+  assert.equal(imported.used,31);
+  assert.equal(imported.limit,30,'legacy imports must keep usage but adopt the current free limit');
+  assert.equal(imported.remaining,0,'lowering the limit must not refill an existing account');
+  assert.equal((await reserve(p)).code,'AI_QUOTA_EXHAUSTED');
   assert.equal((await reserve(p,'legacy-completed')).code,'AI_REQUEST_ALREADY_COMPLETED');
   await assert.rejects(rpc('import',data),/AI_IMPORT_ALREADY_CLOSED/);
 });
@@ -53,18 +57,18 @@ test('clients cannot call quota RPC, helpers or read ledger tables',async()=>{
   await assert.rejects(db.rpc(a.device,'ai_account_identity'),/ACCOUNT_UNAVAILABLE/);
 });
 
-test('different sessions share 50 account calls while another account stays independent',async()=>{
+test('different sessions share 30 account calls while another account stays independent',async()=>{
   const a=await account();const other=await account();const second=await a.user.device();
-  await use(a,25);await use({...a,sessionID:second.session},25);
+  await use(a,15);await use({...a,sessionID:second.session},15);
   assert.equal((await reserve(a)).code,'AI_QUOTA_EXHAUSTED');
-  assert.equal((await rpc('status',a)).used,50);
-  assert.equal((await rpc('status',other)).remaining,50);
+  assert.equal((await rpc('status',a)).used,30);
+  assert.equal((await rpc('status',other)).remaining,30);
 });
 
 test('concurrent reservations cannot overspend or invoke the same request twice',async()=>{
-  const p={...guest(),freeLimit:2};
-  const results=await Promise.all(Array.from({length:8},()=>reserve(p)));
-  assert.equal(results.filter(x=>x.attempt).length,2);
+  const p=guest();
+  const results=await Promise.all(Array.from({length:36},()=>reserve(p)));
+  assert.equal(results.filter(x=>x.attempt).length,30);
   assert.equal(results.filter(x=>x.code==='AI_QUOTA_EXHAUSTED').length,6);
   const other=guest();const id=randomUUID();
   const duplicates=await Promise.all(Array.from({length:8},()=>reserve(other,id)));
@@ -137,7 +141,7 @@ test('retired development flag no longer grants a daily pool',async()=>{
   const status=await rpc('status',{...p,developmentAllowed:true});
   assert.equal(status.period,'free');
   assert.equal(status.used,3);
-  assert.equal(status.limit,50);
+  assert.equal(status.limit,30);
   assert.equal(status.enabled,false);
   const a=await account();
   assert.equal((await rpc('membership',{...a,developmentAllowed:true,enabled:true})).code,'DEVELOPMENT_MEMBERSHIP_DISABLED');
@@ -198,7 +202,7 @@ test('rollback export returns guests only and excludes abandoned reservations',a
   assert.ok(entry,'guest must be exported');
   assert.equal(entry.supportCode,g.supportCode);
   assert.equal(entry.buckets.find(b=>b.period==='free').used,2);
-  assert.equal(entry.buckets.find(b=>b.period==='free').limit,50);
+  assert.equal(entry.buckets.find(b=>b.period==='free').limit,30);
   assert.deepEqual([...entry.completedRequests].sort(),[...ids].sort());
   assert.equal(snapshot.principals.some(p=>p.principal===a.principal),false,'account must not enter the legacy export');
   for(const role of ['anon','authenticated']){
@@ -226,6 +230,8 @@ test('rollback refunds reservations, closes the gate and clears guests before re
   await rpc('import',{...g,limit:50,developmentEnabled:false,importHash:'rollback-restore',
     buckets:[{period:'free',used:1}],completedRequests:[done]});
   await rpc('finish_import');
-  assert.equal((await rpc('status',g)).used,1);
+  const restored=await rpc('status',g);
+  assert.equal(restored.used,1);
+  assert.equal(restored.limit,30);
   assert.equal((await reserve(g,done)).code,'AI_REQUEST_ALREADY_COMPLETED');
 });

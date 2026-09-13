@@ -328,6 +328,7 @@ def test_internal_credential_expiry_and_future_issue_time(monkeypatch):
 
 
 def test_configuration_requires_independent_internal_secret(settings,configuration):
+    assert configuration.time_fragment_guest_quota_limit == 30
     with pytest.raises(ValueError,match="independent"):
         AccountAPISettings(**{**configuration.model_dump(),"planning_internal_secret":TOKEN_SECRET})
     with pytest.raises(ValueError,match="own credential"):
@@ -378,17 +379,20 @@ def test_internal_planner_keeps_validation_and_failure_boundaries(settings,confi
     if case=="unparseable":assert result.json()["proposal"] is None
 
 
-def test_internal_observability_retains_usage_but_not_account_content(settings,configuration,tmp_path):
+def test_internal_observability_persists_model_call_content(settings,configuration,tmp_path):
     path=tmp_path/"usage.sqlite3"
     store=UsageStore(str(path),30)
-    model=FakeModelClient([operations_output([],usage={"prompt_tokens":10,"completion_tokens":20,"total_tokens":30})])
+    model=FakeModelClient([operations_output([{
+        "type":"add","title":"PRIVATE_ACCOUNT_TEXT","sourceText":"PRIVATE_ACCOUNT_TEXT",
+        "timeConstraint":None,"durationSlots":2,"priority":None,"inputOrder":0,
+    }],usage={"prompt_tokens":10,"completion_tokens":20,"total_tokens":30})])
     payload=request_payload(text="PRIVATE_ACCOUNT_TEXT")
     cred=PlanningCredentials(SECRET).issue(ACCOUNT.principal,payload,str(uuid4()))
     with TestClient(create_app(settings.model_copy(update={"planning_internal_secret":configuration.planning_internal_secret}),model,usage_store=store)) as client:
         assert client.post("/internal/time-fragment/plan",json=payload,headers={"Authorization":"Bearer "+cred}).status_code==200
     with sqlite3.connect(path) as db:
         dump="\n".join(db.iterdump())
-        assert "PRIVATE_ACCOUNT_TEXT" not in dump
+        assert "PRIVATE_ACCOUNT_TEXT" in dump
         assert ACCOUNT.principal in dump
 
 

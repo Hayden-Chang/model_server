@@ -17,7 +17,7 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 | `GET/POST /api/development/membership` | allowlisted guest | Existing development toggle and 50/day Shanghai quota; not a paid subscription. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
 
-Formal accounts share 50 lifetime free calls across devices. Guest limits retain
+Formal accounts share 30 lifetime free calls across devices. Guest limits retain
 the existing configured value. Claim takes `max(accountUsed, guestUsed)`, copies
 completed request receipts, and permanently marks the installation as claimed.
 Retrying the same claim to the same account is safe. Another account cannot claim
