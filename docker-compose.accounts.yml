@@ -27,7 +27,6 @@ services:
       TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
       TIME_FRAGMENT_TOKEN_TTL_SECONDS: ${TIME_FRAGMENT_TOKEN_TTL_SECONDS:-2592000}
       TIME_FRAGMENT_GUEST_QUOTA_LIMIT: ${TIME_FRAGMENT_GUEST_QUOTA_LIMIT:-50}
-      TIME_FRAGMENT_DEVELOPMENT_DEVICE_IDS: ${TIME_FRAGMENT_DEVELOPMENT_DEVICE_IDS:-}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
     expose: ["8000"]
     read_only: true
@@ -41,6 +40,28 @@ services:
       interval: 30s
       timeout: 25s
       retries: 3
+  billing-worker:
+    build:
+      context: ./business_api
+    command: [python, -m, app.billing_worker]
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      APPLE_ENVIRONMENT: ${APPLE_ENVIRONMENT:-sandbox}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-}
+      APPLE_ISSUER_ID: ${APPLE_ISSUER_ID:-}
+      APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-com.hayden.timefragment}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      STORE_REFERENCE_KEY: ${STORE_REFERENCE_KEY:?STORE_REFERENCE_KEY is required}
+      PLANNING_INTERNAL_SECRET: ${PLANNING_INTERNAL_SECRET:?PLANNING_INTERNAL_SECRET is required}
+      TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      BILLING_WORKER_INTERVAL_SECONDS: ${BILLING_WORKER_INTERVAL_SECONDS:-300}
+    read_only: true
+    tmpfs: [/tmp]
+
   # Opt-in one-off for the emergency rollback: writable legacy volume and only
   # the two credentials the reverse export needs. It never publishes a port.
   quota-rollback:

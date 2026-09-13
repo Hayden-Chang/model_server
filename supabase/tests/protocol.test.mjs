@@ -89,3 +89,61 @@ test('all operation kinds have payload schemas and reject omitted payload fields
   }
   assert.equal(await sql({...op,kind:'task.toggle'}),false);
 });
+test('generated v2 contracts are registered and v2 golden vectors match JavaScript and PostgreSQL hashes',async()=>{
+  const schema=JSON.parse(await readFile(new URL('../protocol/v2/cloud-state.schema.json',import.meta.url),'utf8'));
+  const valid=new Ajv({strict:false,validateFormats:false}).compile(schema);
+  const contract=(await db.admin.query("select schema from sync_private.contracts where name='cloud-state-v2'")).rows[0].schema;
+  const vectors=JSON.parse(await readFile(new URL('../protocol/v2/golden.json',import.meta.url),'utf8'));
+  for(const v of vectors) {
+    assert.equal(valid(v.state),true,v.name+': '+JSON.stringify(valid.errors));
+    assert.equal((await db.admin.query('select sync_private.matches_schema($1,$2,$2) as valid',[v.state,contract])).rows[0].valid,true,v.name);
+    assert.equal(canonical(v.state),v.canonical);
+    const row=(await db.admin.query('select sync_private.canonical_json($1) as canonical,sync_private.hash_json($1) as hash',[v.state])).rows[0];
+    assert.equal(row.canonical,v.canonical); assert.equal(row.hash,v.hash); assert.equal(hash(v.state),v.hash);
+  }
+});
+test('v2 state schema rejects missing or invalid v2 fields and the v1 write path still rejects v2 data',async()=>{
+  const schema=JSON.parse(await readFile(new URL('../protocol/v2/cloud-state.schema.json',import.meta.url),'utf8'));
+  const valid=new Ajv({strict:false,validateFormats:false}).compile(schema);
+  const vectors=JSON.parse(await readFile(new URL('../protocol/v2/golden.json',import.meta.url),'utf8'));
+  const base=structuredClone(vectors[1].state);
+  const edits=[
+    s=>s.schemaVersion=1,
+    s=>delete s.puzzle,
+    s=>s.puzzle.extraField=true,
+    s=>delete s.tasks[0].startReminder,
+    s=>s.tasks[0].startReminder='3',
+    s=>s.tasks[0].customColorHex='#12AB3',
+    s=>delete s.occurrences[1].overrides.startReminder,
+    s=>s.occurrences[1].overrides.customColorHex='#GGHHII',
+    s=>s.puzzle.fragments=-1,
+    s=>s.puzzle.automaticRandom=null,
+    s=>s.puzzle.works[0].imagePath=42,
+    s=>s.puzzle.dayArtworkIDs['2026-09-08']=null,
+  ];
+  for(const edit of edits){const state=structuredClone(base);edit(state);assert.equal(valid(state),false,edit.toString());}
+  await assert.rejects(check(base),/payloadInvalid/);
+});
+test('v2 operation contract keeps all v1 kinds, adds puzzle.applyChanges, and rejects blind puzzle replacement',async()=>{
+  const contract=JSON.parse(await readFile(new URL('../protocol/v2/operation.schema.json',import.meta.url),'utf8'));
+  const ajv=new Ajv({strict:false,validateFormats:false}).compile(contract);
+  assert.equal(contract.properties.kind.enum.length,21);
+  const examples=JSON.parse(await readFile(new URL('../protocol/v2/operation-examples.json',import.meta.url),'utf8'));
+  const contractRow=(await db.admin.query("select schema from sync_private.contracts where name='operation-v2'")).rows[0].schema;
+  const sql=async value=>(await db.admin.query('select sync_private.matches_schema($1,$2,$2) as valid',[value,contractRow])).rows[0].valid;
+  assert.deepEqual(examples.map(x=>x.kind).sort(),[...contract.properties.kind.enum].sort());
+  for(const example of examples) {
+    assert.equal(ajv(example),true,example.kind+': '+JSON.stringify(ajv.errors));
+    assert.equal(await sql(example),true,example.kind);
+  }
+  const puzzle=examples.find(x=>x.kind==='puzzle.applyChanges');
+  const invalids=[
+    {...puzzle,payload:{}},
+    {...puzzle,payload:{puzzle:{}}},
+    {...puzzle,payload:{puzzle:{fragments:-1}}},
+    {...puzzle,payload:{puzzle:{fragments:1,completePuzzle:{}}}},
+    {...puzzle,schemaVersion:1},
+    {...puzzle,kind:'puzzle.replace'},
+  ];
+  for(const invalid of invalids){assert.equal(ajv(invalid),false);assert.equal(await sql(invalid),false);}
+});

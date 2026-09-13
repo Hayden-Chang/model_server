@@ -17,6 +17,7 @@ from app.model_client import (
 )
 from app.pipelines import get_pipeline
 from app.settings import Settings
+from app.time_fragment_service import _bare_task_title
 
 
 API_KEY = "business-test-key-with-32-characters"
@@ -32,6 +33,8 @@ def test_time_fragment_pipeline_has_twenty_thousand_output_token_budget() -> Non
     assert pipeline.thinking_mode == "disabled"
     assert "性能" in pipeline.system_prompt
     assert "title、sourceText 原样保留" in pipeline.system_prompt
+    assert "五点吃饭" in pipeline.system_prompt
+    assert "keep endTime and endEvidence null" in pipeline.system_prompt
 
 
 @dataclass
@@ -1076,6 +1079,7 @@ def test_first_semantic_failure_sends_redacted_candidate_and_is_corrected_once(
         }
     ]
     assert correction["firstCandidate"]["candidatePlan"]["items"][0]["itemId"] == "occurrence-1"
+    assert "firstExtraction" not in correction
     for serialized in (fake.calls[0][1], fake.calls[1][1]):
         assert "domainRef" not in serialized
         assert "private-task-id" not in serialized
@@ -1443,6 +1447,103 @@ def test_two_model_failures_fall_back_for_a_bare_task_title(
     assert len(fake.calls) == 2
 
 
+def test_bare_noun_noop_is_recovered_as_same_title_task(
+    settings: Settings,
+) -> None:
+    fake = FakeModelClient([operations_output([]), operations_output([])])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text="爸爸",
+                date="2026-09-14",
+                earliest_start_slot=36,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    operation = body["proposal"]["operations"][0]
+    assert operation["type"] == "add"
+    assert operation["title"] == "爸爸"
+    assert operation["durationSlots"] == 2
+    assert operation["priority"] is None
+    assert body["proposal"]["candidatePlan"]["items"] == [
+        {
+            "itemId": operation["temporaryId"],
+            "objectType": "internalTask",
+            "domainRef": None,
+            "title": "爸爸",
+            "durationSlots": 2,
+            "segments": [{"startSlot": 36, "endSlot": 38}],
+            "isPinned": False,
+            "isCompleted": False,
+        }
+    ]
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("text", "start_time", "start_slot"),
+    [("五点吃饭", "17:00", 68), ("一点吃饭", "13:00", 52)],
+)
+def test_chinese_clock_request_is_not_treated_as_a_bare_task_title(
+    settings: Settings,
+    text: str,
+    start_time: str,
+    start_slot: int,
+) -> None:
+    timed_add = operations_output([
+        model_add(
+            "吃饭",
+            text,
+            start_time=start_time,
+            start_evidence=text,
+        )
+    ])
+    fake = FakeModelClient([timed_add])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text=text,
+                date="2026-09-13",
+                earliest_start_slot=36,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert body["proposal"]["operations"][0]["title"] == "吃饭"
+    assert body["proposal"]["candidatePlan"]["items"] == [
+        {
+            "itemId": body["proposal"]["operations"][0]["temporaryId"],
+            "objectType": "internalTask",
+            "domainRef": None,
+            "title": "吃饭",
+            "durationSlots": 2,
+            "segments": [{"startSlot": start_slot, "endSlot": start_slot + 2}],
+            "isPinned": False,
+            "isCompleted": False,
+        }
+    ]
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("title", ["买一点牛奶", "记录一点想法"])
+def test_chinese_quantity_phrase_remains_a_bare_task_title(title: str) -> None:
+    assert _bare_task_title(title) == title
+
+
+@pytest.mark.parametrize("text", ["一点想法", "一点点心", "一点吃饭", "一点开会"])
+def test_ambiguous_sentence_initial_yidian_is_left_to_the_model(text: str) -> None:
+    assert _bare_task_title(text) is None
+
+
 def test_bare_task_title_fallback_retains_an_unplaced_todo(
     settings: Settings,
 ) -> None:
@@ -1513,6 +1614,63 @@ def test_two_unparseable_outputs_do_not_treat_commands_as_bare_task_titles(
     assert body["validation"]["attempts"] == 2
     assert [issue["code"] for issue in body["validation"]["issues"]] == ["PARSE_FAILED"]
     assert len(fake.calls) == 2
+
+
+def test_single_clock_correction_receives_the_invalid_extracted_boundary(
+    settings: Settings,
+) -> None:
+    invalid = model_add(
+        "吃饭",
+        "五点吃饭",
+        start_time="17:00",
+        end_time="23:00",
+        start_evidence="五点吃饭",
+        end_evidence="五点吃饭",
+    )
+    corrected = model_add(
+        "吃饭",
+        "五点吃饭",
+        start_time="17:00",
+        start_evidence="五点吃饭",
+    )
+    invalid_output = operations_output([invalid])
+    corrected_output = operations_output([corrected])
+
+    class ContextAwareModelClient(FakeModelClient):
+        async def complete(self, pipeline: Any, user_input: str) -> ModelOutput:
+            self.calls.append((pipeline, user_input))
+            if len(self.calls) == 1:
+                return invalid_output
+            correction = json.loads(user_input)
+            extraction = correction.get("firstExtraction", {})
+            operations = extraction.get("operations", [])
+            if operations and operations[0].get("timeConstraint", {}).get("endTime") == "23:00":
+                return corrected_output
+            return invalid_output
+
+    fake = ContextAwareModelClient([])
+    with TestClient(create_app(settings, fake)) as client:
+        response = client.post(
+            "/api/plan/parse",
+            headers=guest_headers(client),
+            json=request_payload(
+                text="五点吃饭",
+                date="2026-09-13",
+                earliest_start_slot=36,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation"] == {"valid": True, "attempts": 2, "issues": []}
+    correction = json.loads(fake.calls[1][1])
+    timing = correction["firstExtraction"]["operations"][0]["timeConstraint"]
+    assert timing == {
+        "startTime": "17:00",
+        "endTime": "23:00",
+        "startEvidence": "五点吃饭",
+        "endEvidence": "五点吃饭",
+    }
 
 
 def test_structural_correction_prompt_identifies_the_exact_invalid_field(

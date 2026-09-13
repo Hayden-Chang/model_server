@@ -25,6 +25,9 @@ _GLOBAL_START = re.compile(rf"^\s*(?:从|最早从|最早)\s*(?P<clock>{_CLOCK_T
 _CLOCK_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|再|请|做|时)*")
 _SHARED_ENDPOINT_TO_ACTION = re.compile(r"(?:\s|的时候|安排|开始|进行|去|要|先|请|做|时|给)*")
 _RELATIVE_ENDPOINT_CONTEXT = re.compile(r"有空|稍后|以后|之后|后|再|等一会|(?:到家|回家)(?:以后|之后|后)")
+_POINT_COUNT_SUFFIX = re.compile(
+    r"\s*(?:点心|想法|建议|意见|要求|内容|问题|原因|事项|心得|感受|看法|需求|改进|经验|知识)"
+)
 
 
 def _clause_start(text: str, position: int) -> int:
@@ -66,6 +69,14 @@ def _quote_spans(text: str, quote: str) -> list[tuple[int, int]]:
 def _minutes(clock: str) -> int:
     hour, minute = map(int, clock.split(":"))
     return hour * 60 + minute
+
+
+def _is_ambiguous_point_count(text: str, token: re.Match[str]) -> bool:
+    normalized = re.sub(r"\s+", "", token.group())
+    return (
+        re.fullmatch(r"[零〇一二两三四五六七八九十\d]+点", normalized) is not None
+        and _POINT_COUNT_SUFFIX.match(text, token.end()) is not None
+    )
 
 
 def _validate_boundary(
@@ -118,6 +129,7 @@ def _has_omitted_source_clock(text: str, source: str) -> bool:
         for token in _CLOCK.finditer(text, 0, start):
             if (
                 _CLOCK_TO_ACTION.fullmatch(text[token.end():start])
+                and not _is_ambiguous_point_count(text, token)
                 and not _is_global_clock(text, token.start())
                 and not _NEGATION.search(_clause(text, token.start()))
             ):
@@ -192,6 +204,7 @@ def _unowned_source_clocks(
                 owned_by_next.add(span)
     return any(
         (start + token.start(), start + token.end()) not in owned_by_next
+        and not _is_ambiguous_point_count(operation.source_text, token)
         and not _is_global_clock(text, start + token.start())
         and not _NEGATION.search(_clause(text, start + token.start()))
         for start, _ in source_spans for token in _CLOCK.finditer(operation.source_text)
@@ -309,6 +322,7 @@ def compile_time_fragment_clocks(
     missing = [
         token.group() for token in _CLOCK.finditer(text)
         if token.span() not in covered
+        and not _is_ambiguous_point_count(text, token)
         and not _is_global_clock(text, token.start())
         and not _NEGATION.search(_clause(text, token.start()))
     ]

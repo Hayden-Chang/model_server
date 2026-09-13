@@ -37,7 +37,9 @@ _BARE_TITLE_COMMAND_PREFIX = re.compile(
 )
 _BARE_TITLE_SENTENCE_BREAK = re.compile(r"[\r\n，,。；;！？!?：:、]")
 _BARE_TITLE_SCHEDULING_DETAIL = re.compile(
-    r"\d|今天|明天|后天|上午|中午|下午|晚上|凌晨|早上|清晨|点钟|分钟|小时|刻钟|"
+    r"\d|^(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九])\s*点|"
+    r"今天|明天|后天|上午|中午|下午|晚上|凌晨|早上|清晨|"
+    r"点钟|分钟|小时|刻钟|"
     r"然后|之后|以前|之前|以后|直到|接着|随后|先.+再"
 )
 
@@ -126,7 +128,9 @@ async def _execute_time_fragment_plan(
                 correction_issues,
                 first_response,
             )
-            if first_operations.temporal_relations:
+            if first_operations.temporal_relations or any(
+                issue.field == "timeConstraint" for issue in correction_issues
+            ):
                 with_extraction = build_time_fragment_correction_input(
                     model_request, correction_issues, first_response, first_operations,
                 )

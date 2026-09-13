@@ -40,7 +40,7 @@ def send_mail(config, kind, result, incident=None):
     message["Subject"] = "[DayMosaic] " + titles[kind]
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid()
-    lines = [titles[kind], "", "服务：https://api.keeline.xyz"]
+    lines = [titles[kind], "", "服务：DayMosaic AI 规划"]
     if kind == "test":
         lines += ["这是一封配置验证邮件，没有触发模型调用。", "以后只在探测发现故障和恢复时通知，正常运行不发信。"]
     else:
@@ -49,9 +49,16 @@ def send_mail(config, kind, result, incident=None):
             lines += ["阶段：" + str(result.get("stage", "unknown")),
                       "错误码：" + str(result.get("code", "UNKNOWN")),
                       "HTTP 状态：" + str(result.get("httpStatus", "无"))]
+            for label, key in (("检测运行 ID", "probeRunID"), ("请求 ID", "requestID"),
+                               ("响应请求 ID", "responseRequestID")):
+                if result.get(key):
+                    lines.append(label + "：" + str(result[key]))
         else:
             lines += ["首次异常：" + incident["checkedAt"], "真实排程已通过：08:00–08:30。",
                       "本次耗时：" + str(result.get("durationSeconds", "未知")) + " 秒"]
+            for label, key in (("异常检测运行 ID", "probeRunID"), ("异常请求 ID", "requestID")):
+                if incident.get(key):
+                    lines.append(label + "：" + str(incident[key]))
         lines += ["", "每小时检测一次；本邮件只包含合成测试的状态信息。"]
     message.set_content("\n".join(lines))
     context = ssl.create_default_context()
@@ -78,7 +85,9 @@ def notify(directory, result):
         state = json.loads(path.read_text()) if path.exists() else {}
         if result["status"] == "unhealthy":
             if not state:
-                state = {"incident": {key: result.get(key) for key in ("checkedAt", "stage", "code", "httpStatus")}, "failureSent": False}
+                state = {"incident": {key: result.get(key) for key in
+                         ("checkedAt", "stage", "code", "httpStatus", "probeRunID", "requestID", "responseRequestID")},
+                         "failureSent": False}
             kind = None if state["failureSent"] else "failure"
         else:
             kind = "recovery" if state else None

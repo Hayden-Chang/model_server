@@ -15,7 +15,7 @@ https://{$PUBLIC_DOMAIN} {
 	handle @private {
 		respond 404
 	}
-	@account path /api/* /admin/time-fragment/*
+	@account path /api/* /billing/* /webhooks/apple /admin/time-fragment/*
 	handle @account {
 		reverse_proxy time-fragment-api:8000 {
 			transport http {

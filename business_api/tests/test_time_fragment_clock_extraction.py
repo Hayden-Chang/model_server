@@ -110,6 +110,48 @@ def test_wrong_clock_can_be_corrected_without_losing_requested_task(settings):
     assert "不一致" in fake.calls[1][1]
 
 
+def test_repeated_extra_boundary_for_single_clock_remains_a_hard_error(settings):
+    invalid = model_add(
+        "吃饭",
+        "五点吃饭",
+        start_time="17:00",
+        end_time="23:00",
+        start_evidence="五点吃饭",
+        end_evidence="五点吃饭",
+    )
+    body, fake = run_clock_request(settings, "五点吃饭", [invalid])
+
+    assert body["validation"]["valid"] is False
+    assert body["validation"]["attempts"] == 2
+    assert len(fake.calls) == 2
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == []
+    assert any("23:00" in issue["message"] for issue in body["validation"]["issues"])
+
+
+@pytest.mark.parametrize("text", ["一点想法", "一点点心", "三点建议", "四点要求"])
+def test_model_can_reject_ambiguous_chinese_point_phrase_as_a_clock(settings, text):
+    body, fake = run_clock_request(settings, text, [model_add(text, text)])
+
+    assert body["validation"] == {"valid": True, "attempts": 1, "issues": []}
+    assert len(fake.calls) == 1
+    assert body["proposal"]["operations"][0]["title"] == text
+    assert body["proposal"]["candidatePlan"]["items"][0]["durationSlots"] == 2
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [("一点吃饭", "吃饭"), ("三点开会", "开会"), ("下午一点想法", "想法")],
+)
+def test_model_cannot_drop_unambiguous_chinese_clock(settings, text, title):
+    body, fake = run_clock_request(settings, text, [model_add(title, text)])
+
+    assert body["validation"]["valid"] is False
+    assert body["validation"]["attempts"] == 2
+    assert len(fake.calls) == 2
+    assert body["proposal"]["candidatePlan"]["items"][0]["segments"] == []
+    assert any(issue["field"] == "timeConstraint" for issue in body["validation"]["issues"])
+
+
 @pytest.mark.parametrize("separator", ["", "，", "。", "\n"])
 def test_combined_commute_title_and_endpoint_survive_every_separator(settings, separator):
     source = f"七点半下班{separator}8 点到家"
