@@ -126,9 +126,8 @@ def run(base_url: str) -> None:
         )
         command_operations = operations(command_response, require_valid=False)
         assert not any(
-            operation.get("type") == "add" and operation.get("title") == command
-            for operation in command_operations
-        ), f"command was incorrectly converted to a bare-title add: {command_operations}"
+            operation.get("type") == "add" for operation in command_operations
+        ), f"command was incorrectly converted to an add: {command_operations}"
         print(f"PASS command boundary: {command}")
 
 
