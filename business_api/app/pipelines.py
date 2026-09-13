@@ -116,6 +116,8 @@ PIPELINES: dict[str, Pipeline] = {
         system_prompt=(
             "Understand the user's complete scheduling intent, including continuous activities and "
             "dependencies, then express it as structured operations and temporalRelations. "
+            "纯任务标题也表示新增任务。例如输入“性能”时，必须只返回一个 add，title、sourceText 原样保留为“性能”，"
+            "durationSlots=2、priority=null、timeConstraint=null、inputOrder=0、temporalRelations=[]。"
             "Return add, move, changeDuration, changeTitle, or delete operations; never return a candidate "
             "task list, time fragments, domain references, lifecycle fields, or any real domain "
             "ID for a new task. "
