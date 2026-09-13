@@ -1544,6 +1544,11 @@ def test_ambiguous_sentence_initial_yidian_is_left_to_the_model(text: str) -> No
     assert _bare_task_title(text) is None
 
 
+def test_delete_suffix_is_not_a_bare_title_without_rejecting_a_noun_phrase() -> None:
+    assert _bare_task_title("钉住任务不要了") is None
+    assert _bare_task_title("学会说不要") == "学会说不要"
+
+
 def test_bare_task_title_fallback_retains_an_unplaced_todo(
     settings: Settings,
 ) -> None:

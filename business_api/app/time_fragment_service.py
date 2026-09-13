@@ -35,6 +35,7 @@ _BARE_TITLE_COMMAND_PREFIX = re.compile(
     r"^(?:把|将|请|帮我|麻烦|删除|删掉|移除|取消|移动|移到|挪到|改到|调到|调整|"
     r"改标题|修改标题|重命名|改名|安排|新增|添加|插入|不要|保持)"
 )
+_BARE_TITLE_COMMAND_SUFFIX = re.compile(r"(?:不要了|不用了|删掉了?|删除了?|移除了?|取消了?)$")
 _BARE_TITLE_SENTENCE_BREAK = re.compile(r"[\r\n，,。；;！？!?：:、]")
 _BARE_TITLE_SCHEDULING_DETAIL = re.compile(
     r"\d|^(?:二十[一二三四]?|十[一二三四五六七八九]?|[零〇一二两三四五六七八九])\s*点|"
@@ -165,7 +166,7 @@ def _bare_task_title(text: str) -> str | None:
         return None
     if _BARE_TITLE_SENTENCE_BREAK.search(title):
         return None
-    if _BARE_TITLE_COMMAND_PREFIX.search(title):
+    if _BARE_TITLE_COMMAND_PREFIX.search(title) or _BARE_TITLE_COMMAND_SUFFIX.search(title):
         return None
     if _BARE_TITLE_SCHEDULING_DETAIL.search(title):
         return None
