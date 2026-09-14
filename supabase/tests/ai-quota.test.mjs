@@ -152,7 +152,7 @@ test('claim takes max usage, carries request receipts and is safe to retry',asyn
   const payload={...a,guest:g.principal,guestSupportCode:g.supportCode};
   assert.equal((await rpc('claim',payload)).used,7);
   assert.equal((await rpc('claim',payload)).used,7);
-  assert.equal((await rpc('status',g)).code,'AI_ACCOUNT_REQUIRED');
+  assert.equal((await rpc('status',g)).used,7);
   const id=(await db.admin.query('select request_id from ai_private.requests where principal=$1 limit 1',[g.principal])).rows[0].request_id;
   assert.equal((await reserve(a,id)).code,'AI_REQUEST_ALREADY_COMPLETED');
   // The installation's original support code still resolves to the live account.
@@ -160,7 +160,7 @@ test('claim takes max usage, carries request receipts and is safe to retry',asyn
   assert.equal((await rpc('admin_reset',{supportCode:g.supportCode})).used,0);
   assert.equal((await rpc('claim',{...await account(),guest:g.principal,guestSupportCode:g.supportCode})).code,'AI_GUEST_ALREADY_CLAIMED');
   await db.admin.query('delete from auth.users where id=$1',[a.user.id]);
-  assert.equal((await rpc('status',g)).code,'AI_ACCOUNT_REQUIRED');
+  assert.equal((await rpc('status',g)).used,0);
   assert.equal((await db.admin.query('select count(*)::int n from ai_private.requests where principal=$1',[a.principal])).rows[0].n,0);
 });
 

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 
-export async function database() {
+export async function database({through} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'daymosaic-sync-test-'));
   const socket = createServer();
   await new Promise((resolve, reject) => { socket.once('error', reject); socket.listen(0, '127.0.0.1', resolve); });
@@ -35,7 +35,10 @@ export async function database() {
       grant usage on schema public,auth to anon,authenticated,service_role;
       grant execute on all functions in schema auth to anon,authenticated,service_role;
     `);
-    for (const migration of (await readdir(new URL('../migrations/', import.meta.url))).filter(x => x.endsWith('.sql')).sort()) {
+    // These two files are manual recovery scripts, not forward migrations.
+    const recoveryScripts = new Set(['202609110009_contract_v2_rollback.sql', '202609110009_contract_v2_reregister.sql']);
+    for (const migration of (await readdir(new URL('../migrations/', import.meta.url)))
+      .filter(x => x.endsWith('.sql') && !recoveryScripts.has(x) && (!through || x <= through)).sort()) {
       await admin.query(await readFile(new URL('../migrations/' + migration, import.meta.url), 'utf8'));
     }
   } catch (error) {

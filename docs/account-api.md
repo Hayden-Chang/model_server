@@ -10,16 +10,18 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 
 | Route | Credential | Behavior |
 | --- | --- | --- |
-| `POST /api/auth/guest` | installation ID | Existing guest token response; a previously claimed guest requires account login. |
-| `POST /api/plan/parse` | guest or account | Existing V2 input/output; one quota reservation per principal and request ID. |
+| `POST /api/auth/guest` | installation ID | Existing guest token response, including after account sign-out. |
+| `POST /api/plan/parse` | guest or account | Existing V2 input/output; linked identities cannot execute the same request ID twice. |
 | `GET /api/account/quota` | guest or account | `supportCode`, `limit`, `used`, `remaining`. |
 | `POST /api/account/claim-guest` | account | Body `{"guest_token":"…"}`; verify both credentials and merge free usage by maximum. |
 | `GET/POST /api/development/membership` | allowlisted guest | Existing development toggle and 50/day Shanghai quota; not a paid subscription. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
 
-Formal accounts share 30 lifetime free calls across devices. Guest limits retain
-the existing configured value. Claim takes `max(accountUsed, guestUsed)`, copies
-completed request receipts, and permanently marks the installation as claimed.
+Accounts and guests have 30 lifetime free calls. Claim takes
+`max(accountUsed, guestUsed)` and links both identities to one free pool. Signing
+out preserves the remaining free balance; it does not grant another pool or
+expose the account's Plus entitlement. Receipts remain on their original identity
+and replay checks cover every identity in the linked group.
 Retrying the same claim to the same account is safe. Another account cannot claim
 that installation, even after deletion of the first account. Development
 membership does not become a paid account entitlement during claim.
@@ -30,7 +32,8 @@ account deletion is not pending. The server-only quota RPC rechecks that account
 and session before each operation. No caller-supplied account ID is trusted.
 Grants deny `anon` and `authenticated` access to the mutation RPC and all private
 tables/helpers; the tables also have RLS enabled. Account deletion cascades account
-quota data; the guest claim tombstone retains no reference to a deleted user.
+quota data; shared free consumption remains available to linked guests and the
+guest claim tombstone retains no reference to a deleted user.
 
 References: [Supabase API security](https://supabase.com/docs/guides/api/securing-your-api),
 the existing `sync_private.current_user_id` session contract, and the App's
@@ -39,7 +42,9 @@ the existing `sync_private.current_user_id` session contract, and the App's
 ## Charging and retries
 
 Reservation and the request receipt are one Postgres transaction, serialized per
-principal. The body hash binds an ID to its original payload. Internal transport
+free pool. A claim briefly takes the ledger gate exclusively to change pool
+membership; no ledger transaction spans the model call. The body hash binds an ID
+to its original payload. Internal transport
 retries reuse the reservation attempt UUID. Concurrent duplicate requests return
 `AI_REQUEST_IN_PROGRESS`; changed bodies return `AI_REQUEST_ID_CONFLICT`.
 Already completed IDs return `AI_REQUEST_ALREADY_COMPLETED` without another model
@@ -59,6 +64,15 @@ error content redacted. No response cache stores a user's schedule. Existing
 pre-cutover observability records retain their existing retention policy.
 
 ## Deployment and quota cutover
+
+For an existing account-aware deployment through `202609130015_free_quota_30.sql`,
+apply the forward migration `202609140016_guest_free_pool.sql`. It backfills each
+account and its claimed guests into one pool using the highest existing free
+usage, preserving support codes, receipts and outstanding reservation refunds.
+The public API and iOS request format do not change. A code merge alone does not
+activate this fix; the database migration must be applied. Do not reapply the
+manual `contract_v2_rollback` or `contract_v2_reregister` recovery scripts as
+forward migrations.
 
 The base Compose file remains compatible with the currently deployed guest API.
 Activating `docker-compose.accounts.yml` changes public routing and disables the
