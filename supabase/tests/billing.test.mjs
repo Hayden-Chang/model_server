@@ -62,6 +62,19 @@ const activeDevices=async id=>(await db.admin.query(
 const entitlementOf=async principal=>(await db.admin.query(
   `select plan,status,valid_until,entitlement_revision from billing_private.account_entitlements
     where principal=$1`,[principal])).rows[0];
+// Charge `count` calls through the same service-role RPC the AI route charges with.
+async function charge(principal,count){
+  const supportCode=(await db.admin.query('select support_code from ai_private.principals where id=$1',
+    [principal])).rows[0].support_code;
+  for(let i=0;i<count;i++){
+    const requestID=randomUUID();
+    const reserved=await db.rpc(null,'ai_quota_service',['reserve',{principal,supportCode,freeLimit:30,
+      memberLimit:30,requestID,bodyHash:'e'.repeat(64),attempt:randomUUID()}],'service_role');
+    assert.equal(reserved.period.startsWith('member:'),true,JSON.stringify(reserved));
+    assert.deepEqual(await db.rpc(null,'ai_quota_service',['finish',{principal,supportCode,freeLimit:30,
+      memberLimit:30,requestID,attempt:reserved.attempt,consume:true}],'service_role'),{ok:true});
+  }
+}
 
 test('billing service requires a device principal and denies unprivileged roles',async()=>{
   const d=await device();
@@ -203,6 +216,42 @@ test('plus entitlement and apple_verify report the member daily pool, not the fr
   assert.equal(reverified.aiQuota.used,2);
   assert.equal(reverified.aiQuota.remaining,28);
   assert.equal(reverified.aiQuota.resetsAt,entitlement.aiQuota.resetsAt);
+});
+
+test('both devices on one chain read the same shared daily counter',async()=>{
+  // The member display must keep consuming the ledger the AI path charges
+  // (202609170019's F2), and that ledger is now shared per purchase chain (E1).
+  const m=await join('shared-display',2);
+  const [a,b]=m;
+  for(const member of m){
+    const entitlement=await billingRpc('entitlement',{principal:member.principal});
+    assert.equal(entitlement.plan,'plus');
+    assert.equal(entitlement.aiQuota.limit,30);
+    assert.equal(entitlement.aiQuota.used,0);
+    assert.equal(entitlement.aiQuota.remaining,30);
+    assert.ok(entitlement.aiQuota.resetsAt?.endsWith('+08:00'),JSON.stringify(entitlement));
+  }
+  await charge(a.principal,5);
+  // The joining device reports the first device's consumption, and the same
+  // reset instant, without any client change.
+  const seen=await billingRpc('entitlement',{principal:b.principal});
+  assert.equal(seen.plan,'plus');
+  assert.equal(seen.aiQuota.used,5);
+  assert.equal(seen.aiQuota.remaining,25);
+  assert.equal(seen.aiQuota.resetsAt,(await billingRpc('entitlement',{principal:a.principal})).aiQuota.resetsAt);
+  // apple_verify answers from the same shared ledger.
+  const reverified=await verify(b.principal,{transaction:'shared-display',token:b.token});
+  assert.equal(reverified.plan,'plus');
+  assert.equal(reverified.aiQuota.used,5);
+  assert.equal(reverified.aiQuota.remaining,25);
+  // One meter row, at the chain owner, and the free pools stay untouched.
+  const rows=(await db.admin.query(`select principal,used from ai_private.buckets
+    where period like 'member:%' and principal=any($1::text[])`,[m.map(x=>x.principal)])).rows;
+  assert.deepEqual(rows.map(r=>[r.principal,r.used]),[[a.principal,5]],JSON.stringify(rows));
+  const free=(await db.admin.query(`select f.used from ai_private.free_pools f
+    join ai_private.principals p on p.free_pool_id=f.id where p.id=any($1::text[])`,
+    [m.map(x=>x.principal)])).rows;
+  assert.deepEqual(free.map(r=>r.used),[0,0]);
 });
 
 test('device cap case 1: the first device creates the chain and gets plus',async()=>{

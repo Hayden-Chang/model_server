@@ -133,6 +133,31 @@ test('billing free quota reflects signed-out guest consumption',async()=>{
   assert.equal(result.aiQuota.used,5);assert.equal(result.aiQuota.remaining,25);
 });
 
+test('an account session keeps reading its own merged free pool after a device buys Plus',async()=>{
+  const g=guest(),a=await account();
+  await use(g,4);await claim(g,a);
+  const before=await rpc('status',a);
+  assert.equal(before.period,'free');
+  assert.equal(before.supportCode,a.supportCode);
+  assert.equal(before.limit,30);
+  assert.equal(before.used,4);
+  assert.equal(before.remaining,26);
+  assert.equal(before.resetsAt,null);
+  // GET /api/account/quota sends the account principal and renders this read as
+  // the merged *free* allowance line. A claimed device that holds Plus must not
+  // re-point it at the chain's daily member meter: those are different ledgers,
+  // and the member counter has its own device-scoped surface
+  // (/billing/entitlement). See the E1 decision record.
+  await db.admin.query(`insert into billing_private.account_entitlements(principal,plan,status)
+    values($1,'plus','active')`,[g.principal]);
+  const after=await rpc('status',a);
+  assert.equal(after.period,'free');
+  assert.equal(after.supportCode,a.supportCode);
+  assert.equal(after.used,4);
+  assert.equal(after.remaining,26);
+  assert.equal(after.resetsAt,null);
+});
+
 test('support reset waits for every linked identity and resets only its free group',async()=>{
   const g=guest(),a=await account(),other=guest();await claim(g,a);await use(other,2);
   const id=randomUUID(),r=await reserve(g,id);
