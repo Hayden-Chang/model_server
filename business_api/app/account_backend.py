@@ -97,10 +97,27 @@ class AccountAPISettings(BaseSettings):
 
 
 def resolve_apple_key_p8(settings: "AccountAPISettings") -> bytes | None:
-    """Apple signing key from a mounted file path, or inline PEM fallback."""
+    """Apple signing key from a mounted file path, or inline PEM fallback.
+
+    A configured-but-unreadable path must not be fatal. This runs during
+    ``create_account_api``, so raising here takes the whole service down and
+    every route with it: a mounted key owned by another uid made
+    ``Path.read_bytes`` raise PermissionError, which crash-looped the API
+    instead of leaving only billing degraded. The caller already handles a
+    missing key by failing closed with BILLING_NOT_CONFIGURED (503) on the
+    billing routes, which is the correct blast radius. Fall through to the
+    inline value so a deployment supplying either form still works.
+    """
     if settings.apple_private_key_path:
         from pathlib import Path
-        return Path(settings.apple_private_key_path).read_bytes()
+        try:
+            return Path(settings.apple_private_key_path).read_bytes()
+        except OSError as error:
+            logging.getLogger(__name__).error(
+                "cannot read APPLE_PRIVATE_KEY_PATH %s: %s. Falling back to "
+                "APPLE_PRIVATE_KEY; billing verification fails closed with "
+                "BILLING_NOT_CONFIGURED if that is unset too.",
+                settings.apple_private_key_path, error)
     if settings.apple_private_key is not None:
         return settings.apple_private_key.get_secret_value().encode()
     return None

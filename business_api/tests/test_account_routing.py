@@ -21,7 +21,30 @@ def test_compose_keeps_private_services_unpublished_and_uses_internal_credential
     assert overlay["business-api"]["environment"]["PLANNING_INTERNAL_ONLY"]=="true"
     assert overlay["business-api"]["environment"]["PLANNING_INTERNAL_SECRET"]==overlay["time-fragment-api"]["environment"]["PLANNING_INTERNAL_SECRET"]
     assert overlay["caddy"]["volumes"]==["./Caddyfile.accounts:/etc/caddy/Caddyfile:ro"]
-    assert overlay["time-fragment-api"]["volumes"]==["model-server-usage:/var/lib/model-server"]
+    # Both services that call the App Store Server API must be able to read the
+    # signing key, and only read it: the mount is pinned read-only. A missing
+    # mount or a writable one is a configuration regression, not a detail.
+    apple_mount="./.secrets:/opt/model_server/.secrets:ro"
+    apple_dir=apple_mount.split(":")[1]
+    assert overlay["time-fragment-api"]["volumes"]==["model-server-usage:/var/lib/model-server", apple_mount]
+    assert overlay["billing-worker"]["volumes"]==[apple_mount]
+    for service in ("time-fragment-api","billing-worker"):
+        environment=overlay[service]["environment"]
+        # resolve_apple_key_p8 prefers the path form and the host ships the key
+        # as a file, so the operator must be able to supply the path...
+        assert "APPLE_PRIVATE_KEY_PATH" in environment
+        # ...and its default must name a file inside the mounted directory, or
+        # the container would read a path it cannot see.
+        default_path=environment["APPLE_PRIVATE_KEY_PATH"].split(":-",1)[1].rstrip("}")
+        assert default_path.startswith(apple_dir+"/"), (service, default_path, apple_dir)
+        # The bundle id is what App Store receipts are checked against, so its
+        # default must be the real one; a wrong default silently rejects every
+        # genuine transaction.
+        assert environment["APPLE_BUNDLE_ID"].split(":-",1)[1].rstrip("}")=="com.hayden.timefragment"
+    # time-fragment-api owns POST /billing/apple/verify, so it needs the same
+    # Apple credentials as the worker; it previously had none and every purchase
+    # failed closed with BILLING_NOT_CONFIGURED after StoreKit had charged.
+    assert overlay["time-fragment-api"]["environment"]["APPLE_KEY_ID"]==overlay["billing-worker"]["environment"]["APPLE_KEY_ID"]
     rollback=overlay["quota-rollback"]
     assert "ports" not in rollback
     assert rollback["profiles"]==["rollback"]
