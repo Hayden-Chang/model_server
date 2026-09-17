@@ -1,6 +1,7 @@
 import test, {before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID, createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {database} from './database.mjs';
 
 let db;
@@ -22,6 +23,38 @@ const finish=(p,requestID,attempt,consume=true)=>rpc('finish',{...p,requestID,at
 async function use(p,count) {
   for(let i=0;i<count;i++){const id=randomUUID();const r=await reserve(p,id);await finish(p,id,r.attempt);}
 }
+
+// --- purchase-chain fixtures ------------------------------------------------
+// The daily member allowance is shared by the devices bound to one purchase
+// chain (product decision E1), so these cases need a real chain. The shape is
+// the one billing.test.mjs uses: the first device mints the appAccountToken and
+// creates the chain, the others present a receipt carrying that same token,
+// which is what a restored purchase on a second device looks like.
+const PRODUCT='com.hayden.daymosaic.plus.monthly';
+const MEMBER={memberLimit:30};
+async function device(){
+  const d=guest();
+  await db.admin.query(`insert into ai_private.principals(id,support_code,free_limit)
+    values($1,$2,30) on conflict (id) do nothing`,[d.principal,d.supportCode]);
+  return d;
+}
+const billingRpc=(action,data={})=>db.rpc(null,'billing_service',[action,data],'service_role');
+async function chain(transaction,count){
+  const members=[];
+  for(let i=0;i<count;i++){
+    const d=await device();
+    const token=members.length?members[0].token:(await billingRpc('claim_register',{principal:d.principal,
+      provider:'apple',productId:PRODUCT,claimId:randomUUID()})).appAccountToken;
+    const result=await billingRpc('apple_verify',{principal:d.principal,originalTransactionId:transaction,
+      productId:PRODUCT,storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+      environment:'sandbox',storeReferenceCiphertext:'cipher',appAccountToken:token});
+    assert.equal(result.plan,'plus',JSON.stringify(result));
+    members.push({...d,token});
+  }
+  return members;
+}
+const memberRow=(principal,period)=>db.admin.query(
+  `select used from ai_private.buckets where principal=$1 and period=$2`,[principal,period]);
 
 test('migration gate rejects new quota; imports metadata exactly once',async()=>{
   const p=guest();
@@ -132,6 +165,206 @@ test('active plus entitlement grants the member daily pool in the account timezo
   const freePool=(await db.admin.query(
     `select used from ai_private.buckets where principal=$1 and period='free'`,[a.principal])).rows;
   assert.equal(freePool.length,0);
+});
+
+test('free principals keep the lifetime pool while a member gets a reset time',async()=>{
+  const free=guest();
+  const status=await rpc('status',free);
+  assert.equal(status.period,'free');
+  assert.equal(status.limit,30);
+  assert.equal(status.used,0);
+  assert.equal(status.remaining,30);
+  assert.equal(status.resetsAt,null,'the lifetime free pool never resets');
+  const [owner]=await chain('free-vs-member',1);
+  const member=await rpc('status',{...owner,...MEMBER});
+  assert.equal(member.period.startsWith('member:'),true,JSON.stringify(member));
+  assert.ok(member.resetsAt.endsWith('+08:00'),JSON.stringify(member));
+});
+
+test('two devices on one purchase chain share one daily counter',async()=>{
+  const [a,b]=await chain('shared-counter',2);
+  // Device A spends 8 of the chain's 30.
+  await use({...a,...MEMBER},8);
+  // Device B reads the same counter: 8 used, 22 left, the same reset instant.
+  const seenByB=await rpc('status',{...b,...MEMBER});
+  assert.equal(seenByB.period.startsWith('member:'),true,JSON.stringify(seenByB));
+  assert.equal(seenByB.limit,30);
+  assert.equal(seenByB.used,8);
+  assert.equal(seenByB.remaining,22);
+  assert.equal((await rpc('status',{...a,...MEMBER})).resetsAt,seenByB.resetsAt);
+  // Device B spends the remaining 22: 8 + 22 is the whole chain allowance.
+  await use({...b,...MEMBER},22);
+  // The 31st request from either device is refused, at the same reset time.
+  const refusedA=await reserve({...a,...MEMBER});
+  const refusedB=await reserve({...b,...MEMBER});
+  assert.equal(refusedA.code,'AI_DAILY_QUOTA_EXHAUSTED',JSON.stringify(refusedA));
+  assert.equal(refusedB.code,'AI_DAILY_QUOTA_EXHAUSTED',JSON.stringify(refusedB));
+  assert.equal(refusedB.limit,30);
+  assert.equal(refusedB.used,30);
+  assert.equal(refusedB.remaining,0);
+  assert.equal(refusedB.resetsAt,seenByB.resetsAt);
+  // Both devices report the same exhausted counter.
+  const afterA=await rpc('status',{...a,...MEMBER});
+  const afterB=await rpc('status',{...b,...MEMBER});
+  assert.equal(afterA.used,30);
+  assert.equal(afterA.remaining,0);
+  assert.equal(afterB.used,30);
+  assert.equal(afterB.remaining,0);
+  // One meter row, owned by the chain's first device. The joining device keeps
+  // its own receipts but owns no member bucket.
+  const rows=(await db.admin.query(`select principal,used from ai_private.buckets
+    where period=$1 and principal in ($2,$3)`,[afterA.period,a.principal,b.principal])).rows;
+  assert.deepEqual(rows.map(r=>[r.principal,r.used]),[[a.principal,30]],JSON.stringify(rows));
+  // A device on a different chain is untouched.
+  const [other]=await chain('shared-counter-other',1);
+  const isolated=await rpc('status',{...other,...MEMBER});
+  assert.equal(isolated.used,0);
+  assert.equal(isolated.remaining,30);
+});
+
+// The load-bearing case. The locks reserve already took are actor-scoped, so
+// without a lock on the shared meter row both devices read `remaining = 1` and
+// both consume it.
+test('two devices on one chain cannot both spend the last request',async()=>{
+  for(let round=0;round<4;round++){
+    const [a,b]=await chain('race-'+round,2);
+    const period=(await rpc('status',{...a,...MEMBER})).period;
+    await db.admin.query(`insert into ai_private.buckets(principal,period,used) values($1,$2,29)
+      on conflict(principal,period) do update set used=excluded.used`,[a.principal,period]);
+    const results=await Promise.all([reserve({...a,...MEMBER}),reserve({...b,...MEMBER})]);
+    assert.equal(results.filter(x=>x.attempt).length,1,JSON.stringify(results));
+    assert.equal(results.filter(x=>x.code==='AI_DAILY_QUOTA_EXHAUSTED').length,1,JSON.stringify(results));
+    assert.equal((await memberRow(a.principal,period)).rows[0].used,30,
+      'the shared meter must never exceed the limit');
+  }
+  // All three devices of one chain at once, still one request short.
+  const [a,b,c]=await chain('race-burst',3);
+  const period=(await rpc('status',{...a,...MEMBER})).period;
+  await db.admin.query(`insert into ai_private.buckets(principal,period,used) values($1,$2,29)
+    on conflict(principal,period) do update set used=excluded.used`,[a.principal,period]);
+  const burst=await Promise.all([a,b,c].flatMap(d=>[0,1,2,3].map(()=>reserve({...d,...MEMBER}))));
+  assert.equal(burst.filter(x=>x.attempt).length,1,JSON.stringify(burst));
+  assert.equal(burst.filter(x=>x.code==='AI_DAILY_QUOTA_EXHAUSTED').length,11,JSON.stringify(burst));
+  assert.equal((await memberRow(a.principal,period)).rows[0].used,30);
+});
+
+test('a revoked device leaves the group and keeps its own free pool',async()=>{
+  const [a,b]=await chain('revoked-device',2);
+  await use({...a,...MEMBER},4);
+  const purchase=(await db.admin.query(
+    `select id from billing_private.store_purchases where principal=$1`,[a.principal])).rows[0];
+  await db.admin.query(`update billing_private.purchase_devices set revoked_at=now()
+    where purchase_id=$1 and principal=$2`,[purchase.id,b.principal]);
+  await db.admin.query('select billing_private.aggregate_entitlement($1)',[b.principal]);
+  // The revoked device is no longer part of the group: it reads its own
+  // lifetime free pool again, and its calls stay off the chain's meter.
+  const revoked=await rpc('status',{...b,...MEMBER});
+  assert.equal(revoked.period,'free',JSON.stringify(revoked));
+  assert.equal(revoked.used,0);
+  assert.equal(revoked.remaining,30);
+  assert.equal(revoked.resetsAt,null);
+  await use({...b,...MEMBER},2);
+  assert.equal((await rpc('status',{...b,...MEMBER})).used,2);
+  const shared=(await db.admin.query(`select used from ai_private.buckets
+    where principal=$1 and period like 'member:%'`,[a.principal])).rows;
+  assert.equal(shared.length,1);
+  assert.equal(shared[0].used,4,'a revoked device must not touch the chain meter');
+  assert.equal((await rpc('status',{...a,...MEMBER})).used,4);
+  assert.equal((await rpc('status',{...a,...MEMBER})).remaining,26);
+});
+
+test('a refund from one device and a peer expiry both restore the shared counter',async()=>{
+  const [a,b]=await chain('shared-refund',2);
+  const id=randomUUID();
+  const reserved=await reserve({...a,...MEMBER},id);
+  assert.equal(reserved.remaining,29);
+  assert.equal((await rpc('status',{...b,...MEMBER})).used,1);
+  await finish({...a,...MEMBER},id,reserved.attempt,false);
+  assert.equal((await rpc('status',{...b,...MEMBER})).used,0);
+  assert.equal((await rpc('status',{...b,...MEMBER})).remaining,30);
+  // A peer's abandoned hold counts against the shared meter, and only that
+  // peer's own free-pool group would reclaim it, so any device on the chain
+  // must reclaim it here or a vanished device locks the group out for the day.
+  await reserve({...b,...MEMBER});
+  await db.admin.query("update ai_private.requests set expires_at=now()-interval '1 second' where principal=$1",[b.principal]);
+  assert.equal((await rpc('status',{...a,...MEMBER})).used,1,'an expired hold still counts until it is reclaimed');
+  const mine=await reserve({...a,...MEMBER});
+  assert.equal(mine.remaining,29,JSON.stringify(mine));
+  assert.equal((await rpc('status',{...a,...MEMBER})).used,1,'the reclaim refunds the peer hold, then this call spends one');
+  assert.equal((await rpc('status',{...b,...MEMBER})).used,1);
+});
+
+test('a support reset on one device clears the chain counter it shares',async()=>{
+  const [a,b]=await chain('admin-reset-shared',2);
+  await use({...a,...MEMBER},6);
+  assert.equal((await rpc('admin_status',{supportCode:b.supportCode})).used,6);
+  assert.equal((await rpc('admin_reset',{supportCode:b.supportCode})).used,0);
+  const cleared=await rpc('status',{...a,...MEMBER});
+  assert.equal(cleared.used,0);
+  assert.equal(cleared.remaining,30);
+  assert.equal((await memberRow(a.principal,cleared.period)).rows[0].used,0);
+});
+
+test('a chain whose owner principal row is gone falls back to per-device metering',async()=>{
+  // ai_private.buckets.principal has a foreign key to ai_private.principals, so
+  // a scope whose principal row is gone would fail every member's reserve rather
+  // than merely losing the sharing. Reachable for a legacy account-owned chain
+  // whose account was deleted; a guest principal survives account deletion.
+  const [a,b]=await chain('deleted-owner',2);
+  await db.admin.query('delete from ai_private.principals where id=$1',[a.principal]);
+  assert.equal((await db.admin.query(
+    `select count(*)::int n from billing_private.purchase_devices where principal=$1`,[a.principal])).rows[0].n,1,
+    'the chain membership row outlives the principal row');
+  const status=await rpc('status',{...b,...MEMBER});
+  assert.equal(status.period.startsWith('member:'),true,JSON.stringify(status));
+  assert.equal(status.used,0);
+  assert.equal((await reserve({...b,...MEMBER})).remaining,29,
+    'the member must still be able to reserve instead of failing the foreign key');
+  assert.equal((await memberRow(b.principal,status.period)).rows[0].used,1);
+  assert.equal((await rpc('status',{...b,...MEMBER})).used,1);
+});
+
+test('the reverse export carries the chain meter instead of dropping member usage',async()=>{
+  const [a,b]=await chain('export-shared',2);
+  await use({...a,...MEMBER},3);
+  await use({...b,...MEMBER},2);
+  const snapshot=await serviceRpc('ai_quota_export_legacy');
+  const owner=snapshot.principals.find(x=>x.principal===a.principal);
+  const member=owner.buckets.filter(x=>x.period.startsWith('member:'));
+  assert.equal(member.length,1,JSON.stringify(owner.buckets));
+  assert.equal(member[0].used,5,'the group usage must reach the legacy export');
+  assert.equal(member[0].limit,50,'the legacy store keeps its own member limit');
+  const peer=snapshot.principals.find(x=>x.principal===b.principal);
+  assert.equal(peer.buckets.some(x=>x.period.startsWith('member:')),false,JSON.stringify(peer.buckets));
+});
+
+test('the shared member quota migration is re-runnable and fails closed on re-keying',async()=>{
+  const sql=await readFile(new URL('../migrations/202609170020_shared_member_quota.sql',import.meta.url),'utf8');
+  // Re-applying it on a ledger that already holds shared rows and member usage
+  // must be a no-op: every object is create or replace, and the guard must not
+  // fire on rows that already live at their chain owner.
+  await db.admin.query(sql);
+  await db.admin.query(sql);
+  // The guard is what stops the switch from silently stranding usage: a member
+  // row at a device whose best chain is owned by someone else would be re-keyed.
+  const old=await database({through:'202609170019_billing_ai_quota_source.sql'});
+  try{
+    const owner='guest_'+'a'.repeat(24), peer='guest_'+'b'.repeat(24);
+    await old.admin.query(`insert into ai_private.principals(id,support_code,free_limit)
+      values($1,'TF-OWNER-01',30),($2,'TF-PEER-01',30)`,[owner,peer]);
+    const purchase=(await old.admin.query(`insert into billing_private.store_purchases
+        (provider,environment,purchase_key_hash,store_reference_ciphertext,principal,product_id,store_status)
+      values('apple','sandbox',repeat('c',64),'cipher',$1,'${PRODUCT}','active') returning id`,[owner])).rows[0].id;
+    await old.admin.query(`insert into billing_private.purchase_devices(purchase_id,principal)
+      values($1,$2),($1,$3)`,[purchase,owner,peer]);
+    await old.admin.query(`insert into ai_private.buckets(principal,period,used)
+      values($1,'member:2026-09-17',3)`,[peer]);
+    await assert.rejects(old.admin.query(sql),/would be re-keyed/);
+    // With the row at its chain owner the same file applies cleanly.
+    await old.admin.query(`update ai_private.buckets set principal=$1
+      where principal=$2 and period='member:2026-09-17'`,[owner,peer]);
+    await old.admin.query(sql);
+  }finally{await old.close();}
 });
 
 test('retired development flag no longer grants a daily pool',async()=>{

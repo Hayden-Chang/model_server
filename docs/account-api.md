@@ -32,6 +32,42 @@ refreshed between those two attempts the client keeps using the account token an
 that request fails instead of falling back. Membership and quota reads stay on
 `/billing/*`, which requires the device token by the same rule (`billing_device`).
 
+### Membership quota scope
+
+The daily Plus allowance is **one counter per purchase chain**, shared by that
+chain's active member devices (`billing_private.purchase_devices` rows with
+`revoked_at is null`), reset at local midnight in the entitlement's
+`account_timezone` (`202609170020_shared_member_quota.sql`; product decision E1).
+It is explicitly *not* per Time Fragment account: an account is not a billing
+subject, and a signed-in member's AI request is refused on `/api/plan/parse` and
+retried with the device token, so the device principal is the only AI identity.
+The meter row lives at the chain owner's principal
+(`store_purchases.principal`, fixed at first INSERT), so the existing
+three-active-device cap is also the quota-sharing boundary. Receipts,
+idempotency and refunds stay per device. `ai_private.quota_status` resolves the
+shared scope once, so `GET /billing/entitlement`, `apple_verify` and the quota
+the AI route enforces all read the same row; `reserve` locks that row and
+re-reads it before its exhaustion check, because without it two devices on one
+chain can each observe `remaining = 1` and both consume it.
+
+The free tier is **not** shared this way. Two signed-out devices of one free user
+keep independent lifetime pools (decision E4). A free pool is still merged across
+identities by `claim-guest`, and `free_pools` is unchanged. For a free principal
+the shared scope is a no-op: the read and the write stay on that principal's own
+pool.
+
+This is a best-effort product control, not enforcement: the `device_id` is
+client-asserted and a guest JWS is a copyable bearer credential. Sharing also
+converts entitlement theft into an availability attack on the group — a forged or
+borrowed `device_id` on a bound chain can drain the group's daily 30 and lock the
+legitimate devices out.
+
+`GET /api/account/quota` is deliberately unchanged. It is called with the
+Supabase session token and its number is rendered as the *merged free allowance*
+line (`本机游客 AI 额度已合并：已用 X/Y 次`), so it keeps reading the account's own
+free pool and keeps returning the actor's `supportCode`; the member counter has
+its own device-token-scoped surface, `/billing/entitlement`.
+
 Accounts and guests have 30 lifetime free calls. Claim takes
 `max(accountUsed, guestUsed)` and links both identities to one free pool. Signing
 out preserves the remaining free balance; it does not grant another pool or
@@ -88,6 +124,24 @@ The public API and iOS request format do not change. A code merge alone does not
 activate this fix; the database migration must be applied. Do not reapply the
 manual `contract_v2_rollback` or `contract_v2_reregister` recovery scripts as
 forward migrations.
+
+The device-principal and chain-shared quota migrations apply in lexical order in
+the same maintenance window, before `scripts/billing-deploy.sh`:
+`202609170017_device_principal_billing.sql`,
+`202609170018_contract_v2_puzzle_optional.sql`,
+`202609170019_billing_ai_quota_source.sql`, then
+`202609170020_shared_member_quota.sql`. The last one depends on `202609170017`'s
+`purchase_devices` table and does not re-issue `202609130015`'s three `free_limit`
+statements — it reports the live `free_limit` distribution instead, and it fails
+closed if a member bucket row would be re-keyed onto a chain owner. It changes no
+schema and no data, so it needs no rollback file: its inverse is restoring the
+previous function bodies from git. That restores per-device metering but not the
+counters — member usage written under a chain owner cannot be split back per
+device, so after a revert the owner's device shows the group's usage and its
+peers show 0 (each device appears to gain up to 30/day). The reverse export does
+not drop that usage: `ai_quota_export_legacy` emits the chain owner's member
+bucket with the group's used count. Watch `AI_DAILY_QUOTA_EXHAUSTED` after
+cutover, because a shared counter exhausts earlier for multi-device members.
 
 The base Compose file remains compatible with the currently deployed guest API.
 Activating `docker-compose.accounts.yml` changes public routing and disables the
