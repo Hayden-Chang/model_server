@@ -23,7 +23,12 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 APPLE_PRODUCTION_URL = "https://api.storekit.itunes.apple.com"
-APPLE_SANDBOX_URL = "https://api.storekit.sandbox.itunes.apple.com"
+# The sandbox host is api.storekit-sandbox.itunes.apple.com (hyphen), not
+# api.storekit.sandbox.itunes.apple.com (dot). Only the hyphen form has DNS
+# records; the dot form does not resolve at all, so every sandbox
+# subscription_status call raised AppStoreUnavailable and /billing/apple/verify
+# answered VERIFICATION_PENDING (202) after StoreKit had already charged.
+APPLE_SANDBOX_URL = "https://api.storekit-sandbox.itunes.apple.com"
 ROOT_CERTIFICATES_PATH = Path(__file__).with_name("apple_root_ca_g3.pem")
 AUTH_TOKEN_TTL_SECONDS = 300
 
