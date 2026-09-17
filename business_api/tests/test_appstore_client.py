@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.x509.oid import NameOID
 
 from app.appstore_client import (
+    APPLE_PRODUCTION_URL,
     APPLE_SANDBOX_URL,
     AppStoreEnvironmentMismatch,
     AppStoreRejected,
@@ -27,6 +28,31 @@ from app.appstore_client import (
     build_client_token,
     verify_apple_jws,
 )
+
+
+def test_configured_app_store_hosts_exist():
+    """Both API hosts must actually resolve.
+
+    Every other test here injects httpx.MockTransport, so the hostname itself is
+    never exercised. The sandbox constant was
+    api.storekit.sandbox.itunes.apple.com (dot), which has no DNS record at all;
+    the real host is api.storekit-sandbox.itunes.apple.com (hyphen). The effect
+    was silent and severe: subscription_status raised AppStoreUnavailable, so
+    /billing/apple/verify answered VERIFICATION_PENDING (202) for every sandbox
+    purchase after StoreKit had already charged the user. A DNS lookup is the
+    cheapest possible guard against a typo in a constant nothing else asserts.
+    """
+    import socket
+    from urllib.parse import urlsplit
+
+    for constant, url in (("APPLE_PRODUCTION_URL", APPLE_PRODUCTION_URL),
+                          ("APPLE_SANDBOX_URL", APPLE_SANDBOX_URL)):
+        host = urlsplit(url).hostname
+        assert host, f"{constant} has no host: {url!r}"
+        try:
+            socket.getaddrinfo(host, 443)
+        except socket.gaierror as error:  # pragma: no cover - only on a typo
+            pytest.fail(f"{constant} host does not resolve: {host} ({error})")
 
 NOW = datetime(2026, 9, 11, 12, 0, 0, tzinfo=timezone.utc)
 KEY_ID = "H26PU75Z9S"
