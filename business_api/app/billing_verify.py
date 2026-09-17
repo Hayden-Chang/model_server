@@ -108,7 +108,16 @@ async def verify_apple_purchase(*, backend, apple_client, settings, actor, paylo
     try:
         status_payload = await apple_client.subscription_status(original_transaction_id)
     except AppStoreUnavailable as error:
-        raise failure("VERIFICATION_PENDING", 202) from error
+        # AppStoreUnavailable covers four very different faults -- transport
+        # failure, 5xx/429 from Apple, an unparsable envelope, and (before this
+        # was fixed) a hostname that did not exist. Collapsing them into a bare
+        # 202 made a wrong constant indistinguishable from a transient outage and
+        # cost a long hunt. Keep the client-facing code unchanged (the app treats
+        # 202 as "retry later") but carry the reason, exactly as the 422 branch
+        # below already does.
+        LOGGER.error("app store status unavailable for chain %s: %s",
+                     original_transaction_id, error)
+        raise failure("VERIFICATION_PENDING", 202, reason=str(error)) from error
     except (AppStoreRejected, AppStoreEnvironmentMismatch, JWSVerificationFailed) as error:
         raise failure("VERIFICATION_FAILED", 422, reason=str(error)) from error
     store_status, expires_at = subscription_state(status_payload, original_transaction_id)
