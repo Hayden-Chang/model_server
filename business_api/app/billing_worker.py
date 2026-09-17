@@ -15,7 +15,8 @@ from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 
 from .account_backend import AccountBackend, Actor, failure, resolve_apple_key_p8
-from .billing_verify import decrypt_reference, reject_family_shared, subscription_state
+from .billing_verify import (decrypt_reference, encrypt_reference, reject_family_shared,
+                             subscription_state)
 from .appstore_client import (
     AppStoreRejected,
     AppStoreUnavailable,
@@ -68,8 +69,26 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
     if not received.get("received", False):
         return {"received": False, "eventId": event_id}
 
-    account = await backend.billing_event("account_by_token",
-        appAccountToken=str(transaction.get("appAccountToken") or ""))
+    try:
+        account = await backend.billing_event("account_by_token",
+            appAccountToken=str(transaction.get("appAccountToken") or ""))
+    except HTTPException as error:
+        # billing_event() raises on every RPC code (pinned by
+        # test_billing_api.test_billing_event_raises_on_every_rpc_code), so an
+        # unknown token arrives here and never as the dict handled below. The
+        # event row already exists, so this failure is recorded like every other
+        # post-receive one -- unmarked, last_error_code stays null and the event
+        # is undiagnosable in billing_events. Retry, not the terminal ack the
+        # branch below intends, is deliberate: the chain is still unbound, so
+        # claiming "processed" would retire the only pending marker for it. The
+        # alternative is an open product decision (see the P1 report).
+        code = error.detail.get("code") if isinstance(error.detail, dict) else None
+        if code != "ACCOUNT_TOKEN_UNKNOWN":
+            raise
+        await backend.billing_event("event_mark", provider="apple",
+            environment=settings.apple_environment, eventId=event_id,
+            status="failed", lastErrorCode="ACCOUNT_TOKEN_UNKNOWN")
+        raise
     # Unreachable while AccountBackend.billing_event() raises on every RPC code
     # (pinned by test_billing_api.test_billing_event_raises_on_every_rpc_code);
     # kept as the intended handling if that mapping ever stops raising.
@@ -93,7 +112,12 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
             productId=str(transaction.get("productId") or ""),
             appAccountToken=str(transaction.get("appAccountToken") or ""),
             environment=settings.apple_environment, storeStatus=store_status,
-            expiresAt=expires_at, storeReferenceCiphertext=signed_payload,
+            expiresAt=expires_at,
+            # Same ciphertext format as the purchase path: reconcile() reads this
+            # column through decrypt_reference(), so storing the raw JWS here made
+            # every chain a webhook touched undecryptable.
+            storeReferenceCiphertext=encrypt_reference(
+                _reference_key_bytes(settings), original_transaction_id),
             claimId=None)
     except (HTTPException, AppStoreUnavailable, AppStoreRejected) as error:
         detail_code = (error.detail.get("code", "PROCESSING_FAILED")
@@ -102,7 +126,8 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
         await backend.billing_event("event_mark", provider="apple",
             environment=settings.apple_environment, eventId=event_id,
             status="failed", lastErrorCode=detail_code)
-        raise failure("EVENT_RETRY_SCHEDULED", 500, eventId=event_id) from error
+        raise failure("EVENT_RETRY_SCHEDULED", 500, eventId=event_id,
+                      upstreamCode=detail_code) from error
 
     await backend.billing_event("event_mark", provider="apple",
         environment=settings.apple_environment, eventId=event_id, status="processed")
@@ -123,8 +148,20 @@ async def handle_apple_webhook(*, backend, apple_client, settings, signed_payloa
     except HTTPException as error:
         if error.status_code in (400, 409):
             raise
+        # failure() always stores its own "code" -- and takes "status" -- in the
+        # detail dict, so forwarding that dict verbatim passed "code" twice and
+        # raised TypeError: every processing failure became a bare 500 with no
+        # structured code and no log_http_failure() record. EVENT_RETRY_SCHEDULED
+        # stays the authoritative code (the retry signal, and what
+        # log_http_failure records); the upstream cause travels beside it so the
+        # failure stays diagnosable.
+        upstream = error.detail if isinstance(error.detail, dict) else {}
+        forwarded = {key: value for key, value in upstream.items()
+                     if key not in ("code", "status", "upstreamCode")}
         raise failure("EVENT_RETRY_SCHEDULED", 500,
-                      **(error.detail or {})) from error
+                      upstreamCode=upstream.get("upstreamCode") or upstream.get("code")
+                                   or type(error).__name__,
+                      **forwarded) from error
 
 
 async def process_pending_events(*, backend, apple_client, settings, pinned_roots=None,
@@ -154,7 +191,12 @@ async def reconcile(*, backend, apple_client, settings, pinned_roots=None) -> in
                 base64.b64decode(settings.store_reference_key.get_secret_value()),
                 chain["storeReferenceCiphertext"])
         except (InvalidTag, KeyError, ValueError) as error:
-            LOGGER.warning("reconcile reference decrypt failed: %s", error)
+            # Corruption, not a routine skip: an undecryptable reference at ERROR
+            # level, naming the chain it belongs to, instead of hiding among the
+            # ordinary warnings. Skipping the chain is still the behaviour --
+            # aborting the sweep would let one corrupt row block every other one.
+            LOGGER.error("reconcile reference decrypt failed: principal=%s %s",
+                         chain.get("principal"), error)
             continue
         try:
             status_payload = await apple_client.subscription_status(reference)

@@ -182,6 +182,50 @@ def test_process_notification_success(certs, configuration):
     assert apple.calls == ["123"]
 
 
+def test_webhook_stores_the_encrypted_original_transaction_id(certs, configuration):
+    # Defect 1: the webhook path stored the raw signed JWS in
+    # storeReferenceCiphertext while reconcile() reads that column through
+    # decrypt_reference() -- so every chain a webhook touched was undecryptable
+    # and reconcile() skipped it forever. The stored value must be the encrypted
+    # originalTransactionId, in the same format the purchase path writes
+    # (billing_verify.verify_apple_purchase).
+    backend = WorkerBackend()
+    signed = _notification_token(certs)
+    _run(process_notification(backend=backend, apple_client=FakeApple(),
+                              settings=configuration, signed_payload=signed,
+                              pinned_roots=[certs.root_certificate]))
+    verify_call = [call for call in backend.calls if call[0] == "apple_verify"][0]
+    stored = verify_call[2]["storeReferenceCiphertext"]
+    assert stored != signed
+    key = base64.b64decode(configuration.store_reference_key.get_secret_value())
+    # "123" is the originalTransactionId the fixture notification carries.
+    assert decrypt_reference(key, stored) == "123"
+
+
+def test_chain_written_by_the_webhook_reconciles(certs, configuration):
+    # Defect 1 round trip: the ciphertext the webhook hands to the RPC is the
+    # ciphertext a later reconcile() pass decrypts. Before the fix this chain was
+    # dropped with an InvalidTag warning, so verified stayed 0.
+    webhook_backend = WorkerBackend()
+    _run(process_notification(backend=webhook_backend, apple_client=FakeApple(),
+                              settings=configuration,
+                              signed_payload=_notification_token(certs),
+                              pinned_roots=[certs.root_certificate]))
+    stored = [call for call in webhook_backend.calls
+              if call[0] == "apple_verify"][0][2]["storeReferenceCiphertext"]
+
+    chain = {"principal": DEVICE_PRINCIPAL, "provider": "apple", "productId": PRODUCT,
+             "environment": "sandbox", "storeReferenceCiphertext": stored,
+             "purchaseAccountToken": str(uuid4())}
+    backend = WorkerBackend(reconcile_chains=[chain])
+    apple = FakeApple(pinned_roots=[certs.root_certificate])
+    verified = _run(reconcile(backend=backend, apple_client=apple,
+                              settings=configuration,
+                              pinned_roots=[certs.root_certificate]))
+    assert verified == 1
+    assert apple.calls == ["123"]
+
+
 def test_family_shared_notification_is_rejected_before_any_write(certs, configuration):
     # Design §5.5: a family-shared transaction must not enter through the
     # webhook path either. The gate sits before event_receive, so nothing at all
@@ -224,11 +268,11 @@ def test_absent_ownership_type_passes_the_notification_gate(certs, configuration
 def test_family_shared_notification_is_not_bound_through_the_webhook(certs, configuration, monkeypatch):
     # Consequence of placing the gate before event_receive (design §5.5): no
     # billing_events row is written, so nothing deduplicates this notification and
-    # Apple is told to retry. Asserted at the status-class level on purpose --
-    # handle_apple_webhook's retry mapping is separately broken (it forwards the
-    # always-present "code" key into failure(code=...) and raises TypeError), so
-    # pinning the exact body here would pin that defect instead. See the M4-c
-    # report: both the placement and that defect are pre-launch questions.
+    # Apple is told to retry -- for a v2 notification that is five more attempts
+    # at 1/12/24/48/72h (production only). A terminal ack is not available here:
+    # without a row there is nothing to event_mark, so terminating it would mean
+    # answering 2xx and dropping the notification with no record at all. Recorded
+    # as the open product question in the P1 report rather than decided here.
     class PatchedApple(FakeApple):
         def __init__(self, **kwargs):
             super().__init__(pinned_roots=[certs.root_certificate])
@@ -241,6 +285,9 @@ def test_family_shared_notification_is_not_bound_through_the_webhook(certs, conf
         response = client.post("/webhooks/apple", json={"signedPayload": signed})
     assert backend.calls == []
     assert response.status_code == 500
+    # A structured retry signal, not the bare 500 the mapping defect produced.
+    assert response.json()["detail"]["code"] == "EVENT_RETRY_SCHEDULED"
+    assert response.json()["detail"]["upstreamCode"] == "FAMILY_SHARING_NOT_ALLOWED"
 
 
 def test_duplicate_notification_short_circuits(certs, configuration):
@@ -259,9 +306,14 @@ def test_unknown_account_token_raises_instead_of_being_skipped(certs, configurat
     # reach: AccountBackend.billing_event() raises on every RPC `code` (pinned
     # by test_billing_api.test_billing_event_raises_on_every_rpc_code), so the
     # code-carrying dict never arrives. The fake therefore raises, like the real
-    # backend, and the assertion is on the behaviour that actually happens: the
-    # exception escapes before any event_mark, so the event is neither marked
-    # processed nor bound.
+    # backend, and the assertion is on the behaviour that actually happens.
+    #
+    # The event row does exist here (event_receive already wrote it), so the
+    # failure is recorded like every other post-receive failure instead of
+    # escaping with last_error_code null. Retry, not the terminal ack of the
+    # branch below, is deliberate -- the chain is still unbound, so marking the
+    # event "processed" would retire its only pending marker. See the P1
+    # report's open question.
     backend = WorkerBackend(account_by_token=failure("ACCOUNT_TOKEN_UNKNOWN", 404))
     signed = _notification_token(certs)
     with pytest.raises(HTTPException) as error:
@@ -270,7 +322,10 @@ def test_unknown_account_token_raises_instead_of_being_skipped(certs, configurat
                                   pinned_roots=[certs.root_certificate]))
     assert error.value.status_code == 404
     assert error.value.detail["code"] == "ACCOUNT_TOKEN_UNKNOWN"
-    assert [call[0] for call in backend.calls] == ["event_receive", "account_by_token"]
+    assert [call[0] for call in backend.calls] == ["event_receive", "account_by_token",
+                                                   "event_mark"]
+    assert backend.calls[2][1]["status"] == "failed"
+    assert backend.calls[2][1]["lastErrorCode"] == "ACCOUNT_TOKEN_UNKNOWN"
 
 
 def test_processing_failure_marks_event_for_retry(certs, configuration):
@@ -285,6 +340,83 @@ def test_processing_failure_marks_event_for_retry(certs, configuration):
     assert error.value.detail["code"] == "EVENT_RETRY_SCHEDULED"
     mark_calls = [call for call in backend.calls if call[0] == "event_mark"]
     assert mark_calls[0][1]["status"] == "failed"
+
+
+def test_webhook_maps_an_apple_outage_to_a_structured_retry(certs, configuration):
+    # Defect 2: handle_apple_webhook forwarded the upstream detail dict -- which
+    # failure() always fills with its own "code" -- into failure(code=...), so
+    # every processing failure raised TypeError: Apple saw a bare 500 with no
+    # structured code and log_http_failure() never ran.
+    backend = WorkerBackend()
+    signed = _notification_token(certs)
+    with pytest.raises(HTTPException) as error:
+        _run(handle_apple_webhook(backend=backend,
+                                  apple_client=FakeApple(error=AppStoreUnavailable("busy")),
+                                  settings=configuration, signed_payload=signed,
+                                  pinned_roots=[certs.root_certificate]))
+    assert error.value.status_code == 500
+    assert error.value.detail["code"] == "EVENT_RETRY_SCHEDULED"
+    # The retry signal must not swallow why we are retrying.
+    assert error.value.detail["upstreamCode"] == "AppStoreUnavailable"
+    assert error.value.detail["eventId"]
+    mark_calls = [call for call in backend.calls if call[0] == "event_mark"]
+    assert mark_calls[0][1]["status"] == "failed"
+    assert mark_calls[0][1]["lastErrorCode"] == "AppStoreUnavailable"
+
+
+def test_webhook_maps_an_unknown_account_token_to_a_structured_retry(certs, configuration):
+    # Second, distinct cause: the failure is raised by account_by_token after the
+    # row exists, not by the Apple client.
+    backend = WorkerBackend(account_by_token=failure("ACCOUNT_TOKEN_UNKNOWN", 404))
+    signed = _notification_token(certs)
+    with pytest.raises(HTTPException) as error:
+        _run(handle_apple_webhook(backend=backend, apple_client=FakeApple(),
+                                  settings=configuration, signed_payload=signed,
+                                  pinned_roots=[certs.root_certificate]))
+    assert error.value.status_code == 500
+    assert error.value.detail["code"] == "EVENT_RETRY_SCHEDULED"
+    assert error.value.detail["upstreamCode"] == "ACCOUNT_TOKEN_UNKNOWN"
+
+
+def test_webhook_retry_failure_is_logged_and_returns_a_structured_500(certs, configuration,
+                                                                    monkeypatch, caplog):
+    class PatchedApple(FakeApple):
+        def __init__(self, **kwargs):
+            super().__init__(pinned_roots=[certs.root_certificate],
+                             error=AppStoreUnavailable("busy"))
+
+    monkeypatch.setattr("app.account_api.AppStoreServerAPIClient", PatchedApple)
+    with caplog.at_level(logging.WARNING, logger="app.account_api"):
+        with TestClient(create_account_api(configuration, WorkerBackend()),
+                        raise_server_exceptions=False) as client:
+            response = client.post("/webhooks/apple",
+                                   json={"signedPayload": _notification_token(certs)})
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "EVENT_RETRY_SCHEDULED"
+    # log_http_failure() records a code only when it is in SAFE_ERROR_CODES, so a
+    # retry code missing from that set is silently logged as HTTP_ERROR.
+    assert "EVENT_RETRY_SCHEDULED" in caplog.text
+
+
+def test_webhook_re_raises_client_errors_unchanged(certs, configuration):
+    # 400/409 are client/contract errors: they must not be turned into the retry
+    # signal, or into a 500.
+    with pytest.raises(HTTPException) as mismatch:
+        _run(handle_apple_webhook(backend=WorkerBackend(), apple_client=FakeApple(),
+                                  settings=configuration,
+                                  signed_payload=_notification_token(certs, environment="Production"),
+                                  pinned_roots=[certs.root_certificate]))
+    assert mismatch.value.status_code == 400
+    assert mismatch.value.detail["code"] == "ENVIRONMENT_MISMATCH"
+
+    conflicting = WorkerBackend(event_receive=failure("EVENT_CONFLICT", 409))
+    with pytest.raises(HTTPException) as conflict:
+        _run(handle_apple_webhook(backend=conflicting, apple_client=FakeApple(),
+                                  settings=configuration,
+                                  signed_payload=_notification_token(certs),
+                                  pinned_roots=[certs.root_certificate]))
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "EVENT_CONFLICT"
 
 
 def test_environment_mismatch_rejects_notification(certs, configuration):
@@ -328,6 +460,33 @@ def test_reconcile_requeries_every_active_chain(certs, configuration):
     assert verify_calls[0][2]["bindDevice"] is False
     assert "requireSession" not in verify_calls[0][2]
     assert verify_calls[0][2]["appAccountToken"] == chain["purchaseAccountToken"]
+
+
+def test_reconcile_reports_a_corrupt_reference_without_aborting_the_sweep(certs, configuration,
+                                                                        caplog):
+    # The self-concealing half of defect 1: an undecryptable
+    # storeReferenceCiphertext was swallowed as an ordinary warning,
+    # indistinguishable from a routine skip. A JWS in that column is exactly what
+    # the webhook path used to write.
+    corrupt = {"principal": DEVICE_PRINCIPAL, "provider": "apple", "productId": PRODUCT,
+               "environment": "sandbox",
+               "storeReferenceCiphertext": _notification_token(certs),
+               "purchaseAccountToken": str(uuid4())}
+    healthy = {"principal": "guest_89abcdef0123456789abcdef", "provider": "apple",
+               "productId": PRODUCT, "environment": "sandbox",
+               "storeReferenceCiphertext": _encrypted_reference(configuration, "123"),
+               "purchaseAccountToken": str(uuid4())}
+    backend = WorkerBackend(reconcile_chains=[corrupt, healthy])
+    with caplog.at_level(logging.DEBUG, logger="app.billing_worker"):
+        verified = _run(reconcile(backend=backend, apple_client=FakeApple(),
+                                  settings=configuration,
+                                  pinned_roots=[certs.root_certificate]))
+    # One corrupt chain must not stop the rest of the sweep ...
+    assert verified == 1
+    # ... but it must be visible, and name the chain it belongs to.
+    records = [record for record in caplog.records if record.name == "app.billing_worker"]
+    assert [record.levelno for record in records] == [logging.ERROR]
+    assert DEVICE_PRINCIPAL in records[0].getMessage()
 
 
 def test_pending_events_are_retried(certs, configuration):
