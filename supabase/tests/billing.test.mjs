@@ -154,6 +154,55 @@ test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>
   assert.equal(after.aiQuota.used,21);
   assert.equal(after.aiQuota.limit,30,'legacy writes must be clamped to the current free limit');
   assert.equal(after.aiQuota.remaining,9);
+  assert.equal(after.aiQuota.resetsAt,null,'the lifetime free pool never resets');
+});
+
+test('plus entitlement and apple_verify report the member daily pool, not the free pool',async()=>{
+  // This is the only case in this file that charges through the AI ledger, so it
+  // closes the legacy-import gate itself instead of in the file-level hook.
+  await db.rpc(null,'ai_quota_service',['finish_import',{}],'service_role');
+  const member=(await join('quota-source-plus',1))[0];
+  const supportCode=(await db.admin.query('select support_code from ai_private.principals where id=$1',
+    [member.principal])).rows[0].support_code;
+  // The verify response that bound the chain already reports the member period.
+  assert.equal(member.result.plan,'plus');
+  assert.equal(member.result.aiQuota.limit,30);
+  assert.equal(member.result.aiQuota.used,0);
+  assert.equal(member.result.aiQuota.remaining,30);
+  assert.ok(member.result.aiQuota.resetsAt?.endsWith('+08:00'),JSON.stringify(member.result));
+  // Two calls through the same service-role RPC the AI route charges with.
+  for(let i=0;i<2;i++){
+    const requestID=randomUUID();
+    const reserved=await db.rpc(null,'ai_quota_service',['reserve',{principal:member.principal,
+      supportCode,freeLimit:30,memberLimit:30,requestID,bodyHash:'f'.repeat(64),
+      attempt:randomUUID()}],'service_role');
+    assert.equal(reserved.period.startsWith('member:'),true,JSON.stringify(reserved));
+    await db.rpc(null,'ai_quota_service',['finish',{principal:member.principal,supportCode,
+      freeLimit:30,memberLimit:30,requestID,attempt:reserved.attempt,consume:true}],'service_role');
+  }
+  const entitlement=await billingRpc('entitlement',{principal:member.principal});
+  assert.equal(entitlement.plan,'plus');
+  assert.equal(entitlement.aiQuota.limit,30);
+  assert.equal(entitlement.aiQuota.used,2);
+  assert.equal(entitlement.aiQuota.remaining,28);
+  assert.equal(entitlement.aiQuota.resetsAt,member.result.aiQuota.resetsAt);
+  // The reported usage is the member bucket the AI path wrote, and the lifetime
+  // free pool stays untouched: reading that pool here was the defect.
+  const buckets=(await db.admin.query(
+    `select period,used from ai_private.buckets
+      where principal=$1 and period like 'member:%'`,[member.principal])).rows;
+  assert.equal(buckets.length,1);
+  assert.equal(buckets[0].used,2);
+  const free=(await db.admin.query(
+    `select f.used from ai_private.free_pools f
+      join ai_private.principals p on p.free_pool_id=f.id where p.id=$1`,[member.principal])).rows[0].used;
+  assert.equal(free,0);
+  // apple_verify answers from the same ledger as entitlement.
+  const reverified=await verify(member.principal,{transaction:'quota-source-plus',token:member.token});
+  assert.equal(reverified.plan,'plus');
+  assert.equal(reverified.aiQuota.used,2);
+  assert.equal(reverified.aiQuota.remaining,28);
+  assert.equal(reverified.aiQuota.resetsAt,entitlement.aiQuota.resetsAt);
 });
 
 test('device cap case 1: the first device creates the chain and gets plus',async()=>{

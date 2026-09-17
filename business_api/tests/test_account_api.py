@@ -70,17 +70,37 @@ def account_headers():
     return {"Authorization":"Bearer signed.account.token"}
 
 
-def test_account_resolved_before_quota_and_unusable_output_refunds(configuration):
+def device_headers(client,backend):
+    # The AI route accepts only the guest token; the guest request itself calls
+    # the quota status action, which is not part of the call sequences below.
+    headers=guest_headers(client,DEVICE)
+    backend.calls.clear()
+    return headers
+
+
+def test_account_actor_is_refused_before_any_quota_is_reserved(configuration):
     backend=Backend()
     with TestClient(create_account_api(configuration,backend)) as client:
-        response=client.post("/api/plan/parse",headers={**account_headers(),"X-Request-ID":"forward-me-123"},json=request_payload())
+        response=client.post("/api/plan/parse",headers=account_headers(),json=request_payload())
+    assert response.status_code==401
+    assert response.json()["detail"]["code"]=="DEVICE_REQUIRED"
+    # The identity is resolved and then refused, so neither reserve nor finish
+    # reaches the ledger: the rejected attempt consumes no quota at all.
+    assert [call[0] for call in backend.calls]==["account"]
+
+
+def test_plan_route_reserves_before_planning_and_unusable_output_refunds(configuration):
+    backend=Backend()
+    with TestClient(create_account_api(configuration,backend)) as client:
+        headers={**device_headers(client,backend),"X-Request-ID":"forward-me-123"}
+        response=client.post("/api/plan/parse",headers=headers,json=request_payload())
     assert response.status_code==200
-    assert [call[0] for call in backend.calls]==["account","reserve","plan","finish"]
-    assert backend.calls[1][1]==ACCOUNT
-    assert backend.calls[1][2]["bodyHash"]==body_hash(request_payload())
-    assert backend.calls[3][2]["consume"] is False
-    assert backend.calls[1][2]["attempt"]==backend.calls[3][2]["attempt"]
-    assert backend.calls[2][4]=="forward-me-123"
+    assert [call[0] for call in backend.calls]==["reserve","plan","finish"]
+    assert backend.calls[0][1]==Actor(GuestTokenCodec.device_key(DEVICE))
+    assert backend.calls[0][2]["bodyHash"]==body_hash(request_payload())
+    assert backend.calls[2][2]["consume"] is False
+    assert backend.calls[0][2]["attempt"]==backend.calls[2][2]["attempt"]
+    assert backend.calls[1][4]=="forward-me-123"
     assert response.headers["cache-control"]=="no-store"
 
 
@@ -95,7 +115,7 @@ def test_successful_proposal_consumes_once_after_real_planner(configuration,sett
         assert result.json()["proposal"] is not None
     backend=Backend(result.json())
     with TestClient(create_account_api(configuration,backend)) as client:
-        response=client.post("/api/plan/parse",headers=account_headers(),json=payload)
+        response=client.post("/api/plan/parse",headers=device_headers(client,backend),json=payload)
     assert response.status_code==200
     assert backend.calls[-1][2]["consume"] is True
     assert len(model.calls)==1
@@ -105,7 +125,7 @@ def test_successful_proposal_consumes_once_after_real_planner(configuration,sett
 def test_failed_or_malformed_planner_refunds(configuration,outcome,status):
     backend=Backend(outcome)
     with TestClient(create_account_api(configuration,backend)) as client:
-        response=client.post("/api/plan/parse",headers=account_headers(),json=request_payload())
+        response=client.post("/api/plan/parse",headers=device_headers(client,backend),json=request_payload())
     assert response.status_code==status
     assert backend.calls[-1][0]=="finish" and backend.calls[-1][2]["consume"] is False
 
@@ -113,11 +133,12 @@ def test_failed_or_malformed_planner_refunds(configuration,outcome,status):
 @pytest.mark.parametrize("code,status",[("AI_QUOTA_EXHAUSTED",429),("AI_REQUEST_IN_PROGRESS",409),
                                        ("AI_REQUEST_ALREADY_COMPLETED",409),("AI_REQUEST_ID_CONFLICT",409)])
 def test_quota_denial_never_calls_planner(configuration,code,status):
-    backend=Backend();backend.quota_error=failure(code,status)
+    backend=Backend()
     with TestClient(create_account_api(configuration,backend)) as client:
-        response=client.post("/api/plan/parse",headers=account_headers(),json=request_payload())
+        headers=device_headers(client,backend);backend.quota_error=failure(code,status)
+        response=client.post("/api/plan/parse",headers=headers,json=request_payload())
     assert response.status_code==status
-    assert [call[0] for call in backend.calls]==["account","reserve"]
+    assert [call[0] for call in backend.calls]==["reserve"]
 
 
 def test_invalid_input_or_guest_signature_never_reserves(configuration):
@@ -277,10 +298,11 @@ def test_internal_planning_failure_log_keeps_trace_and_upstream_code(configurati
 
 def test_account_api_failure_log_keeps_http_trace_and_safe_code(configuration, caplog):
     backend = Backend()
-    backend.quota_error = failure("ACCOUNT_SERVICE_UNAVAILABLE", 503, message="private-upstream-message")
     with caplog.at_level(logging.WARNING, logger="app.account_api"):
         with TestClient(create_account_api(configuration, backend)) as client:
-            response = client.post("/api/plan/parse", headers={**account_headers(), "X-Request-ID": "probe-run-123-plan"},
+            headers = device_headers(client, backend)
+            backend.quota_error = failure("ACCOUNT_SERVICE_UNAVAILABLE", 503, message="private-upstream-message")
+            response = client.post("/api/plan/parse", headers={**headers, "X-Request-ID": "probe-run-123-plan"},
                                    json=request_payload())
     assert response.status_code == 503
     record = json.loads(caplog.records[-1].message)
@@ -292,10 +314,11 @@ def test_account_api_failure_log_keeps_http_trace_and_safe_code(configuration, c
 
 def test_account_api_failure_log_rejects_unknown_uppercase_code(configuration, caplog):
     backend = Backend()
-    backend.quota_error = failure("PRIVATE_SECRET", 503)
     with caplog.at_level(logging.WARNING, logger="app.account_api"):
         with TestClient(create_account_api(configuration, backend)) as client:
-            response = client.post("/api/plan/parse", headers=account_headers(), json=request_payload())
+            headers = device_headers(client, backend)
+            backend.quota_error = failure("PRIVATE_SECRET", 503)
+            response = client.post("/api/plan/parse", headers=headers, json=request_payload())
     assert response.status_code == 503
     record = json.loads(caplog.records[-1].message)
     assert record["code"] == "HTTP_ERROR"

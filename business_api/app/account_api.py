@@ -235,6 +235,14 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         request: Request,
         current: Actor = Depends(actor),
     ):
+        # The AI ledger is device-metered: membership resolves by principal
+        # identity, and every entitlement-writing action requires the device
+        # principal (202609170017), so an account session resolving to
+        # `account:<uuid>` cannot carry Plus. Charging it would meter a paying
+        # member against the account's lifetime free pool, so refuse before any
+        # quota is reserved. The guest token is the only AI identity.
+        if current.principal.startswith("account:"):
+            raise failure("DEVICE_REQUIRED", 401)
         body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         attempt = str(uuid4())
         await quota("reserve", current, diagnostic_request_id=request.state.request_id,
