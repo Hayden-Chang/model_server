@@ -551,7 +551,7 @@ Recorded here so the reasoning is auditable; these are **decisions, not proposal
 | **E4** | **The free tier is NOT shared.** Two signed-out devices of one free user keep independent lifetime pools. | Accepted explicitly by the product owner ("两个未登录设备不共享没关系"). No `claim-guest` flow, no account referent, no client-asserted group id is introduced. |
 | **E2** | **Fix the signed-in member path (C6) in the same change.** | Required, not optional: with per-chain sharing the meter is read from the entitlement's device principal, so as long as a signed-in member's AI request resolves to `account:<uuid>` their Plus counter stays invisible. Deferring would ship a sharing change that its own target users cannot observe. |
 | **E3** | Emergency reverse export keeps the scope's member bucket (see below) — **still open**. | |
-| **E5** | Self-correcting entitlement read — **still open**. | |
+| **E5** | Self-correcting entitlement read — **deferred on 2026-09-17: recorded, deliberately not fixed yet.** Mechanism verified in source; see §5.0.1. | Accepted knowingly. With per-chain sharing the gap is no longer self-limiting (details below), so it should be closed soon after this ships, but it is not a blocker for the initial deployment. |
 | **E6** | The >400-line migration and the per-device rollback degradation are accepted. | |
 
 Still open for the product owner: **E3** (what the emergency reverse export does with shared member
@@ -561,6 +561,68 @@ would also narrow the accepted D5 gap whose blast radius sharing widens from per
 **Explicitly out of scope as a result of E1/E4**: the free tier keeps its current per-principal
 lifetime pool and its current `claim-guest` behaviour. This analysis does not propose changing the
 free ledger, and no option here should be read as covering it.
+
+### 5.0.1 E5 — verified mechanism of the stale entitlement projection (recorded, not fixed)
+
+Status: the product owner decided on 2026-09-17 to **record this and not fix it yet**. The mechanism
+below was verified in source by the orchestrator after PR #59 merged, so a future reader does not have
+to re-derive it.
+
+**The projection is a cache, and only one device's cache is refreshed.** `ai_private.quota_status`
+reads `billing_private.account_entitlements` and never consults the purchase tables
+(`202609170017:181-184`). The only function that recomputes that row is
+`billing_private.aggregate_entitlement(target_principal)` (`202609170017:144-164`), which picks the
+device's best chain from `purchase_devices` and writes back `plan`/`status`. A refund or expiry
+arrives as a webhook, and the webhook re-aggregates exactly **one** principal:
+`actor_principal = str(account["principal"])` (`business_api/app/billing_worker.py:112`) is resolved
+by `account_by_token` from the notification's `appAccountToken`, then passed to `apple_verify`
+(`:121-122`). **Nothing tells the other devices on the chain.**
+
+**Consequence for a 3-device chain.** Device A (the one in the notification) is recomputed to
+`plan='free'` and is immediately correct. Devices B and C keep `plan='plus', status='active'`.
+`billing_private.plus_source`'s gate is `ae.plan = 'plus' and ae.status in ('active','grace')`
+(`202609170020`), so it still passes; and its chain ordering
+(`case sp.store_status when 'active' then 0 else 2 end`) only ranks chains **against each other** — it
+never checks that the selected chain is still valid, so a refunded chain with no competitor is still
+selected. B and C therefore keep Plus, metered against **the chain owner's bucket**, i.e. the chain's
+whole daily 30, until their own notifications arrive — which for a refund they may never do.
+
+**Why sharing makes it worse, precisely.** Under per-device metering a stale projection was
+**self-limiting**: B could at most give itself 30/day it should not have. Under per-chain metering B
+spends the **chain owner's** bucket, so the loss is charged to the whole group, and A — whose
+projection is already correctly `free` — sees a different metering outcome than B on the same
+membership. The gap is no longer confined to the device that has it.
+
+**A deliberately decoupled pair.** `plus_source` falls back to `coalesce(subquery, p_actor)`, so when
+no chain resolves the meter stays on the actor itself. That is intentional — it keeps a projection
+with **no purchase behind it** (development and hand-seeded data, and the pre-M4 tests) metered where
+it was. Any fix must therefore preserve that: "has a Plus projection" and "has a valid chain" are
+intentionally separate, and the latter must not be made a precondition of the former.
+
+**Two fixes, neither implemented.**
+
+- **A — re-check at read time** in `plus_source` (`store_status in ('active','billing_retry')` and a
+  non-expired `expires_at`). Single point, since `plus_source` is the only membership gate. But:
+  `expires_at > now()` **cannot be added unconditionally** — a `billing_retry` (grace) device may
+  momentarily have `expires_at < now()` and must keep its grace, so a careless one-line change
+  silently **downgrades grace-period members**, and that error would propagate to the whole chain;
+  and the `account_entitlements` gate **cannot simply be removed**, or development/hand-seeded data
+  loses membership outright (see the decoupled pair above).
+- **B — re-aggregate the whole chain** on refund/expiry (every `purchase_devices` row with
+  `revoked_at is null`). Removes the staleness at its source so the projection becomes a trustworthy
+  cache again, does not touch grace semantics, and does not endanger seed data. Costs a write-path
+  fan-out plus new tests.
+  **Recommended**, with A as defence in depth once its semantics are confirmed.
+
+**The load-bearing test is the same either way**: build a 3-device chain, drive a refund/expiry for
+**one** of them, and assert the **other two** stop being members on their next quota read **and** that
+the shared bucket is no longer charged. Note this test would have **passed by accident** under
+per-device metering (each device had its own bucket, so nothing observable differed) — which is part
+of why the gap went unnoticed.
+
+**Before dispatching any implementation**: run a read-only semantic check on whether
+`store_purchases.expires_at` is trustworthy and how `billing_retry` combines with it in the existing
+tests. "Add `expires_at > now()`" looks like one line and is a grace-period downgrade if it is wrong.
 
 ---
 
