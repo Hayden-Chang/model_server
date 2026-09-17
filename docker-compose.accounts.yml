@@ -39,8 +39,9 @@ services:
       APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
       # Path form, because the key is delivered as a file on the host and
       # docker compose does not expand $(cat …) in .env. resolve_apple_key_p8
-      # prefers this over the inline value.
-      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-}
+      # prefers this over the inline value. The default must stay in step with
+      # the mount below: the container cannot see the host path.
+      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-/opt/model_server/.secrets/apple.p8}
       STORE_REFERENCE_KEY: ${STORE_REFERENCE_KEY:?STORE_REFERENCE_KEY is required}
     expose: ["8000"]
     read_only: true
@@ -73,7 +74,7 @@ services:
       APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
       # See time-fragment-api: the host ships the key as a file, and the
       # container needs the mount below to read it.
-      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-}
+      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-/opt/model_server/.secrets/apple.p8}
       STORE_REFERENCE_KEY: ${STORE_REFERENCE_KEY:?STORE_REFERENCE_KEY is required}
       PLANNING_INTERNAL_SECRET: ${PLANNING_INTERNAL_SECRET:?PLANNING_INTERNAL_SECRET is required}
       TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
