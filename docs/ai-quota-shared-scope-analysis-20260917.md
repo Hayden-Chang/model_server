@@ -541,6 +541,29 @@ non-family-shared receipts; and any real StoreKit purchase/restore end-to-end.
 
 ---
 
+## 5.0 Decision record (2026-09-17, product owner via orchestrator)
+
+Recorded here so the reasoning is auditable; these are **decisions, not proposals**.
+
+| # | Decision | Consequence accepted |
+| --- | --- | --- |
+| **E1** | **Share the daily Plus allowance per purchase chain.** Explicitly *not* per Supabase account. | The merged no-login purchase decision and its UI test stand unchanged. "Per account / shared across all devices" is no longer the target spec: that wording was already withdrawn from the product docs in iOS commit `986619da`, which relabelled it 待产品确认, so this decision resolves an open question rather than reversing a settled one. |
+| **E4** | **The free tier is NOT shared.** Two signed-out devices of one free user keep independent lifetime pools. | Accepted explicitly by the product owner ("两个未登录设备不共享没关系"). No `claim-guest` flow, no account referent, no client-asserted group id is introduced. |
+| **E2** | **Fix the signed-in member path (C6) in the same change.** | Required, not optional: with per-chain sharing the meter is read from the entitlement's device principal, so as long as a signed-in member's AI request resolves to `account:<uuid>` their Plus counter stays invisible. Deferring would ship a sharing change that its own target users cannot observe. |
+| **E3** | Emergency reverse export keeps the scope's member bucket (see below) — **still open**. | |
+| **E5** | Self-correcting entitlement read — **still open**. | |
+| **E6** | The >400-line migration and the per-device rollback degradation are accepted. | |
+
+Still open for the product owner: **E3** (what the emergency reverse export does with shared member
+rows) and **E5** (whether `plus_source` should re-check `store_status`/`expires_at` at read time, which
+would also narrow the accepted D5 gap whose blast radius sharing widens from per-device to per-chain).
+
+**Explicitly out of scope as a result of E1/E4**: the free tier keeps its current per-principal
+lifetime pool and its current `claim-guest` behaviour. This analysis does not propose changing the
+free ledger, and no option here should be read as covering it.
+
+---
+
 ## 5. Open decisions for the human
 
 1. **E1 — Confirm the referent.** Share Plus quota per **purchase chain** (recommended), per
