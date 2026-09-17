@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -20,6 +21,8 @@ from app.billing_verify import decrypt_reference, encrypt_reference, verify_appl
 NOW = datetime(2026, 9, 11, 12, 0, 0, tzinfo=timezone.utc)
 PRODUCT = "com.hayden.daymosaic.plus.monthly"
 CLAIM_ID = uuid4()
+# ^guest_[a-f0-9]{24}$ : the only actor shape billing_service admits (202609170017).
+DEVICE_PRINCIPAL = "guest_0123456789abcdef01234567"
 EXPIRES_MS = 1789000000000
 EXPIRES_ISO = datetime.fromtimestamp(EXPIRES_MS / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{datetime.fromtimestamp(EXPIRES_MS / 1000, timezone.utc).microsecond // 1000:03d}Z"
 
@@ -93,10 +96,14 @@ def _b64(value: bytes) -> str:
 
 
 def _jws_token(certs, *, environment="Sandbox", product=PRODUCT, app_account_token=None,
-               original_transaction_id="123"):
+               original_transaction_id="123", ownership=None):
     body = {"environment": environment, "productId": product,
             "originalTransactionId": original_transaction_id,
             "appAccountToken": app_account_token or str(uuid4())}
+    if ownership is not None:
+        # App Store JWS payload field. `ownershipType` is the StoreKit 2
+        # client-side Swift property name and never appears in a receipt.
+        body["inAppOwnershipType"] = ownership
     return tsc._build_jws(body, certs, certs.leaf_certificate)
 
 
@@ -115,12 +122,14 @@ def _make_client(certs, *, handler=None):
 
 
 def _verify(certs, backend, apple, *, body=None, environment="Sandbox", product=PRODUCT,
-            app_account_token=None, original_transaction_id="123", claim_id=None):
+            app_account_token=None, original_transaction_id="123", claim_id=None,
+            ownership=None):
     body = body or type("Body", (), {})()
     if getattr(body, "signed_transaction", None) is None:
         body.signed_transaction = _jws_token(certs, environment=environment, product=product,
                                              app_account_token=app_account_token,
-                                             original_transaction_id=original_transaction_id)
+                                             original_transaction_id=original_transaction_id,
+                                             ownership=ownership)
     if getattr(body, "product_id", None) is None:
         body.product_id = product
     body.claim_id = claim_id if claim_id is not None else getattr(body, "claim_id", None)
@@ -129,7 +138,7 @@ def _verify(certs, backend, apple, *, body=None, environment="Sandbox", product=
         try:
             return await verify_apple_purchase(
                 backend=backend, apple_client=apple, settings=configuration_ref[0],
-                actor=Actor("account:" + str(uuid4()), str(uuid4())),
+                actor=Actor(DEVICE_PRINCIPAL),
                 payload_body=body, pinned_roots=[certs.root_certificate])
         finally:
             if apple is not None and hasattr(apple, "aclose"):
@@ -152,11 +161,47 @@ def test_verify_success_binds_and_returns_entitlement(certs, configuration):
     assert result["plan"] == "plus"
     action, actor, data = backend.calls[0]
     assert action == "apple_verify"
+    assert actor == Actor(DEVICE_PRINCIPAL)
     assert data["originalTransactionId"] == "123"
     assert data["storeStatus"] == "active"
     assert data["expiresAt"] == EXPIRES_ISO
     assert data["appAccountToken"] == account_token
+    # The client purchase/restore path may join this device to the chain.
+    assert data["bindDevice"] is True
+    assert "sessionID" not in data and "requireSession" not in data
     assert apple.calls == ["123"]
+
+
+def test_family_shared_transaction_is_rejected_before_the_rpc(certs, configuration):
+    # Design §5.5: only the exact value FAMILY_SHARED is refused, and it is
+    # refused before the billing RPC, so no store_purchases row can be created.
+    apple, backend = FakeApple(), FakeBackend()
+    with pytest.raises(HTTPException) as error:
+        _verify(certs, backend, apple, ownership="FAMILY_SHARED")
+    assert error.value.status_code == 422
+    assert error.value.detail["code"] == "FAMILY_SHARING_NOT_ALLOWED"
+    assert backend.calls == []
+    assert apple.calls == []
+
+
+def test_purchased_transaction_passes_the_family_sharing_gate(certs, configuration):
+    backend = FakeBackend()
+    result = _verify(certs, backend, FakeApple(), ownership="PURCHASED")
+    assert result["plan"] == "plus"
+    assert backend.calls[0][2]["bindDevice"] is True
+
+
+def test_absent_ownership_type_is_allowed_and_logged(certs, configuration, caplog):
+    # Deliberate fail-open direction (design §5.5 / M0.5): the field has not
+    # been confirmed on live non-shared receipts, so rejecting its absence
+    # would reject genuine purchases. The absence is logged so a missing field
+    # is observable in production instead of silently disabling the gate.
+    backend = FakeBackend()
+    with caplog.at_level(logging.WARNING, logger="app.billing_verify"):
+        result = _verify(certs, backend, FakeApple())
+    assert result["plan"] == "plus"
+    assert "inAppOwnershipType" in caplog.text
+    assert len(backend.calls) == 1
 
 
 def test_verify_passes_claim_id(certs, configuration):

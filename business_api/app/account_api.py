@@ -178,24 +178,32 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         # Import is already complete before a new zero-use guest can be created.
         return await quota("claim", current, guest=guest_id, guestSupportCode=support_code(guest_id))
 
-    async def billing_account(authorization: str | None = Header(default=None)) -> Actor:
-        # Billing requires a real Supabase account; guest tokens are rejected
-        # locally so they never reach the store APIs (account/cloud §9.1).
+    async def billing_device(authorization: str | None = Header(default=None)) -> Actor:
+        # Membership binds to the device principal, not to a Time Fragment
+        # account (design §4). The guest HMAC token is the only billing
+        # identity: its subject is `guest_<sha256(device_id)[:24]>`, exactly the
+        # principal the billing RPC admits, and it carries no Supabase session.
+        # Account sessions are rejected locally so they never reach the store
+        # APIs. This mirrors `actor` above -- one dot is a guest token, two are
+        # a JWT -- and deliberately takes the opposite branch.
         token = bearer(authorization)
-        if token.count(".") != 2:
-            raise failure("ACCOUNT_REQUIRED", 401)
-        return await backend.account(token)
+        if token.count(".") != 1:
+            raise failure("DEVICE_REQUIRED", 401)
+        try:
+            return Actor(tokens.verify(token))
+        except GuestTokenError as error:
+            raise failure("UNAUTHORIZED", 401) from error
 
     @app.post("/billing/claims", response_model=BillingClaimResponse)
     async def billing_claim_create(payload: BillingClaimRequest,
-                                   current: Actor = Depends(billing_account)):
+                                   current: Actor = Depends(billing_device)):
         data = await backend.billing("claim_register", current, provider=payload.provider,
                                      productId=payload.product_id,
                                      claimId=str(payload.claim_id) if payload.claim_id else None)
         return BillingClaimResponse.model_validate(data)
 
     @app.get("/billing/entitlement", response_model=EntitlementResponse)
-    async def billing_entitlement(current: Actor = Depends(billing_account)):
+    async def billing_entitlement(current: Actor = Depends(billing_device)):
         return EntitlementResponse.model_validate(await backend.billing("entitlement", current))
 
     @app.post("/webhooks/apple")
@@ -214,7 +222,7 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
 
     @app.post("/billing/apple/verify", response_model=EntitlementResponse)
     async def billing_apple_verify(payload: BillingVerifyRequest,
-                                   current: Actor = Depends(billing_account)):
+                                   current: Actor = Depends(billing_device)):
         if apple_client is None or settings.store_reference_key is None:
             raise failure("BILLING_NOT_CONFIGURED", 503)
         return EntitlementResponse.model_validate(await verify_apple_purchase(

@@ -17,10 +17,12 @@ from .planning_auth import PlanningCredentials
 LOGGER = logging.getLogger(__name__)
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 SAFE_ERROR_CODES = frozenset({
-    "ACCOUNT_SERVICE_UNAVAILABLE", "ACCOUNT_UNAVAILABLE", "AI_ACCOUNT_REQUIRED",
+    "ACCOUNT_SERVICE_UNAVAILABLE", "ACCOUNT_TOKEN_UNKNOWN", "ACCOUNT_UNAVAILABLE",
+    "AI_ACCOUNT_REQUIRED",
     "AI_DAILY_QUOTA_EXHAUSTED", "AI_QUOTA_EXHAUSTED", "AI_REQUEST_ALREADY_COMPLETED",
     "AI_REQUEST_ID_CONFLICT", "AI_REQUEST_IN_PROGRESS", "DEVELOPMENT_MEMBERSHIP_DISABLED",
-    "EARLIEST_START_REQUIRED", "INPUT_TOO_LARGE", "INTERNAL_PLANNING_DISABLED",
+    "DEVICE_LIMIT_REACHED", "DEVICE_REQUIRED", "EARLIEST_START_REQUIRED",
+    "FAMILY_SHARING_NOT_ALLOWED", "INPUT_TOO_LARGE", "INTERNAL_PLANNING_DISABLED",
     "INVALID_TIME_RANGE", "MODEL_GATEWAY_ERROR", "MODEL_GATEWAY_UNAVAILABLE",
     "PLANNING_DATE_NOT_ALLOWED", "SUPPORT_CODE_NOT_FOUND", "UNAUTHORIZED",
 })
@@ -198,21 +200,27 @@ class AccountBackend:
         result = await self._rpc("billing_service", {"p_action": action, "p_data": data})
         code = result.pop("code", None)
         if code:
+            # ACCOUNT_REQUIRED / ACCOUNT_UNAVAILABLE are retired by the
+            # device-principal RPC (202609170017): these actions are ungated, so
+            # the only identity code left here is the receipt's account token.
             status = {"EVENT_CONFLICT": 409, "CLAIM_NOT_FOUND": 404,
-                      "ACCOUNT_TOKEN_UNKNOWN": 404, "ACCOUNT_REQUIRED": 401,
-                      "ACCOUNT_UNAVAILABLE": 401}.get(code, 409)
+                      "ACCOUNT_TOKEN_UNKNOWN": 404}.get(code, 409)
             raise failure(code, status, **result)
         return result
 
     async def billing(self, action: str, actor: Actor,
                       diagnostic_request_id: str | None = None, **data) -> dict:
-        data.update(principal=actor.principal, sessionID=actor.session_id)
+        # A device principal has no Supabase session, and the RPC no longer has
+        # a session concept: `sessionID`/`requireSession` must not be sent at
+        # all (design §2.3).
+        data.update(principal=actor.principal)
         result = await self._rpc("billing_service", {"p_action": action, "p_data": data},
                                  request_id=diagnostic_request_id)
         code = result.pop("code", None)
         if code:
-            status = {"CLAIM_CONFLICT": 409, "CLAIM_NOT_FOUND": 404, "ACCOUNT_REQUIRED": 401,
-                      "ACCOUNT_UNAVAILABLE": 401, "PRODUCT_INVALID": 422,
+            status = {"CLAIM_CONFLICT": 409, "CLAIM_NOT_FOUND": 404,
+                      "ACCOUNT_TOKEN_UNKNOWN": 404, "DEVICE_REQUIRED": 401,
+                      "DEVICE_LIMIT_REACHED": 409, "PRODUCT_INVALID": 422,
                       "ACCOUNT_SERVICE_UNAVAILABLE": 503}.get(code, 409)
             raise failure(code, status, **result)
         return result

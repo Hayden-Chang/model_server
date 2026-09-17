@@ -15,7 +15,7 @@ from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 
 from .account_backend import AccountBackend, Actor, failure, resolve_apple_key_p8
-from .billing_verify import decrypt_reference, subscription_state
+from .billing_verify import decrypt_reference, reject_family_shared, subscription_state
 from .appstore_client import (
     AppStoreRejected,
     AppStoreUnavailable,
@@ -54,6 +54,9 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
         raise failure("ENVIRONMENT_MISMATCH", 400)
     transaction = verify_apple_jws(str(data.get("signedTransactionInfo") or ""),
                                    pinned_roots=pinned_roots)
+    # A family-shared transaction must not enter through the webhook path either
+    # (design §5.5): the same signed payload is rejected as on the client path.
+    reject_family_shared(transaction)
     original_transaction_id = str(transaction.get("originalTransactionId") or "")
     if not original_transaction_id:
         raise failure("VERIFICATION_FAILED", 400, reason="MISSING_ORIGINAL_TRANSACTION_ID")
@@ -67,19 +70,25 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
 
     account = await backend.billing_event("account_by_token",
         appAccountToken=str(transaction.get("appAccountToken") or ""))
+    # Unreachable while AccountBackend.billing_event() raises on every RPC code
+    # (pinned by test_billing_api.test_billing_event_raises_on_every_rpc_code);
+    # kept as the intended handling if that mapping ever stops raising.
     if account.get("code") == "ACCOUNT_TOKEN_UNKNOWN":
         await backend.billing_event("event_mark", provider="apple",
             environment=settings.apple_environment, eventId=event_id,
             status="processed", lastErrorCode="ACCOUNT_TOKEN_UNKNOWN")
         return {"received": True, "bound": False, "eventId": event_id}
-    actor_principal = "account:" + str(account["userID"])
+    actor_principal = str(account["principal"])
 
     try:
         status_payload = await apple_client.subscription_status(original_transaction_id)
         store_status, expires_at = subscription_state(status_payload,
                                                       original_transaction_id)
+        # bindDevice=False: this call acts as the chain's principal, not as the
+        # requesting device. Letting it bind would clear a customer-support
+        # revocation (design §5.3).
         await backend.billing("apple_verify",
-            Actor(actor_principal, None), requireSession=False,
+            Actor(actor_principal, None), bindDevice=False,
             originalTransactionId=original_transaction_id,
             productId=str(transaction.get("productId") or ""),
             appAccountToken=str(transaction.get("appAccountToken") or ""),
@@ -150,8 +159,10 @@ async def reconcile(*, backend, apple_client, settings, pinned_roots=None) -> in
         try:
             status_payload = await apple_client.subscription_status(reference)
             store_status, expires_at = subscription_state(status_payload, reference)
+            # bindDevice=False for the same reason as process_notification: a
+            # reconcile pass must not revive a revoked device (design §5.3).
             await backend.billing("apple_verify",
-                Actor("account:" + str(chain["userId"]), None), requireSession=False,
+                Actor(str(chain["principal"]), None), bindDevice=False,
                 originalTransactionId=reference, productId=chain["productId"],
                 appAccountToken=chain.get("purchaseAccountToken") or "",
                 environment=chain["environment"], storeStatus=store_status,
