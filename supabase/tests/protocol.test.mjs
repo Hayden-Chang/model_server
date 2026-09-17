@@ -107,22 +107,45 @@ test('v2 state schema rejects missing or invalid v2 fields and the v1 write path
   const valid=new Ajv({strict:false,validateFormats:false}).compile(schema);
   const vectors=JSON.parse(await readFile(new URL('../protocol/v2/golden.json',import.meta.url),'utf8'));
   const base=structuredClone(vectors[1].state);
+  // The vectors dropped puzzle, so the legacy edits below re-attach a valid object first.
+  const legacy=()=>{const s=structuredClone(base);s.puzzle={fragments:7,rewardedTaskIDs:[s.tasks[0].id],
+    unlockedArtworkIDs:['artwork-2026-001'],dayArtworkIDs:{'2026-09-08':'artwork-2026-001'},
+    completedTaskIDs:[s.tasks[0].id],works:[],celebratedDays:[],dayFinishState:null,automaticRandom:false};return s;};
   const edits=[
-    s=>s.schemaVersion=1,
-    s=>delete s.puzzle,
-    s=>s.puzzle.extraField=true,
-    s=>delete s.tasks[0].startReminder,
-    s=>s.tasks[0].startReminder='3',
-    s=>s.tasks[0].customColorHex='#12AB3',
-    s=>delete s.occurrences[1].overrides.startReminder,
-    s=>s.occurrences[1].overrides.customColorHex='#GGHHII',
-    s=>s.puzzle.fragments=-1,
-    s=>s.puzzle.automaticRandom=null,
-    s=>s.puzzle.works[0].imagePath=42,
-    s=>s.puzzle.dayArtworkIDs['2026-09-08']=null,
+    [()=>structuredClone(base),s=>s.schemaVersion=1],
+    [legacy,s=>s.puzzle.extraField=true],
+    [()=>structuredClone(base),s=>delete s.tasks[0].startReminder],
+    [()=>structuredClone(base),s=>s.tasks[0].startReminder='3'],
+    [()=>structuredClone(base),s=>s.tasks[0].customColorHex='#12AB3'],
+    [()=>structuredClone(base),s=>delete s.occurrences[1].overrides.startReminder],
+    [()=>structuredClone(base),s=>s.occurrences[1].overrides.customColorHex='#GGHHII'],
+    [legacy,s=>s.puzzle.fragments=-1],
+    [legacy,s=>s.puzzle.automaticRandom=null],
+    [legacy,s=>s.puzzle.dayArtworkIDs['2026-09-08']=null],
   ];
-  for(const edit of edits){const state=structuredClone(base);edit(state);assert.equal(valid(state),false,edit.toString());}
+  for(const [source,edit] of edits){const state=source();edit(state);assert.equal(valid(state),false,edit.toString());}
+  // The v1 write path reads only the v1 cloud-state row, so v2 data is still rejected
+  // there. Whoever wires v2 contract dispatch must revisit this expectation.
   await assert.rejects(check(base),/payloadInvalid/);
+});
+test('v2 cloud-state accepts a state without puzzle, keeps accepting the legacy puzzle object, and the registered row no longer requires it',async()=>{
+  const schema=JSON.parse(await readFile(new URL('../protocol/v2/cloud-state.schema.json',import.meta.url),'utf8'));
+  const valid=new Ajv({strict:false,validateFormats:false}).compile(schema);
+  const contract=(await db.admin.query("select schema from sync_private.contracts where name='cloud-state-v2'")).rows[0].schema;
+  const sql=async value=>(await db.admin.query('select sync_private.matches_schema($1,$2,$2) as valid',[value,contract])).rows[0].valid;
+  const vectors=JSON.parse(await readFile(new URL('../protocol/v2/golden.json',import.meta.url),'utf8'));
+  assert.equal(contract.required.includes('puzzle'),false);
+  for(const state of [vectors[0].state,vectors[1].state]) {
+    assert.equal('puzzle' in state,false,'vector must not carry puzzle');
+    assert.equal(valid(state),true,JSON.stringify(valid.errors));
+    assert.equal(await sql(state),true);
+  }
+  const legacy=structuredClone(vectors[1].state);
+  legacy.puzzle={fragments:7,rewardedTaskIDs:[legacy.tasks[0].id],unlockedArtworkIDs:['artwork-2026-001'],
+    dayArtworkIDs:{'2026-09-08':'artwork-2026-001'},completedTaskIDs:[legacy.tasks[0].id],works:[],celebratedDays:[],
+    dayFinishState:null,automaticRandom:false};
+  assert.equal(valid(legacy),true,JSON.stringify(valid.errors));
+  assert.equal(await sql(legacy),true);
 });
 test('v2 operation contract keeps all v1 kinds, adds puzzle.applyChanges, and rejects blind puzzle replacement',async()=>{
   const contract=JSON.parse(await readFile(new URL('../protocol/v2/operation.schema.json',import.meta.url),'utf8'));

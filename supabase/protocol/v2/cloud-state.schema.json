@@ -1,5 +1,5 @@
 {
-  "description": "DayMosaic cloud state, schema version 2. Extends v1 with the puzzle object, per-task startReminder and customColorHex. Everything else, including canonical JSON rules (keys sorted by Unicode code point, no whitespace, integers without fractional part, null keys written and never omitted, top-level arrays ascending by primary entity id, repeatWeekdays ascending duplicate-free, segments by (startSlot, endSlot, id)) and the sha256: canonical hash, is unchanged from v1.",
+  "description": "DayMosaic cloud state, schema version 2. Extends v1 with the puzzle object, per-task startReminder and customColorHex. The top-level puzzle object is legacy-only since migration 202609170018: it stays accepted for states written by clients that still carry it, but it is no longer required and newer clients do not write it, so puzzle progress stays local to each device. Everything else, including canonical JSON rules (keys sorted by Unicode code point, no whitespace, integers without fractional part, null keys written and never omitted, top-level arrays ascending by primary entity id, repeatWeekdays ascending duplicate-free, segments by (startSlot, endSlot, id)) and the sha256: canonical hash, is unchanged from v1.",
   "type": "object",
   "properties": {
     "schemaVersion": {
@@ -51,6 +51,7 @@
       ]
     },
     "puzzle": {
+      "description": "Legacy-only: accepted for backward compatibility with states written before puzzle progress left multi-device sync, and still fully validated when present. No longer required, and newer clients do not write it; puzzle progress stays local to each device.",
       "$ref": "#/$defs/puzzle"
     }
   },
@@ -61,8 +62,7 @@
     "scheduledTasks",
     "externalEvents",
     "focusSessions",
-    "activeFocusSessionID",
-    "puzzle"
+    "activeFocusSessionID"
   ],
   "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -676,7 +676,7 @@
       "description": "Per-day finish state payload. Deliberately loose in v2: the client's final structure is not settled yet, so any keys are accepted. It must be tightened into explicit properties (with unknown keys rejected) before v2 data is written by the migrate path; until then treat unknown content as opaque."
     },
     "puzzle": {
-      "description": "Puzzle game progress. Canonical encoding of its inner arrays, which encoders must emit before hashing and validators may rely on: rewardedTaskIDs, unlockedArtworkIDs, completedTaskIDs and celebratedDays are ascending and duplicate-free; works ascend by day with at most one entry per day; works[].tasks ascend by id; works[].tasks[].slots ascend as integers. dayArtworkIDs keys are YYYY-MM-DD dates and follow the normal object key ordering. rewardedTaskIDs and completedTaskIDs hold task UUIDs.",
+      "description": "Puzzle game progress. Optional at the top level since migration 202609170018; when a state carries this object it is validated exactly as before. Canonical encoding of its inner arrays, which encoders must emit before hashing and validators may rely on: rewardedTaskIDs, unlockedArtworkIDs, completedTaskIDs and celebratedDays are ascending and duplicate-free; works ascend by day with at most one entry per day; works[].tasks ascend by id; works[].tasks[].slots ascend as integers. dayArtworkIDs keys are YYYY-MM-DD dates and follow the normal object key ordering. rewardedTaskIDs and completedTaskIDs hold task UUIDs.",
       "type": "object",
       "properties": {
         "fragments": {
