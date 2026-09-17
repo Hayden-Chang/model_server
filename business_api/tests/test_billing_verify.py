@@ -218,6 +218,19 @@ def test_reference_encryption_roundtrip(configuration):
         decrypt_reference(os.urandom(32), blob)
 
 
+def test_purchase_path_stores_the_encrypted_original_transaction_id(certs, configuration):
+    # The storeReferenceCiphertext contract both paths must satisfy: the column
+    # holds encrypt_reference(_reference_key_bytes(settings),
+    # originalTransactionId), never a raw JWS. The purchase path was correct but
+    # unpinned, which is how the webhook path's divergence went unnoticed; the
+    # symmetric webhook-path assertion lives in test_billing_worker.py.
+    backend = FakeBackend()
+    _verify(certs, backend, FakeApple())
+    stored = backend.calls[0][2]["storeReferenceCiphertext"]
+    key = base64.b64decode(configuration.store_reference_key.get_secret_value())
+    assert decrypt_reference(key, stored) == "123"
+
+
 def test_product_mismatch_fails(certs, configuration):
     body = type("Body", (), {"signed_transaction": _jws_token(certs, product=PRODUCT),
                              "product_id": "com.hayden.daymosaic.plus.yearly",
