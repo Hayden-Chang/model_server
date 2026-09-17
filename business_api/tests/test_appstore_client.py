@@ -54,7 +54,13 @@ def test_configured_app_store_hosts_exist():
         except socket.gaierror as error:  # pragma: no cover - only on a typo
             pytest.fail(f"{constant} host does not resolve: {host} ({error})")
 
-NOW = datetime(2026, 9, 11, 12, 0, 0, tzinfo=timezone.utc)
+# Evaluation time for the generated chain. It must track the clock, not a
+# frozen instant: the leaf below is valid for +/-1 day around it, so a hardcoded
+# date silently turns every JWS-checking test in this file red once a day passes.
+# That is exactly what happened -- the constant was pinned to 2026-09-11 while
+# the suite ran on 2026-09-17, so the whole file failed with CERTIFICATE_EXPIRED
+# and a real client bug stayed invisible behind the noise.
+NOW = datetime.now(timezone.utc)
 KEY_ID = "H26PU75Z9S"
 ISSUER_ID = "b24fefbf-30af-43f3-8523-8f2e5c8f8c74"
 BUNDLE_ID = "com.hayden.timefragment"
@@ -223,14 +229,41 @@ def test_client_rejects_unknown_environment():
                                 issuer_id="i", bundle_id=BUNDLE_ID)
 
 
+def _status_response(certs, *, original_transaction_id, status=1, expires_date=1789660474000,
+                     environment="Sandbox", group="22375966"):
+    """Build a realistic StatusResponse.
+
+    The shape is the point: this endpoint returns a container with
+    data[].lastTransactions[], each entry carrying a status code and a
+    signedTransactionInfo JWS. An earlier version of these tests mocked a
+    top-level "signedPayload" -- the shape used by
+    /inApps/v1/transactions/{id} -- so they passed while the real client could
+    not parse a single response in either environment.
+    """
+    transaction = {"originalTransactionId": original_transaction_id,
+                   "productId": "com.hayden.daymosaic.plus.monthly",
+                   "expiresDate": expires_date}
+    return {
+        "environment": environment,
+        "bundleId": "com.hayden.timefragment",
+        "data": [{
+            "subscriptionGroupIdentifier": group,
+            "lastTransactions": [{
+                "originalTransactionId": original_transaction_id,
+                "status": status,
+                "signedTransactionInfo": _build_jws(transaction, certs, certs.leaf_certificate),
+            }],
+        }],
+    }
+
+
 def test_subscription_status_verifies_and_returns_payload(certs):
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
         seen["authorization"] = request.headers["Authorization"]
-        payload = {"environment": "Sandbox", "originalTransactionId": "123"}
-        return httpx.Response(200, json={"signedPayload": _build_jws(payload, certs, certs.leaf_certificate)})
+        return httpx.Response(200, json=_status_response(certs, original_transaction_id="123"))
 
     client = _make_client(certs, handler=handler)
 
@@ -240,18 +273,22 @@ def test_subscription_status_verifies_and_returns_payload(certs):
         finally:
             await client.aclose()
 
-    payload = asyncio.run(run())
-    assert payload["originalTransactionId"] == "123"
+    status = asyncio.run(run())
     assert seen["url"].startswith(APPLE_SANDBOX_URL + "/inApps/v1/subscriptions/123")
     assert seen["authorization"].startswith("Bearer ")
+    # The caller reads (status, expiresDate) straight out of this shape, so
+    # assert through it rather than on the container we build. Derive the
+    # expected instant instead of hardcoding it, so the test cannot drift.
+    from app.billing_verify import _iso_millis, subscription_state
+    assert subscription_state(status, "123") == ("active", _iso_millis(1789660474000))
 
 
 def test_subscription_status_detects_environment_mismatch(certs):
     def handler(request: httpx.Request) -> httpx.Response:
-        payload = {"environment": "Sandbox", "originalTransactionId": "123"}
-        return httpx.Response(200, json={"signedPayload": _build_jws(payload, certs, certs.leaf_certificate)})
+        return httpx.Response(200, json=_status_response(
+            certs, original_transaction_id="123", environment="Production"))
 
-    client = _make_client(certs, environment="production", handler=handler)
+    client = _make_client(certs, environment="sandbox", handler=handler)
 
     async def run():
         try:
