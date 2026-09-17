@@ -28,6 +28,20 @@ services:
       TIME_FRAGMENT_TOKEN_TTL_SECONDS: ${TIME_FRAGMENT_TOKEN_TTL_SECONDS:-2592000}
       TIME_FRAGMENT_GUEST_QUOTA_LIMIT: ${TIME_FRAGMENT_GUEST_QUOTA_LIMIT:-30}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      # This service owns POST /billing/apple/verify, which decodes the JWS and
+      # calls the App Store Server API, so it needs the same Apple credentials as
+      # the worker. Omitting them made every purchase fail closed with
+      # BILLING_NOT_CONFIGURED (503) while StoreKit had already charged the user.
+      APPLE_ENVIRONMENT: ${APPLE_ENVIRONMENT:-sandbox}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-}
+      APPLE_ISSUER_ID: ${APPLE_ISSUER_ID:-}
+      APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-com.hayden.timefragment}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      # Path form, because the key is delivered as a file on the host and
+      # docker compose does not expand $(cat …) in .env. resolve_apple_key_p8
+      # prefers this over the inline value.
+      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-}
+      STORE_REFERENCE_KEY: ${STORE_REFERENCE_KEY:?STORE_REFERENCE_KEY is required}
     expose: ["8000"]
     read_only: true
     tmpfs: [/tmp]
@@ -35,6 +49,9 @@ services:
       # SQLite is in WAL mode, so the importer and reverse exporter need a
       # writable mount even though the running API never writes to this volume.
       - model-server-usage:/var/lib/model-server
+      # Read-only: Apple signing key. Without this mount APPLE_PRIVATE_KEY_PATH
+      # points at a host path the container cannot see.
+      - ./.secrets:/opt/model_server/.secrets:ro
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=20)"]
       interval: 30s
@@ -54,6 +71,9 @@ services:
       APPLE_ISSUER_ID: ${APPLE_ISSUER_ID:-}
       APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-com.hayden.timefragment}
       APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      # See time-fragment-api: the host ships the key as a file, and the
+      # container needs the mount below to read it.
+      APPLE_PRIVATE_KEY_PATH: ${APPLE_PRIVATE_KEY_PATH:-}
       STORE_REFERENCE_KEY: ${STORE_REFERENCE_KEY:?STORE_REFERENCE_KEY is required}
       PLANNING_INTERNAL_SECRET: ${PLANNING_INTERNAL_SECRET:?PLANNING_INTERNAL_SECRET is required}
       TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
@@ -61,6 +81,10 @@ services:
       BILLING_WORKER_INTERVAL_SECONDS: ${BILLING_WORKER_INTERVAL_SECONDS:-300}
     read_only: true
     tmpfs: [/tmp]
+    volumes:
+      # Read-only: the worker runs webhook processing and reconcile, both of
+      # which sign App Store Server API requests with the same key.
+      - ./.secrets:/opt/model_server/.secrets:ro
 
   # Opt-in one-off for the emergency rollback: writable legacy volume and only
   # the two credentials the reverse export needs. It never publishes a port.
