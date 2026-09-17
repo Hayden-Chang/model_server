@@ -47,6 +47,13 @@ node scripts/build-contract.mjs
 node scripts/build-contract.mjs --check
 ```
 
+Each protocol version directory emits only its newest revision. Once a revision is
+deployed it stays frozen in the migration that applied it; a later revision of the
+same directory is written to a new migration with an idempotent re-registration
+(`insert ... on conflict (name) do update set schema = excluded.schema`), so the
+file is correct both on a fresh database and on an already deployed one. Migrations
+already applied are never rewritten or regenerated.
+
 Once a migration is deployed, add a new migration; do not rewrite applied files.
 The contract generator rejects keywords unsupported by the restricted SQL
 validator. V1 remains the only schema accepted by any write path: v2 contract
@@ -54,6 +61,14 @@ files are registered under the `cloud-state-v2`/`operation-v2` contract names,
 but no RPC reads them yet. The checkpointed, CAS-protected `migrate_sync_state`
 RPC that must exist before v2 state can be stored is a separate upcoming change;
 until it lands, writing v2 with an ordinary op is impossible by design.
+
+Puzzle progress left multi-device sync scope, so `puzzle` is no longer a required
+top-level property of the v2 cloud-state: migration `202609170018` re-registers
+`cloud-state-v2` with `puzzle` removed from `required`. The `puzzle` property and
+its `$defs` stay in the schema, because `additionalProperties` is still `false`:
+states that still carry the old object keep validating, while a state without it
+is now legal. The v2 operation contract keeps `puzzle.applyChanges` unchanged, so
+clients and fixtures pinned to the published operation kinds are unaffected.
 
 ## Local Supabase and hosted deployment
 
