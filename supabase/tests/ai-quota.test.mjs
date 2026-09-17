@@ -114,9 +114,9 @@ test('refund and expiry decrement once; stale attempts cannot finish a replaceme
 test('active plus entitlement grants the member daily pool in the account timezone',async()=>{
   const a=await account();
   await db.admin.query(
-    `insert into billing_private.account_entitlements(user_id,plan,status,account_timezone)
+    `insert into billing_private.account_entitlements(principal,plan,status,account_timezone)
       values($1,'plus','active','Asia/Shanghai')
-      on conflict (user_id) do update set plan='plus',status='active'`,[a.user.id]);
+      on conflict (principal) do update set plan='plus',status='active'`,[a.principal]);
   await db.admin.query(
     `insert into ai_private.principals(id,user_id,support_code,free_limit)
       values($1,$2,'TF-MEMBER-01',50) on conflict (id) do nothing`,[a.principal,a.user.id]);

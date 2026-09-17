@@ -1,140 +1,298 @@
 import test, {before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID, createHash} from 'node:crypto';
 import {database} from './database.mjs';
 
 let db;
 before(async () => { db=await database(); });
 after(async () => { await db?.close(); });
 
-const TABLES = ['store_purchases','billing_claims','billing_events','account_entitlements'];
+const TABLES = ['store_purchases','billing_claims','billing_events','account_entitlements','purchase_devices'];
 
-async function account() {
-  const user=await db.account(); const device=await user.device();
-  return {principal:'account:'+user.id, sessionID:device.session, device, user};
+const PRODUCT_MONTHLY='com.hayden.daymosaic.plus.monthly';
+const PRODUCT_YEARLY='com.hayden.daymosaic.plus.yearly';
+
+// Device principals are the existing guest_* shape (product decision D1). In
+// production POST /api/auth/guest derives the principal from the device_id and
+// creates the ai_private.principals row as a side effect; these tests call the
+// RPC directly, so they create that row themselves and pass the principal.
+async function device() {
+  const value=createHash('sha256').update(randomUUID()).digest('hex');
+  const principal='guest_'+value.slice(0,24);
+  await db.admin.query(
+    `insert into ai_private.principals(id,support_code,free_limit)
+      values($1,$2,30) on conflict (id) do nothing`,[principal,'TF-'+value.slice(24,32)]);
+  return {principal};
 }
 const billingRpc=(action,data={})=>db.rpc(null,'billing_service',[action,data],'service_role');
-const PRODUCT_MONTHLY='com.hayden.daymosaic.plus.monthly';
+const claimToken=async(d)=>{
+  const claim=await billingRpc('claim_register',{principal:d.principal,provider:'apple',
+    productId:PRODUCT_MONTHLY,claimId:randomUUID()});
+  return claim.appAccountToken;
+};
+function verify(principal,{transaction,token,productId=PRODUCT_MONTHLY,status='active',
+  expiresAt='2026-12-01T00:00:00.000Z',environment='sandbox',claimId=null,bindDevice}={}){
+  return billingRpc('apple_verify',{principal,originalTransactionId:transaction,productId,
+    storeStatus:status,expiresAt,environment,storeReferenceCiphertext:'cipher',
+    appAccountToken:token,claimId,...(bindDevice===undefined?{}:{bindDevice})});
+}
+// Join `count` devices to one chain. The first device creates the chain and
+// mints the appAccountToken; the others present the receipt carrying that same
+// token, which is what a restored purchase on a second device looks like.
+async function join(transaction,count){
+  const members=[];
+  for(let i=0;i<count;i++){
+    const d=await device();
+    const token=members.length?members[0].token:await claimToken(d);
+    const result=await verify(d.principal,{transaction,token});
+    members.push({...d,token,result});
+  }
+  return members;
+}
+const keyHash=t=>createHash('sha256').update('apple|'+t).digest('hex');
+const chainOf=async t=>(await db.admin.query(
+  `select id,principal,product_id,store_status,expires_at from billing_private.store_purchases
+    where purchase_key_hash=$1`,[keyHash(t)])).rows;
+const deviceRows=async id=>(await db.admin.query(
+  `select principal,revoked_at from billing_private.purchase_devices
+    where purchase_id=$1 order by bound_at,principal`,[id])).rows;
+const activeDevices=async id=>(await db.admin.query(
+  `select count(*)::int n from billing_private.purchase_devices
+    where purchase_id=$1 and revoked_at is null`,[id])).rows[0].n;
+const entitlementOf=async principal=>(await db.admin.query(
+  `select plan,status,valid_until,entitlement_revision from billing_private.account_entitlements
+    where principal=$1`,[principal])).rows[0];
 
-test('billing service rejects guests and unprivileged roles',async()=>{
-  const guest='guest_'+'a'.repeat(24);
-  assert.equal((await billingRpc('entitlement',{principal:guest,sessionID:randomUUID()})).code,'ACCOUNT_REQUIRED');
-  const a=await account();
+test('billing service requires a device principal and denies unprivileged roles',async()=>{
+  const d=await device();
+  assert.equal((await billingRpc('entitlement',{principal:d.principal})).plan,'free');
+  // A Time Fragment account session is not a billing principal any more.
+  const account='account:'+randomUUID();
+  for(const action of ['entitlement','claim_register','claim_get','apple_verify']){
+    assert.equal((await billingRpc(action,{principal:account,claimId:randomUUID()})).code,'DEVICE_REQUIRED',action);
+  }
+  // A well-formed but never-seen device principal is refused too: the principal
+  // row is created by /api/auth/guest, not by this RPC.
+  assert.equal((await billingRpc('entitlement',{principal:'guest_'+'0'.repeat(24)})).code,'DEVICE_REQUIRED');
+  const user=await db.account(); const session=await user.device();
   for(const role of ['anon','authenticated']){
-    await assert.rejects(db.rpc(a.device,'billing_service',['entitlement',{principal:a.principal}],role),/permission denied/);
+    await assert.rejects(db.rpc(session,'billing_service',['entitlement',{principal:d.principal}],role),/permission denied/);
   }
 });
 
-test('unavailable accounts cannot read billing state',async()=>{
-  const noSession=await account();
-  await db.admin.query('delete from auth.sessions where id=$1',[noSession.sessionID]);
-  assert.equal((await billingRpc('entitlement',{principal:noSession.principal,sessionID:noSession.sessionID})).code,'ACCOUNT_UNAVAILABLE');
-  const pending=await account();
-  await db.admin.query('insert into sync_private.accounts(user_id,deletion_pending) values($1,true)',[pending.user.id]);
-  assert.equal((await billingRpc('entitlement',{principal:pending.principal,sessionID:pending.sessionID})).code,'ACCOUNT_UNAVAILABLE');
+test('apple verify returns ACCOUNT_TOKEN_UNKNOWN instead of raising on a bad token',async()=>{
+  const d=await device();
+  const attempt=data=>billingRpc('apple_verify',{principal:d.principal,originalTransactionId:'bad-token',
+    productId:PRODUCT_MONTHLY,environment:'sandbox',storeStatus:'active',...data});
+  // The receipt may carry no appAccountToken at all, and '' must not reach the
+  // ::uuid cast.
+  assert.equal((await attempt({})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await attempt({appAccountToken:''})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await attempt({appAccountToken:'not-a-uuid'})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await attempt({appAccountToken:randomUUID()})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await billingRpc('account_by_token',{appAccountToken:'not-a-uuid'})).code,'ACCOUNT_TOKEN_UNKNOWN');
 });
 
-test('claim registration is idempotent with a stable per-account token',async()=>{
-  const a=await account(); const claimId=randomUUID();
-  const first=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+test('claim registration is idempotent with a stable per-device token',async()=>{
+  const a=await device(); const claimId=randomUUID();
+  const first=await billingRpc('claim_register',{principal:a.principal,
     provider:'apple',productId:PRODUCT_MONTHLY,claimId});
   assert.equal(first.claimId,claimId);
   assert.equal(/^[0-9a-f-]{36}$/.test(first.appAccountToken),true);
-  const second=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
+  const second=await billingRpc('claim_register',{principal:a.principal,
     provider:'apple',productId:PRODUCT_MONTHLY,claimId});
   assert.equal(second.appAccountToken,first.appAccountToken);
   assert.equal(second.expiresAt,first.expiresAt);
-  const sameClaimOtherProduct=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
-    provider:'apple',productId:'com.hayden.daymosaic.plus.yearly',claimId});
+  const sameClaimOtherProduct=await billingRpc('claim_register',{principal:a.principal,
+    provider:'apple',productId:PRODUCT_YEARLY,claimId});
   assert.equal(sameClaimOtherProduct.code,'CLAIM_CONFLICT');
-  const other=await account();
-  const otherAccountSameClaim=await billingRpc('claim_register',{principal:other.principal,sessionID:other.sessionID,
+  const other=await device();
+  const otherDeviceSameClaim=await billingRpc('claim_register',{principal:other.principal,
     provider:'apple',productId:PRODUCT_MONTHLY,claimId});
-  assert.equal(otherAccountSameClaim.code,'CLAIM_CONFLICT');
-  const status=await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,claimId});
+  assert.equal(otherDeviceSameClaim.code,'CLAIM_CONFLICT');
+  const status=await billingRpc('claim_get',{principal:a.principal,claimId});
   assert.equal(status.status,'pending');
-  assert.equal((await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,
+  assert.equal((await billingRpc('claim_get',{principal:a.principal,
     claimId:randomUUID()})).code,'CLAIM_NOT_FOUND');
+  // A claim belongs to the device that registered it.
+  const foreign=await billingRpc('claim_get',{principal:other.principal,claimId});
+  assert.equal(foreign.code,'CLAIM_CONFLICT');
+});
+
+test('claim registration mints a claim id when the client omits one',async()=>{
+  // First purchase and the retry after a cancel both omit claimId, so the RPC
+  // must mint one instead of failing the NOT NULL primary key.
+  for(const claimId of [null,undefined]){
+    const a=await device();
+    const claim=await billingRpc('claim_register',{principal:a.principal,
+      provider:'apple',productId:PRODUCT_MONTHLY,claimId});
+    assert.equal(/^[0-9a-f-]{36}$/.test(claim.claimId),true,JSON.stringify(claim));
+    assert.equal(/^[0-9a-f-]{36}$/.test(claim.appAccountToken),true);
+    const status=await billingRpc('claim_get',{principal:a.principal,claimId:claim.claimId});
+    assert.equal(status.status,'pending');
+    const result=await verify(a.principal,{transaction:'claim-'+claim.claimId,
+      token:claim.appAccountToken,claimId:claim.claimId});
+    assert.equal(result.plan,'plus');
+    assert.equal((await billingRpc('claim_get',{principal:a.principal,claimId:claim.claimId})).status,'verified');
+  }
 });
 
 test('entitlement defaults to the free pool and mirrors the AI ledger',async()=>{
-  const a=await account();
-  const entitlement=await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
+  const a=await device();
+  const entitlement=await billingRpc('entitlement',{principal:a.principal});
   assert.equal(entitlement.plan,'free');
   assert.equal(entitlement.status,'expired');
   assert.equal(entitlement.entitlementRevision,0);
   assert.equal(entitlement.aiQuota.limit,30);
   assert.equal(entitlement.aiQuota.remaining,30);
   assert.deepEqual(entitlement.billingSources,[]);
-  await db.admin.query(
-    `insert into ai_private.principals(id,user_id,support_code,free_limit)
-      values($1,$2,'TF-BILL-TEST',50) on conflict (id) do nothing`,
-    [a.principal,a.user.id]);
+  await db.admin.query(`update ai_private.principals set free_limit=50 where id=$1`,[a.principal]);
   await db.admin.query(
     `insert into ai_private.buckets(principal,period,used) values($1,'free',21)
       on conflict (principal,period) do update set used=excluded.used`,[a.principal]);
-  const after=await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
+  const after=await billingRpc('entitlement',{principal:a.principal});
   assert.equal(after.aiQuota.used,21);
   assert.equal(after.aiQuota.limit,30,'legacy writes must be clamped to the current free limit');
   assert.equal(after.aiQuota.remaining,9);
 });
 
-test('apple verify binds the chain, aggregates plus and confirms the claim',async()=>{
-  const a=await account(); const claimId=randomUUID();
-  const claim=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
-    provider:'apple',productId:PRODUCT_MONTHLY,claimId});
-  const result=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
-    originalTransactionId:'900001',productId:PRODUCT_MONTHLY,appAccountToken:claim.appAccountToken,
-    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId});
+test('device cap case 1: the first device creates the chain and gets plus',async()=>{
+  const d1=await device();
+  const claim=await billingRpc('claim_register',{principal:d1.principal,
+    provider:'apple',productId:PRODUCT_MONTHLY,claimId:randomUUID()});
+  const result=await verify(d1.principal,{transaction:'cap-1',token:claim.appAccountToken,claimId:claim.claimId});
   assert.equal(result.plan,'plus');
   assert.equal(result.status,'active');
-  assert.equal(result.entitlementRevision,1);
   assert.equal(result.validUntil,'2026-12-01T00:00:00.000Z');
   assert.equal(result.billingSources.length,1);
-  assert.equal(result.billingSources[0].provider,'apple');
-  assert.equal(result.billingSources[0].productId,PRODUCT_MONTHLY);
-  const status=await billingRpc('claim_get',{principal:a.principal,sessionID:a.sessionID,claimId});
-  assert.equal(status.status,'verified');
-  const chain=(await db.admin.query(
-    `select user_id,store_status from billing_private.store_purchases
-      where purchase_key_hash=$1`,[status.purchaseKeyHash])).rows;
-  assert.equal(chain.length,1);
-  assert.equal(String(chain[0].user_id),a.user.id);
+  const chain=(await chainOf('cap-1'))[0];
+  assert.equal(chain.principal,d1.principal,'the creating device owns the chain');
+  assert.equal((await deviceRows(chain.id)).length,1);
+  assert.equal((await deviceRows(chain.id))[0].revoked_at,null);
+  assert.equal((await billingRpc('claim_get',{principal:d1.principal,claimId:claim.claimId})).status,'verified');
 });
 
-test('apple verify guards tokens, re-binding and updates expired chains',async()=>{
-  const a=await account(); const b=await account();
-  await billingRpc('entitlement',{principal:a.principal,sessionID:a.sessionID});
-  await billingRpc('entitlement',{principal:b.principal,sessionID:b.sessionID});
-  const tokenA=(await db.admin.query(
-    `select purchase_account_token from billing_private.account_entitlements where user_id=$1`,[a.user.id])).rows[0].purchase_account_token;
-  const tokenB=(await db.admin.query(
-    `select purchase_account_token from billing_private.account_entitlements where user_id=$1`,[b.user.id])).rows[0].purchase_account_token;
-  const bound=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
-    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
-    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId:null});
-  assert.equal(bound.plan,'plus');
-  assert.equal(bound.status,'active');
-  const mismatch=await billingRpc('apple_verify',{principal:b.principal,sessionID:b.sessionID,
-    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
-    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId:null});
-  assert.equal(mismatch.code,'ACCOUNT_MISMATCH');
-  const rebind=await billingRpc('apple_verify',{principal:b.principal,sessionID:b.sessionID,
-    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenB,
-    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId:null});
-  assert.equal(rebind.code,'TRANSACTION_ALREADY_BOUND');
-  const expired=await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
-    originalTransactionId:'900002',productId:PRODUCT_MONTHLY,appAccountToken:tokenA,
-    environment:'sandbox',storeStatus:'expired',expiresAt:'2026-09-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId:null});
-  assert.equal(expired.plan,'free');
-  assert.equal(expired.status,'expired');
-  assert.equal(expired.entitlementRevision,bound.entitlementRevision+1);
+test('device cap case 2: the second and third devices join and project their own plus',async()=>{
+  const m=await join('cap-2',3);
+  const chain=(await chainOf('cap-2'))[0];
+  for(const member of m) assert.equal(member.result.code,undefined,JSON.stringify(member.result));
+  assert.equal(await activeDevices(chain.id),3);
+  for(const member of m) assert.equal((await entitlementOf(member.principal)).plan,'plus');
+  // The projection is per principal, not per chain.
+  assert.equal(m[1].result.plan,'plus');
+  assert.equal(m[2].result.plan,'plus');
+  assert.equal(m[1].result.entitlementRevision,1);
 });
+
+test('device cap case 3: the fourth device is rejected and leaves no trace',async()=>{
+  const m=await join('cap-3',3);
+  const chain=(await chainOf('cap-3'))[0];
+  const d4=await device();
+  const result=await verify(d4.principal,{transaction:'cap-3',token:m[0].token});
+  assert.equal(result.code,'DEVICE_LIMIT_REACHED');
+  assert.equal(result.plan,undefined);
+  assert.equal((await deviceRows(chain.id)).length,3);
+  assert.equal((await deviceRows(chain.id)).some(row=>row.principal===d4.principal),false);
+  const entitlement=await entitlementOf(d4.principal);
+  assert.equal(entitlement.plan,'free','a rejected device must not receive a plus projection');
+  assert.equal(entitlement.entitlement_revision,'0');
+});
+
+test('device cap case 4: a repeated submission from a bound device is idempotent',async()=>{
+  const m=await join('cap-4',1);
+  const chain=(await chainOf('cap-4'))[0];
+  const again=await verify(m[0].principal,{transaction:'cap-4',token:m[0].token});
+  assert.equal(again.plan,'plus');
+  assert.equal(await activeDevices(chain.id),1);
+  assert.equal((await deviceRows(chain.id)).length,1);
+});
+
+test('device cap case 5: a revoked device may re-join and regains plus',async()=>{
+  const m=await join('cap-5',3);
+  const chain=(await chainOf('cap-5'))[0];
+  await db.admin.query(`update billing_private.purchase_devices set revoked_at=now()
+    where purchase_id=$1 and principal=$2`,[chain.id,m[0].principal]);
+  assert.equal(await activeDevices(chain.id),2);
+  await db.admin.query('select billing_private.aggregate_entitlement($1)',[m[0].principal]);
+  assert.equal((await entitlementOf(m[0].principal)).plan,'free','a revoked device loses plus');
+  const revived=await verify(m[0].principal,{transaction:'cap-5',token:m[0].token});
+  assert.equal(revived.plan,'plus','D3: a revoked device may re-join');
+  assert.equal(await activeDevices(chain.id),3);
+  const row=(await deviceRows(chain.id)).find(r=>r.principal===m[0].principal);
+  assert.equal(row.revoked_at,null);
+});
+
+test('device cap case 6: a revoked device cannot revive into a full chain',async()=>{
+  const m=await join('cap-6',3);
+  const chain=(await chainOf('cap-6'))[0];
+  await db.admin.query(`update billing_private.purchase_devices set revoked_at=now()
+    where purchase_id=$1 and principal=$2`,[chain.id,m[0].principal]);
+  assert.equal(await activeDevices(chain.id),2);
+  const d4=await device();
+  assert.equal((await verify(d4.principal,{transaction:'cap-6',token:m[0].token})).plan,'plus');
+  assert.equal(await activeDevices(chain.id),3,'the new device takes the freed slot');
+  // The quota check must trigger on a revive, not only on the first join: a naive
+  // 'if not found then' lets this call clear revoked_at and reach 4 active
+  // devices, growing by one on every later revoke/revive cycle.
+  const revive=await verify(m[0].principal,{transaction:'cap-6',token:m[0].token});
+  assert.equal(revive.code,'DEVICE_LIMIT_REACHED');
+  assert.equal(await activeDevices(chain.id),3,'the cap must not be exceeded by a revive');
+  const row=(await deviceRows(chain.id)).find(r=>r.principal===m[0].principal);
+  assert.notEqual(row.revoked_at,null,'a refused revive must leave revoked_at set');
+});
+
+test('device cap case 8: a bindDevice false service call never clears a revocation',async()=>{
+  const m=await join('cap-8',1);
+  const chain=(await chainOf('cap-8'))[0];
+  await db.admin.query(`update billing_private.purchase_devices set revoked_at=now()
+    where purchase_id=$1 and principal=$2`,[chain.id,m[0].principal]);
+  // billing_worker notifications and reconcile call apple_verify with
+  // bindDevice=false: they must still update the chain and re-aggregate, but
+  // never touch chain membership, or support bans would be undone silently.
+  const result=await verify(m[0].principal,{transaction:'cap-8',token:m[0].token,
+    status:'expired',expiresAt:'2026-09-01T00:00:00.000Z',bindDevice:false});
+  assert.equal(result.plan,'free');
+  assert.equal(result.status,'expired');
+  assert.equal((await chainOf('cap-8'))[0].store_status,'expired','the chain is still updated');
+  const row=(await deviceRows(chain.id)).find(r=>r.principal===m[0].principal);
+  assert.notEqual(row.revoked_at,null,'a service call must not revive a support-revoked device');
+  assert.equal(await activeDevices(chain.id),0);
+  // The same call cannot silently re-add a non-member either.
+  const stranger=await device();
+  const added=await verify(stranger.principal,{transaction:'cap-8',token:m[0].token,bindDevice:false});
+  assert.equal(added.plan,'free');
+  assert.equal((await deviceRows(chain.id)).length,1);
+});
+
+test('device cap case 9: a later joiner never rewrites chain ownership',async()=>{
+  const m=await join('cap-9',2);
+  const chain=(await chainOf('cap-9'))[0];
+  assert.equal(chain.principal,m[0].principal);
+  const again=await verify(m[1].principal,{transaction:'cap-9',token:m[0].token});
+  assert.equal(again.plan,'plus');
+  assert.equal((await chainOf('cap-9'))[0].principal,m[0].principal,
+    'reconcile resolves the chain through its original principal');
+});
+
+test('device cap case 10: a deleted account principal is rejected and not resurrected',async()=>{
+  const user=await db.account();
+  const principal='account:'+user.id;
+  await db.admin.query(`insert into ai_private.principals(id,user_id,support_code,free_limit)
+    values($1,$2,'TF-DELETED-01',30)`,[principal,user.id]);
+  await db.admin.query(`insert into billing_private.account_entitlements(principal,plan,status,valid_until)
+    values($1,'plus','active','2026-12-01T00:00:00Z')`,[principal]);
+  await db.admin.query('delete from auth.users where id=$1',[user.id]);
+  // Deleting the account cascades the account:<uuid> principal row away, which is
+  // what makes the billing gate fail closed instead of resurrecting the row.
+  assert.equal((await db.admin.query('select count(*)::int n from ai_private.principals where id=$1',[principal])).rows[0].n,0);
+  const result=await verify(principal,{transaction:'cap-10',token:await claimToken(await device())});
+  assert.equal(result.code,'DEVICE_REQUIRED');
+  const entitlement=await entitlementOf(principal);
+  assert.equal(entitlement.plan,'plus','the stored projection is left untouched, not recomputed');
+  assert.equal(entitlement.entitlement_revision,'0','the rejected call must not run ensure_account or aggregation');
+  assert.equal((await chainOf('cap-10')).length,0);
+});
+
 test('billing tables deny every role including service_role',async()=>{
   const a=await db.account();
   for(const table of TABLES){
@@ -147,31 +305,35 @@ test('billing tables deny every role including service_role',async()=>{
 
 test('purchase chain is unique per provider/environment/hash and survives account deletion',async()=>{
   const a=await db.account();
+  const owner='account:'+a.id;
   const key='h'.repeat(64);
   const insert=(environment,provider,product)=>db.admin.query(
     `insert into billing_private.store_purchases
-       (provider,environment,purchase_key_hash,store_reference_ciphertext,user_id,product_id,store_status)
-     values($1,$2,$3,'cipher',$4,$5,'active')`,[provider,environment,key,a.id,product]);
-  await insert('sandbox','apple','com.hayden.daymosaic.plus.monthly');
-  await assert.rejects(insert('sandbox','apple','com.hayden.daymosaic.plus.monthly'),/duplicate key/);
-  await insert('production','apple','com.hayden.daymosaic.plus.yearly');
-  await insert('sandbox','google','com.hayden.daymosaic.plus.yearly');
+       (provider,environment,purchase_key_hash,store_reference_ciphertext,principal,product_id,store_status)
+     values($1,$2,$3,'cipher',$4,$5,'active')`,[provider,environment,key,owner,product]);
+  await insert('sandbox','apple',PRODUCT_MONTHLY);
+  await assert.rejects(insert('sandbox','apple',PRODUCT_MONTHLY),/duplicate key/);
+  await insert('production','apple',PRODUCT_YEARLY);
+  await insert('sandbox','google',PRODUCT_YEARLY);
   await db.admin.query('delete from auth.users where id=$1',[a.id]);
   const rows=(await db.admin.query(
-    `select user_id from billing_private.store_purchases
+    `select principal from billing_private.store_purchases
       where purchase_key_hash=$1 and environment='sandbox' and provider='apple'`,[key])).rows;
   assert.equal(rows.length,1);
-  assert.equal(rows[0].user_id,null);
+  // The chain no longer has an auth.users FK to null the owner out; the account's
+  // principal row is gone instead, so the chain is unreachable and fails closed.
+  assert.equal(rows[0].principal,owner);
 });
 
 test('claim defaults to pending, status is constrained, entitlement defaults follow the contract',async()=>{
   const a=await db.account();
+  const owner='account:'+a.id;
   const claim=randomUUID();
   await db.admin.query(
     `insert into billing_private.billing_claims
-       (claim_id,user_id,provider,product_id,expected_account_identifier_hash,request_hash)
-     values($1,$2,'apple','com.hayden.daymosaic.plus.monthly',$3,$4)`,
-    [claim,a.id,'e'.repeat(64),'r'.repeat(64)]);
+       (claim_id,principal,provider,product_id,expected_account_identifier_hash,request_hash)
+     values($1,$2,'apple',$3,$4,$5)`,
+    [claim,owner,PRODUCT_MONTHLY,'e'.repeat(64),'r'.repeat(64)]);
   const rows=(await db.admin.query(
     'select status from billing_private.billing_claims where claim_id=$1',[claim])).rows;
   assert.equal(rows[0].status,'pending');
@@ -180,15 +342,25 @@ test('claim defaults to pending, status is constrained, entitlement defaults fol
   await assert.rejects(db.admin.query(
     `insert into billing_private.store_purchases
        (provider,environment,purchase_key_hash,store_reference_ciphertext,product_id,store_status,ack_attempts)
-     values('apple','production',$1,'cipher','com.hayden.daymosaic.plus.monthly','active',-1)`,
-    ['a'.repeat(64)]),/check constraint/);
+     values('apple','production',$1,'cipher',$2,'active',-1)`,
+    ['a'.repeat(64),PRODUCT_MONTHLY]),/check constraint/);
   const ent=(await db.admin.query(
-    'insert into billing_private.account_entitlements(user_id) values($1) returning *',[a.id])).rows[0];
+    'insert into billing_private.account_entitlements(principal) values($1) returning *',[owner])).rows[0];
   assert.equal(ent.plan,'free');
   assert.equal(ent.status,'expired');
   assert.equal(String(ent.entitlement_revision),'0');
   await assert.rejects(db.admin.query(
-    `insert into billing_private.account_entitlements(user_id,plan) values($1,'gold')`,[a.id]),/check constraint/);
+    `insert into billing_private.account_entitlements(principal,plan) values($1,'gold')`,[owner]),/check constraint/);
+  // chain membership is capped in the RPC, not by a shape check on the column:
+  // backfilled account chains legitimately carry account:<uuid> rows.
+  await db.admin.query(
+    `insert into billing_private.store_purchases
+       (provider,environment,purchase_key_hash,store_reference_ciphertext,product_id,store_status)
+     values('apple','production',$1,'cipher',$2,'active')`,['z'.repeat(64),PRODUCT_MONTHLY]);
+  await assert.rejects(db.admin.query(
+    `insert into billing_private.purchase_devices(purchase_id,principal)
+     values((select id from billing_private.store_purchases where purchase_key_hash=$1),'short')`,
+    ['z'.repeat(64)]),/check constraint/);
 });
 
 test('billing events dedupe by provider/environment/event id',async()=>{
@@ -206,8 +378,8 @@ test('billing events dedupe by provider/environment/event id',async()=>{
 });
 
 test('billing events dedupe, conflict on hash change and list for retry',async()=>{
-  const a=await account(); const eventId=randomUUID();
-  const receive=(hash)=>billingRpc('event_receive',{principal:'account:'+randomUUID(),
+  const eventId=randomUUID();
+  const receive=(hash)=>billingRpc('event_receive',{principal:'guest_'+'1'.repeat(24),
     provider:'apple',environment:'sandbox',eventId,payloadHash:hash,
     replayMaterialCiphertext:'signed-payload'});
   const first=await receive('p'.repeat(64));
@@ -215,31 +387,30 @@ test('billing events dedupe, conflict on hash change and list for retry',async()
   const dup=await receive('p'.repeat(64));
   assert.equal(dup.received,false);
   assert.equal((await receive('q'.repeat(64))).code,'EVENT_CONFLICT');
-  const mark=await billingRpc('event_mark',{principal:'account:'+randomUUID(),
+  const mark=await billingRpc('event_mark',{principal:'guest_'+'1'.repeat(24),
     provider:'apple',environment:'sandbox',eventId,status:'failed',
     lastErrorCode:'APP_STORE_UNAVAILABLE'});
   assert.equal(mark.updated,1);
-  const pending=await billingRpc('event_pending',{principal:'account:'+randomUUID(),maxAttempts:8,limit:20});
+  const pending=await billingRpc('event_pending',{principal:'guest_'+'1'.repeat(24),maxAttempts:8,limit:20});
   const row=pending.events.find(e=>e.eventId===eventId);
   assert.equal(row.attempts,1);
   assert.equal(row.replayMaterialCiphertext,'signed-payload');
-  await billingRpc('event_mark',{principal:'account:'+randomUUID(),
+  await billingRpc('event_mark',{principal:'guest_'+'1'.repeat(24),
     provider:'apple',environment:'sandbox',eventId,status:'processed'});
-  const drained=await billingRpc('event_pending',{principal:'account:'+randomUUID(),maxAttempts:8,limit:20});
+  const drained=await billingRpc('event_pending',{principal:'guest_'+'1'.repeat(24),maxAttempts:8,limit:20});
   assert.equal(drained.events.find(e=>e.eventId===eventId),undefined);
 });
 
-test('reconcile list exposes bound active chains with their account token',async()=>{
-  const a=await account();
-  const claim=await billingRpc('claim_register',{principal:a.principal,sessionID:a.sessionID,
-    provider:'apple',productId:PRODUCT_MONTHLY,claimId:randomUUID()});
-  await billingRpc('apple_verify',{principal:a.principal,sessionID:a.sessionID,
-    originalTransactionId:'900010',productId:PRODUCT_MONTHLY,appAccountToken:claim.appAccountToken,
-    environment:'sandbox',storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
-    storeReferenceCiphertext:'cipher',claimId:null});
-  const chains=(await billingRpc('reconcile_list',{principal:'account:'+randomUUID()})).chains;
-  const row=chains.find(c=>c.userId===a.user.id);
+test('reconcile list exposes bound active chains with their principal and token',async()=>{
+  const m=await join('reconcile-1',2);
+  const resolved=await billingRpc('account_by_token',{appAccountToken:m[0].token});
+  assert.equal(resolved.principal,m[0].principal);
+  assert.equal(resolved.userID,undefined,'the worker now receives a principal, not a user id');
+  const chains=(await billingRpc('reconcile_list',{principal:'guest_'+'2'.repeat(24)})).chains;
+  const row=chains.find(c=>c.principal===m[0].principal);
   assert.notEqual(row,undefined);
-  assert.equal(row.userId,a.user.id);
-  assert.equal(row.purchaseAccountToken,claim.appAccountToken);
+  assert.equal(row.purchaseAccountToken,m[0].token);
+  assert.equal(row.userId,undefined);
+  // The joining device is a member, not an owner, so it is not a chain to reconcile.
+  assert.equal(chains.find(c=>c.principal===m[1].principal),undefined);
 });

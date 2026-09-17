@@ -58,10 +58,10 @@ test('linked guests and account serialize the last free call and refunds',async(
   for(const p of actors)assert.equal((await reserve(p)).code,'AI_QUOTA_EXHAUSTED');
 });
 
-test('signed-out guest cannot inherit account membership or billing access',async()=>{
+test('signed-out guest reads its own billing projection and cannot inherit account membership',async()=>{
   const g=guest(),a=await account();await use(g,4);await claim(g,a);
-  await db.admin.query(`insert into billing_private.account_entitlements(user_id,plan,status)
-    values($1,'plus','active')`,[a.user.id]);
+  await db.admin.query(`insert into billing_private.account_entitlements(principal,plan,status)
+    values($1,'plus','active')`,[a.principal]);
   await use(a,3);
   assert.ok((await rpc('status',a)).period.startsWith('member:'));
   const status=await rpc('status',g);
@@ -69,8 +69,27 @@ test('signed-out guest cannot inherit account membership or billing access',asyn
   await use(g,1);
   assert.equal((await rpc('status',a)).used,3);
   assert.equal((await rpc('status',g)).used,5);
-  const denied=await db.rpc(null,'billing_service',['entitlement',g],'service_role');
-  assert.equal(denied.code,'ACCOUNT_REQUIRED');
+  // M4: the device principal may read its own projection, but it must not
+  // inherit the account's plus row.
+  const own=await db.rpc(null,'billing_service',['entitlement',{principal:g.principal}],'service_role');
+  assert.equal(own.plan,'free');
+  assert.equal(own.status,'expired');
+  assert.equal(own.aiQuota.limit,30);
+  assert.equal(own.aiQuota.used,5);
+});
+
+test('a device principal with a plus projection gets the member period',async()=>{
+  const g=guest();await use(g,2);
+  await db.admin.query(`insert into billing_private.account_entitlements(principal,plan,status,account_timezone)
+    values($1,'plus','active','Asia/Shanghai')`,[g.principal]);
+  const status=await rpc('status',{...g,memberLimit:30});
+  // Before M4 quota_status only resolved membership for principals with a
+  // user_id, so a paying device silently stayed on the free tier.
+  assert.equal(status.period.startsWith('member:'),true,JSON.stringify(status));
+  assert.equal(status.limit,30);
+  assert.ok(status.resetsAt.endsWith('+08:00'));
+  const billing=await db.rpc(null,'billing_service',['entitlement',{principal:g.principal}],'service_role');
+  assert.equal(billing.plan,'plus');
 });
 
 test('linked request replay is rejected across login changes',async()=>{
@@ -108,7 +127,9 @@ test('account deletion leaves guest usage and replay protection intact',async()=
 
 test('billing free quota reflects signed-out guest consumption',async()=>{
   const g=guest(),a=await account();await claim(g,a);await use(g,3);await use(a,2);
-  const result=await db.rpc(null,'billing_service',['entitlement',{principal:a.principal,sessionID:a.sessionID}],'service_role');
+  // The free pool is shared, so the device principal must read the same
+  // consumption the AI ledger recorded.
+  const result=await db.rpc(null,'billing_service',['entitlement',{principal:g.principal}],'service_role');
   assert.equal(result.aiQuota.used,5);assert.equal(result.aiQuota.remaining,25);
 });
 
