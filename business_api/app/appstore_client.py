@@ -214,13 +214,38 @@ class AppStoreServerAPIClient:
             raise AppStoreRejected(response.status_code)
         try:
             envelope = response.json()
-            signed_payload = envelope["signedPayload"]
-            if not isinstance(signed_payload, str):
+            groups = envelope["data"]
+            if not isinstance(groups, list):
                 raise ValueError
         except (ValueError, KeyError, TypeError) as error:
             raise AppStoreUnavailable("malformed apple status response") from error
-        payload = verify_apple_jws(signed_payload, pinned_roots=self.pinned_roots)
-        environment = str(payload.get("environment", "")).lower()
+        # The environment is a top-level field of StatusResponse, not part of
+        # any JWS, so it is read from the envelope.
+        environment = str(envelope.get("environment", "")).lower()
         if environment and environment != self.environment:
             raise AppStoreEnvironmentMismatch(environment)
-        return payload
+        # StatusResponse is a container, not a JWS: the authoritative data is
+        # data[].lastTransactions[], and each entry carries a status code plus a
+        # signedTransactionInfo JWS. The previous implementation read a top-level
+        # "signedPayload" and returned subscriptionGroupIdentifierItems, which
+        # belong to /inApps/v1/transactions/{id}; this endpoint has neither, so
+        # every lookup raised "malformed apple status response".
+        items = []
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            for entry in group.get("lastTransactions") or []:
+                if not isinstance(entry, dict):
+                    continue
+                # Verify rather than trust: the status code is what we act on,
+                # so a tampered envelope must not be able to set it. A failure
+                # surfaces as JWSVerificationFailed for the caller to handle.
+                signed_transaction = entry.get("signedTransactionInfo")
+                transaction = (verify_apple_jws(signed_transaction, pinned_roots=self.pinned_roots)
+                               if isinstance(signed_transaction, str) else {})
+                items.append({
+                    "status": entry.get("status"),
+                    "originalTransactionId": entry.get("originalTransactionId"),
+                    "expiresDate": transaction.get("expiresDate"),
+                })
+        return {"subscriptionGroupIdentifierItems": [{"subscriptionItems": items}]}
