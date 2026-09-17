@@ -11,11 +11,26 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 | Route | Credential | Behavior |
 | --- | --- | --- |
 | `POST /api/auth/guest` | installation ID | Existing guest token response, including after account sign-out. |
-| `POST /api/plan/parse` | guest or account | Existing V2 input/output; linked identities cannot execute the same request ID twice. |
+| `POST /api/plan/parse` | guest only | Existing V2 input/output; linked identities cannot execute the same request ID twice. An account token is refused with `401 DEVICE_REQUIRED` before any quota is reserved. |
 | `GET /api/account/quota` | guest or account | `supportCode`, `limit`, `used`, `remaining`. |
 | `POST /api/account/claim-guest` | account | Body `{"guest_token":"…"}`; verify both credentials and merge free usage by maximum. |
 | `GET/POST /api/development/membership` | allowlisted guest | Existing development toggle and 50/day Shanghai quota; not a paid subscription. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
+
+The AI route is device-metered. Membership resolves by principal identity
+(`202609170017_device_principal_billing.sql`), an account session resolves to
+`account:<uuid>`, and every entitlement-writing action requires the device
+principal, so that account principal cannot carry Plus. Charging it would spend the
+account's lifetime free pool on behalf of a paying member.
+`/api/plan/parse` therefore accepts only the guest token: an account token gets
+`401` with code `DEVICE_REQUIRED` before the `reserve` action runs, so the rejected
+attempt consumes no quota. The shipped client retries this route's `401` with its
+guest token (the catch in `AIPlanningClient.authenticatedSend` checks only
+`failure.status == 401`), so the refusal costs one extra round trip until the
+companion client release stops sending the account token; if the account token is
+refreshed between those two attempts the client keeps using the account token and
+that request fails instead of falling back. Membership and quota reads stay on
+`/billing/*`, which requires the device token by the same rule (`billing_device`).
 
 Accounts and guests have 30 lifetime free calls. Claim takes
 `max(accountUsed, guestUsed)` and links both identities to one free pool. Signing
