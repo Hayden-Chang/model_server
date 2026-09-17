@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -28,7 +29,8 @@ PRODUCT = "com.hayden.daymosaic.plus.monthly"
 EXPIRES_MS = 1789000000000
 EXPIRES_ISO = datetime.fromtimestamp(EXPIRES_MS / 1000, timezone.utc).strftime(
     "%Y-%m-%dT%H:%M:%S.") + f"{datetime.fromtimestamp(EXPIRES_MS / 1000, timezone.utc).microsecond // 1000:03d}Z"
-ACCOUNT_ID = uuid4()
+# ^guest_[a-f0-9]{24}$ : the only actor shape billing_service admits (202609170017).
+DEVICE_PRINCIPAL = "guest_0123456789abcdef01234567"
 
 
 @pytest.fixture(scope="module")
@@ -90,7 +92,7 @@ class WorkerBackend:
                  reconcile_chains=None, event_pending=None):
         self.calls = []
         self._event_receive = event_receive if event_receive is not None else {"received": True}
-        self._account_by_token = account_by_token or {"userID": str(ACCOUNT_ID)}
+        self._account_by_token = account_by_token or {"principal": DEVICE_PRINCIPAL}
         self._reconcile_chains = reconcile_chains or []
         self._event_pending = event_pending or {"events": []}
 
@@ -133,11 +135,15 @@ def _encrypted_reference(configuration, reference: str) -> str:
 
 def _notification_token(certs, *, notification_uuid=None, environment="Sandbox",
                         product=PRODUCT, app_account_token=None,
-                        original_transaction_id="123"):
+                        original_transaction_id="123", ownership=None):
     transaction_body = {"originalTransactionId": original_transaction_id,
                         "productId": product,
                         "appAccountToken": app_account_token or str(uuid4()),
                         "environment": environment}
+    if ownership is not None:
+        # App Store JWS payload field. `ownershipType` is the StoreKit 2
+        # client-side Swift property name and never appears in a receipt.
+        transaction_body["inAppOwnershipType"] = ownership
     transaction_jws = tsc._build_jws(transaction_body, certs, certs.leaf_certificate)
     notification = {"notificationType": "DID_RENEW",
                     "notificationUUID": notification_uuid or str(uuid4()),
@@ -165,10 +171,76 @@ def test_process_notification_success(certs, configuration):
     assert actions == ["event_receive", "account_by_token", "apple_verify", "event_mark"]
     verify_call = backend.calls[2]
     assert verify_call[0] == "apple_verify"
+    # account_by_token now answers with the principal itself, not a user id.
+    assert verify_call[1] == Actor(DEVICE_PRINCIPAL, None)
     assert verify_call[2]["originalTransactionId"] == "123"
-    assert verify_call[2]["requireSession"] is False
+    # A service-to-service call must never bind the device: binding would clear
+    # a customer-support revocation (design §5.3).
+    assert verify_call[2]["bindDevice"] is False
+    assert "requireSession" not in verify_call[2] and "sessionID" not in verify_call[2]
     assert verify_call[2]["appAccountToken"] == account_token
     assert apple.calls == ["123"]
+
+
+def test_family_shared_notification_is_rejected_before_any_write(certs, configuration):
+    # Design §5.5: a family-shared transaction must not enter through the
+    # webhook path either. The gate sits before event_receive, so nothing at all
+    # is written for this notification.
+    backend = WorkerBackend()
+    signed = _notification_token(certs, ownership="FAMILY_SHARED")
+    with pytest.raises(HTTPException) as error:
+        _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                  settings=configuration, signed_payload=signed,
+                                  pinned_roots=[certs.root_certificate]))
+    assert error.value.status_code == 422
+    assert error.value.detail["code"] == "FAMILY_SHARING_NOT_ALLOWED"
+    assert backend.calls == []
+
+
+def test_purchased_notification_passes_the_family_sharing_gate(certs, configuration):
+    backend = WorkerBackend()
+    signed = _notification_token(certs, ownership="PURCHASED")
+    result = _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                       settings=configuration, signed_payload=signed,
+                                       pinned_roots=[certs.root_certificate]))
+    assert result["bound"] is True
+    assert [call[0] for call in backend.calls] == ["event_receive", "account_by_token",
+                                                   "apple_verify", "event_mark"]
+
+
+def test_absent_ownership_type_passes_the_notification_gate(certs, configuration, caplog):
+    # Fail-open direction, pinned deliberately (design §5.5 / M0.5): an absent
+    # field must not reject a genuine transaction, but it must be logged.
+    backend = WorkerBackend()
+    signed = _notification_token(certs)
+    with caplog.at_level(logging.WARNING, logger="app.billing_verify"):
+        result = _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                           settings=configuration, signed_payload=signed,
+                                           pinned_roots=[certs.root_certificate]))
+    assert result["bound"] is True
+    assert "inAppOwnershipType" in caplog.text
+
+
+def test_family_shared_notification_is_not_bound_through_the_webhook(certs, configuration, monkeypatch):
+    # Consequence of placing the gate before event_receive (design §5.5): no
+    # billing_events row is written, so nothing deduplicates this notification and
+    # Apple is told to retry. Asserted at the status-class level on purpose --
+    # handle_apple_webhook's retry mapping is separately broken (it forwards the
+    # always-present "code" key into failure(code=...) and raises TypeError), so
+    # pinning the exact body here would pin that defect instead. See the M4-c
+    # report: both the placement and that defect are pre-launch questions.
+    class PatchedApple(FakeApple):
+        def __init__(self, **kwargs):
+            super().__init__(pinned_roots=[certs.root_certificate])
+
+    monkeypatch.setattr("app.account_api.AppStoreServerAPIClient", PatchedApple)
+    backend = WorkerBackend()
+    signed = _notification_token(certs, ownership="FAMILY_SHARED")
+    with TestClient(create_account_api(configuration, backend),
+                    raise_server_exceptions=False) as client:
+        response = client.post("/webhooks/apple", json={"signedPayload": signed})
+    assert backend.calls == []
+    assert response.status_code == 500
 
 
 def test_duplicate_notification_short_circuits(certs, configuration):
@@ -181,16 +253,24 @@ def test_duplicate_notification_short_circuits(certs, configuration):
     assert [call[0] for call in backend.calls] == ["event_receive"]
 
 
-def test_unknown_account_token_is_processed_without_binding(certs, configuration):
-    backend = WorkerBackend(account_by_token={"code": "ACCOUNT_TOKEN_UNKNOWN"})
+def test_unknown_account_token_raises_instead_of_being_skipped(certs, configuration):
+    # Corrected by M4 (design §0.3 C6). This test used to assert the
+    # "clean skip" branch in process_notification, which production cannot
+    # reach: AccountBackend.billing_event() raises on every RPC `code` (pinned
+    # by test_billing_api.test_billing_event_raises_on_every_rpc_code), so the
+    # code-carrying dict never arrives. The fake therefore raises, like the real
+    # backend, and the assertion is on the behaviour that actually happens: the
+    # exception escapes before any event_mark, so the event is neither marked
+    # processed nor bound.
+    backend = WorkerBackend(account_by_token=failure("ACCOUNT_TOKEN_UNKNOWN", 404))
     signed = _notification_token(certs)
-    result = _run(process_notification(backend=backend, apple_client=FakeApple(),
-                                       settings=configuration, signed_payload=signed,
-                                       pinned_roots=[certs.root_certificate]))
-    assert result["bound"] is False
-    actions = [call[0] for call in backend.calls]
-    assert actions == ["event_receive", "account_by_token", "event_mark"]
-    assert backend.calls[2][1]["lastErrorCode"] == "ACCOUNT_TOKEN_UNKNOWN"
+    with pytest.raises(HTTPException) as error:
+        _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                  settings=configuration, signed_payload=signed,
+                                  pinned_roots=[certs.root_certificate]))
+    assert error.value.status_code == 404
+    assert error.value.detail["code"] == "ACCOUNT_TOKEN_UNKNOWN"
+    assert [call[0] for call in backend.calls] == ["event_receive", "account_by_token"]
 
 
 def test_processing_failure_marks_event_for_retry(certs, configuration):
@@ -220,7 +300,7 @@ def test_environment_mismatch_rejects_notification(certs, configuration):
 
 def test_reconcile_requeries_every_active_chain(certs, configuration):
     reference = "900002"
-    chain = {"userId": str(ACCOUNT_ID), "provider": "apple", "productId": PRODUCT,
+    chain = {"principal": DEVICE_PRINCIPAL, "provider": "apple", "productId": PRODUCT,
              "environment": "sandbox",
              "storeReferenceCiphertext": _encrypted_reference(configuration, reference),
              "purchaseAccountToken": str(uuid4())}
@@ -242,8 +322,11 @@ def test_reconcile_requeries_every_active_chain(certs, configuration):
     verified = _run(run())
     assert verified == 1
     verify_calls = [call for call in backend.calls if call[0] == "apple_verify"]
+    assert verify_calls[0][1] == Actor(DEVICE_PRINCIPAL, None)
     assert verify_calls[0][2]["originalTransactionId"] == reference
-    assert verify_calls[0][2]["requireSession"] is False
+    # reconcile_list now returns `principal`; reconcile must not bind (design §5.3).
+    assert verify_calls[0][2]["bindDevice"] is False
+    assert "requireSession" not in verify_calls[0][2]
     assert verify_calls[0][2]["appAccountToken"] == chain["purchaseAccountToken"]
 
 
