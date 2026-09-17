@@ -39,8 +39,15 @@ def _reference_key_bytes(settings) -> bytes:
 
 
 async def process_notification(*, backend, apple_client, settings, signed_payload: str,
-                               pinned_roots=None) -> dict:
-    """Verify, deduplicate and process one Apple notification."""
+                               pinned_roots=None, recorded: bool = False) -> dict:
+    """Verify, deduplicate and process one Apple notification.
+
+    `recorded=False` (the webhook path) is a fresh delivery: the event must be
+    received, and event_receive is what deduplicates it. `recorded=True` is our
+    own retry of an event already stored in billing_events -- there is nothing
+    left to receive, and re-receiving it would only re-run the dedupe against
+    our own row and return `{"received": false}`.
+    """
 
     try:
         notification = verify_apple_jws(signed_payload, pinned_roots=pinned_roots)
@@ -61,13 +68,18 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
     original_transaction_id = str(transaction.get("originalTransactionId") or "")
     if not original_transaction_id:
         raise failure("VERIFICATION_FAILED", 400, reason="MISSING_ORIGINAL_TRANSACTION_ID")
-    payload_hash = _sha256_hex(signed_payload)
-
-    received = await backend.billing_event("event_receive", provider="apple",
-        environment=settings.apple_environment, eventId=event_id,
-        payloadHash=payload_hash, replayMaterialCiphertext=signed_payload)
-    if not received.get("received", False):
-        return {"received": False, "eventId": event_id}
+    if not recorded:
+        # Only a fresh delivery goes through event_receive. The dedupe contract
+        # lives here: the insert's on-conflict-do-nothing plus the stored
+        # payload_hash is what distinguishes "already received" from "received
+        # now", and a `received:false` answer still means "do not process this
+        # delivery again".
+        payload_hash = _sha256_hex(signed_payload)
+        received = await backend.billing_event("event_receive", provider="apple",
+            environment=settings.apple_environment, eventId=event_id,
+            payloadHash=payload_hash, replayMaterialCiphertext=signed_payload)
+        if not received.get("received", False):
+            return {"received": False, "eventId": event_id}
 
     try:
         account = await backend.billing_event("account_by_token",
@@ -171,10 +183,17 @@ async def process_pending_events(*, backend, apple_client, settings, pinned_root
     processed = 0
     for event in fetch.get("events", []):
         try:
+            # recorded=True: this event is already in billing_events, so this is
+            # our retry of it, not a delivery of it. Without the flag the retry
+            # re-entered event_receive, was answered `received:false` by our own
+            # row and returned before any Apple call or event_mark -- no
+            # verification, no attempt counted, and no way out of the pending
+            # set. The receive step is skipped; the rest of the path is
+            # untouched, so the retry is bounded by the same event_mark calls.
             await process_notification(backend=backend, apple_client=apple_client,
                                        settings=settings,
                                        signed_payload=event["replayMaterialCiphertext"],
-                                       pinned_roots=pinned_roots)
+                                       pinned_roots=pinned_roots, recorded=True)
             processed += 1
         except HTTPException as error:
             LOGGER.warning("event retry failed: %s %s", event["eventId"],

@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -22,7 +24,7 @@ from app.billing_worker import (
     process_pending_events,
     reconcile,
 )
-from app.appstore_client import AppStoreUnavailable
+from app.appstore_client import AppStoreUnavailable, _b64url_decode
 
 NOW = datetime(2026, 9, 11, 12, 0, 0, tzinfo=timezone.utc)
 PRODUCT = "com.hayden.daymosaic.plus.monthly"
@@ -122,6 +124,58 @@ class WorkerBackend:
                 "aiQuota": {"limit": 30, "used": 0, "remaining": 30, "resetsAt": None},
                 "billingSources": [{"provider": "apple", "productId": PRODUCT,
                                     "expiresAt": EXPIRES_ISO}]}
+
+
+class LocalEventBackend(WorkerBackend):
+    """The billing_service event actions, kept in local state.
+
+    WorkerBackend answers `{"received": True}` to every event_receive, so it
+    cannot show the retry net failing: in production the event reached by a
+    retry is the caller's own earlier row, and event_receive answers
+    `{"received": false}` for it. Every value here mirrors the deployed RPC
+    (202609170017): the row is keyed by (provider, environment, event_id), a
+    repeat receive answers `received:false` when the payload hash matches and
+    `EVENT_CONFLICT` when it does not, event_mark increments `attempts` only
+    for `failed`/`processed`, and event_pending selects exactly
+    `status in ('received','failed') and attempts < maxAttempts`.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.events = {}
+
+    def seed(self, *, event_id, payload_hash, replay_material, payload_environment,
+             status="received", attempts=0):
+        self.events[(payload_environment, event_id)] = {
+            "provider": "apple", "environment": payload_environment, "eventId": event_id,
+            "payloadHash": payload_hash, "replayMaterialCiphertext": replay_material,
+            "status": status, "attempts": attempts}
+
+    async def billing_event(self, action, **data):
+        self.calls.append((action, data))
+        if action == "event_receive":
+            key = (data["environment"], data["eventId"])
+            stored = self.events.get(key)
+            if stored is None:
+                self.seed(event_id=data["eventId"], payload_hash=data["payloadHash"],
+                          replay_material=data["replayMaterialCiphertext"],
+                          payload_environment=data["environment"])
+                return {"received": True}
+            if stored["payloadHash"] != data["payloadHash"]:
+                raise failure("EVENT_CONFLICT", 409)
+            return {"received": False}
+        if action == "event_mark":
+            stored = self.events.get((data["environment"], data["eventId"]))
+            stored["status"] = data["status"]
+            if data["status"] in ("failed", "processed"):
+                stored["attempts"] += 1
+            return {"updated": 1}
+        if action == "event_pending":
+            pending = [dict(row) for row in self.events.values()
+                       if row["status"] in ("received", "failed")
+                       and row["attempts"] < data["maxAttempts"]]
+            return {"events": sorted(pending, key=lambda row: row["eventId"])}
+        return await super().billing_event(action, **data)
 
 
 def _b64(value: bytes) -> str:
@@ -507,8 +561,116 @@ def test_pending_events_are_retried(certs, configuration):
     processed = _run(run())
     assert processed == 1
     actions = [call[0] for call in backend.calls]
-    assert actions == ["event_pending", "event_receive", "account_by_token",
-                       "apple_verify", "event_mark"]
+    # event_receive is deliberately absent: the stored replay material is our own
+    # earlier row being replayed, not a second delivery of it.
+    assert actions == ["event_pending", "account_by_token", "apple_verify", "event_mark"]
+    assert apple.calls == ["123"]
+
+
+def test_retry_after_a_recorded_receipt_reaches_apple_and_marks_the_event(certs, configuration):
+    # Defect 3: process_pending_events re-fed the stored replay material into
+    # process_notification, which called event_receive first. For a retry the
+    # event row is the caller's own earlier row, so event_receive answered
+    # `received:false` and process_notification returned before account_by_token,
+    # before the Apple call and before any event_mark. The retry pass counted the
+    # event as processed while doing nothing at all. The retry is our own replay
+    # of a recorded event, not another delivery of it, so it must skip the
+    # receive and run the processing path.
+    signed = _notification_token(certs)
+    event_id = str(json.loads(_b64url_decode(signed.split(".")[1]))["notificationUUID"])
+    # Delivered before this pass: stored, but nothing processed it. 'failed' is
+    # what a processing failure leaves behind, 'received' what a crash leaves.
+    for status in ("received", "failed"):
+        backend = LocalEventBackend()
+        backend.seed(event_id=event_id,
+                     payload_hash=hashlib.sha256(signed.encode()).hexdigest(),
+                     replay_material=signed, payload_environment="sandbox",
+                     status=status, attempts=1)
+        apple = FakeApple(pinned_roots=[certs.root_certificate])
+
+        async def run():
+            try:
+                return await process_pending_events(backend=backend, apple_client=apple,
+                                                    settings=configuration,
+                                                    pinned_roots=[certs.root_certificate])
+            finally:
+                await apple.aclose()
+
+        assert _run(run()) == 1
+        actions = [call[0] for call in backend.calls]
+        assert "apple_verify" in actions, f"retry of a {status} event never reached Apple"
+        marks = [call for call in backend.calls if call[0] == "event_mark"]
+        assert [call[1]["status"] for call in marks] == ["processed"]
+        assert apple.calls == ["123"]
+        row = backend.events[("sandbox", event_id)]
+        assert row["status"] == "processed"
+        # The attempt was counted: this is what maxAttempts bounds.
+        assert row["attempts"] == 2
+        # A processed event is no longer pending, so the pass cannot re-select it.
+        assert _run(run()) == 0
+
+
+def test_retry_attempts_advance_until_the_event_ages_out(certs, configuration):
+    # Structural half of the defect: attempts could never increase, because the
+    # early return happened before event_mark. event_pending selects
+    # `status in ('received','failed') and attempts < maxAttempts`, so the row
+    # was selected on every pass forever and maxAttempts bounded nothing.
+    signed = _notification_token(certs)
+    event_id = str(json.loads(_b64url_decode(signed.split(".")[1]))["notificationUUID"])
+    backend = LocalEventBackend()
+    backend.seed(event_id=event_id,
+                 payload_hash=hashlib.sha256(signed.encode()).hexdigest(),
+                 replay_material=signed, payload_environment="sandbox",
+                 status="failed", attempts=0)
+    apple = FakeApple(error=AppStoreUnavailable("busy"),
+                      pinned_roots=[certs.root_certificate])
+
+    async def run():
+        try:
+            return await process_pending_events(backend=backend, apple_client=apple,
+                                                settings=configuration,
+                                                pinned_roots=[certs.root_certificate],
+                                                max_attempts=3)
+        finally:
+            await apple.aclose()
+
+    for expected_attempts in (1, 2, 3):
+        # 0 successful events: the pass reports no progress when the upstream
+        # call fails, and the failed mark is what advances the counter.
+        assert _run(run()) == 0
+        assert backend.events[("sandbox", event_id)]["attempts"] == expected_attempts
+    # Bound reached: event_pending no longer selects the row.
+    assert _run(run()) == 0
+    assert backend.events[("sandbox", event_id)]["attempts"] == 3
+    # A failing retry marks the event failed, so the same counter bounds the
+    # worker retry and it never has to fake a success to make progress.
+    marks = [call for call in backend.calls
+             if call[0] == "event_mark" and call[1]["status"] == "failed"]
+    assert len(marks) == 3
+    assert all(call[1]["lastErrorCode"] == "AppStoreUnavailable" for call in marks)
+    assert apple.calls == ["123", "123", "123"]
+
+
+def test_fresh_delivery_of_a_duplicate_event_is_still_deduplicated(certs, configuration):
+    # The receive step -- and with it the dedupe contract (same eventId, same
+    # payload hash -> already received) -- still runs for a fresh delivery, and a
+    # duplicate must not be processed, bound or marked a second time.
+    signed = _notification_token(certs)
+    event_id = str(json.loads(_b64url_decode(signed.split(".")[1]))["notificationUUID"])
+    backend = LocalEventBackend()
+    backend.seed(event_id=event_id,
+                 payload_hash=hashlib.sha256(signed.encode()).hexdigest(),
+                 replay_material=signed, payload_environment="sandbox",
+                 status="processed", attempts=1)
+    apple = FakeApple(pinned_roots=[certs.root_certificate])
+    result = _run(process_notification(backend=backend, apple_client=apple,
+                                       settings=configuration, signed_payload=signed,
+                                       pinned_roots=[certs.root_certificate]))
+    assert result == {"received": False, "eventId": event_id}
+    assert [call[0] for call in backend.calls] == ["event_receive"]
+    assert apple.calls == []
+    row = backend.events[("sandbox", event_id)]
+    assert row["status"] == "processed" and row["attempts"] == 1
 
 
 def test_webhook_route_success_malformed_and_unconfigured(certs, configuration, monkeypatch):
