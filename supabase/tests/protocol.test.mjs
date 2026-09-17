@@ -17,6 +17,9 @@ after(async()=>{ await db?.close(); });
 const check=async state=>(await db.admin.query('select sync_private.validate_state($1) as state',[state])).rows[0].state;
 test('generated SQL embeds the exact versioned contracts',()=>{
   execFileSync(process.execPath,['scripts/build-contract.mjs','--check']);
+  // The manual reverse of 202609170017 also embeds generated SQL (the pre-017
+  // function bodies and the pre-018 contract payloads); it must not drift either.
+  execFileSync(process.execPath,['scripts/build-rollback-functions.mjs','--check']);
 });
 test('shared golden vectors have identical JavaScript and PostgreSQL canonical hashes',async()=>{
   const vectors=JSON.parse(await readFile(new URL('../protocol/v1/golden.json',import.meta.url),'utf8'));

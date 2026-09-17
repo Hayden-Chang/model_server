@@ -1,38 +1,30 @@
 #!/usr/bin/env bash
-# Roll the billing rollout back to the pre-deploy state: previous code and the
-# pre-deploy quota function definitions. The additive billing tables stay in
-# the hosted database (the pre-deploy code ignores them) — nothing is lost.
-# Usage (root on the server): scripts/billing-rollback.sh <backup-dir>
-# After the code rollback, apply the restored function definitions:
-#   /tmp/rollback-functions.sql  → Supabase SQL editor or supabase db push.
+# SUPERSEDED — kept only so the instruction scripts/billing-deploy.sh prints at the
+# end of a deploy still resolves. It now delegates to
+# scripts/billing-rollback-device-principal.sh with the same argument.
+#
+# The rollback this file used to perform was wrong in three ways, so its old
+# behaviour is deliberately not preserved:
+#   1. it rebuilt ai_private.quota_status / public.ai_quota_service from the 006/008
+#      migrations, which are several generations behind production's actual last
+#      migration (016 changed both bodies, 014 changed quota_status before that), so
+#      it would roll the quota logic back to behaviour production has not run;
+#   2. it restored the code but never the pre-017 schema, so the pre-deploy Python
+#      (which reads billing_private.account_entitlements where user_id = ... and
+#      calls billing_private.ensure_account(uuid)) came back to missing-column and
+#      missing-function errors: the "rolled back" system was more broken than before;
+#   3. it ignored 202609170017-202609170020 entirely, including the data mapping that
+#      makes the pre-M4 code unable to read the migrated tables.
+# The replacement reverses the database with a fail-closed guard and restores the
+# pre-deploy code in one script; see its header for the order and the one seam that
+# is not atomic.
 set -euo pipefail
-BACKUP_DIR="${1:-}"
-if [[ -z "$BACKUP_DIR" || ! -d "$BACKUP_DIR" ]]; then
-  echo "usage: $0 <rollback-backups/billing-<timestamp>>" >&2
-  exit 1
-fi
-cd /opt/model_server
-PREV_SHA=$(cat "$BACKUP_DIR/pre-deploy-sha")
-echo "rolling back to $PREV_SHA (backup $BACKUP_DIR)"
-docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  stop billing-worker time-fragment-api caddy 2>/dev/null || true
-git checkout "$PREV_SHA"
-# Function-level restore material (the hosted database still runs the new
-# definitions; apply this file to restore the pre-deploy quota behavior).
-{
-  sed -n "/create function ai_private.quota_status/,/\\\$\\\$;/p" \
-    "$BACKUP_DIR/rollback-functions-006.sql"
-  grep -A2000 'create or replace function public.ai_quota_service' \
-    "$BACKUP_DIR/rollback-functions-008.sql"
-} > /tmp/rollback-functions.sql
-echo "restored function SQL: /tmp/rollback-functions.sql (apply to hosted Supabase)"
-docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  build business-api time-fragment-api
-docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  up -d caddy time-fragment-api business-api
-docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  rm -sf billing-worker 2>/dev/null || true
-sleep 8
-curl -fsS https://api.keeline.xyz/health/live
-curl -fsS https://api.keeline.xyz/health/ready
-echo "ROLLBACK CODE OK — apply /tmp/rollback-functions.sql to finish"
+
+script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+
+echo "scripts/billing-rollback.sh is superseded by scripts/billing-rollback-device-principal.sh." >&2
+echo "The old 006/008 function restore and the code-only rollback are gone; the" >&2
+echo "replacement reverses migrations 202609170017-202609170020 in the database and" >&2
+echo "then restores the pre-deploy code. Delegating with the same arguments." >&2
+
+exec "$script_dir/billing-rollback-device-principal.sh" "$@"

@@ -35,9 +35,9 @@ export async function database({through} = {}) {
       grant usage on schema public,auth to anon,authenticated,service_role;
       grant execute on all functions in schema auth to anon,authenticated,service_role;
     `);
-    // These two files are manual recovery scripts, not forward migrations.
+    // These files are manual recovery scripts, not forward migrations.
     const recoveryScripts = new Set(['202609110009_contract_v2_rollback.sql', '202609110009_contract_v2_reregister.sql',
-      '202609170017_device_principal_billing_rollback.sql']);
+      '202609170017_device_principal_billing_rollback.sql', '202609170099_billing_device_principal_down.sql']);
     for (const migration of (await readdir(new URL('../migrations/', import.meta.url)))
       .filter(x => x.endsWith('.sql') && !recoveryScripts.has(x) && (!through || x <= through)).sort()) {
       await admin.query(await readFile(new URL('../migrations/' + migration, import.meta.url), 'utf8'));
