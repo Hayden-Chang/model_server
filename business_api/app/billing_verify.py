@@ -121,6 +121,19 @@ async def verify_apple_purchase(*, backend, apple_client, settings, actor, paylo
     except (AppStoreRejected, AppStoreEnvironmentMismatch, JWSVerificationFailed) as error:
         raise failure("VERIFICATION_FAILED", 422, reason=str(error)) from error
     store_status, expires_at = subscription_state(status_payload, original_transaction_id)
+    # What the client actually submitted vs what Apple reports for the chain.
+    # When these disagree the client is handing back an old transaction from
+    # StoreKit's queue instead of a fresh purchase, and the whole flow looks
+    # like a server fault from the outside. Diagnosing that previously required
+    # decoding the receipt by hand, so log the comparison.
+    LOGGER.info(
+        "apple verify chain=%s submitted tx=%s purchaseDate=%s expiresDate=%s | "
+        "apple status=%s expiresAt=%s",
+        original_transaction_id,
+        transaction.get("transactionId"),
+        _iso_millis(transaction.get("purchaseDate")),
+        _iso_millis(transaction.get("expiresDate")),
+        store_status, expires_at)
     data = dict(originalTransactionId=original_transaction_id, productId=product_id,
                 appAccountToken=app_account_token, environment=settings.apple_environment,
                 storeStatus=store_status, expiresAt=expires_at,
