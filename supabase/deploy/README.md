@@ -22,7 +22,7 @@ First apply migration `202609080005_maintenance.sql` to the selected project aft
 inspecting `supabase db push --dry-run`. It adds only a maintenance timestamp,
 index and service-only batch RPC. The four early migration versions
 (`202609080001`–`202609080004`) stay unchanged, but `supabase/migrations/` has
-since grown to `202609170020` and also carries a manual reverse migration,
+since grown to `202609180021` and also carries a manual reverse migration,
 `202609170099_billing_device_principal_down.sql`, which must never be applied by
 `supabase db push`. See `supabase/README.md` before pushing.
 

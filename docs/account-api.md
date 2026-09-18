@@ -49,10 +49,13 @@ The daily Plus allowance is **one counter per purchase chain**, shared by that
 chain's active member devices (`billing_private.purchase_devices` rows with
 `revoked_at is null`), reset at local midnight in the entitlement's
 `account_timezone` (`202609170020_shared_member_quota.sql`; product decision E1).
-Current implementation boundary: the reset instant is computed in
-`account_timezone`, but `quota_status` renders the member `resetsAt` with a fixed
-`+08:00` offset, so that label is only correct while entitlements keep the
-`Asia/Shanghai` default (`202609110014_member_quota.sql`).
+`quota_status` renders the member `resetsAt` as the local wall clock in that zone
+labelled with the zone's real UTC offset at that instant
+(`202609180021_member_resets_offset.sql`), so the label is an ISO 8601 instant in
+any zone — `+08:00`, `-05:00`, `+05:30` and `+08:45` all render correctly, and a
+zone with DST is labelled with the offset in force on that reset day. Before that
+migration the label appended a literal `+08:00`, which was right only while
+entitlements kept the `Asia/Shanghai` default (`202609110014_member_quota.sql`).
 It is explicitly *not* per Time Fragment account: an account is not a billing
 subject, and a signed-in member's AI request is refused on `/api/plan/parse` and
 retried with the device token, so the device principal is the only AI identity.
@@ -196,17 +199,21 @@ The device-principal and chain-shared quota migrations apply in lexical order in
 the same maintenance window, before `scripts/billing-deploy.sh`:
 `202609170017_device_principal_billing.sql`,
 `202609170018_contract_v2_puzzle_optional.sql`,
-`202609170019_billing_ai_quota_source.sql`, then
-`202609170020_shared_member_quota.sql`. The last one depends on `202609170017`'s
-`purchase_devices` table and does not re-issue `202609130015`'s three `free_limit`
-statements — it reports the live `free_limit` distribution instead, and it fails
-closed if a member bucket row would be re-keyed onto a chain owner. It changes no
-schema and no data, so it needs no rollback file: its inverse is restoring the
-previous function bodies from git. That restores per-device metering but not the
-counters — member usage written under a chain owner cannot be split back per
-device, so after a revert the owner's device shows the group's usage and its
-peers show 0 (each device appears to gain up to 30/day). The reverse export does
-not drop that usage: `ai_quota_export_legacy` emits the chain owner's member
+`202609170019_billing_ai_quota_source.sql`,
+`202609170020_shared_member_quota.sql`, then
+`202609180021_member_resets_offset.sql` (the member `resetsAt` offset label, which
+depends on the `plus_source` that `202609170020` adds).
+`202609170020` depends on `202609170017`'s `purchase_devices` table and does not
+re-issue `202609130015`'s three `free_limit` statements — it reports the live
+`free_limit` distribution instead, and it fails closed if a member bucket row
+would be re-keyed onto a chain owner. Neither `202609170020` nor `202609180021`
+changes any schema or data, so neither needs a rollback file: their inverse is
+restoring the previous function bodies from git. Reverting `202609170020` restores
+per-device metering but not the counters — member usage written under a chain
+owner cannot be split back per device, so after a revert the owner's device shows
+the group's usage and its peers show 0 (each device appears to gain up to
+30/day). The reverse export does not drop that usage: `ai_quota_export_legacy`
+emits the chain owner's member
 bucket with the group's used count. Watch `AI_DAILY_QUOTA_EXHAUSTED` after
 cutover, because a shared counter exhausts earlier for multi-device members.
 
