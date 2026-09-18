@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { randomBytes } from 'node:crypto';
 import { database } from './database.mjs';
-import { empty, withTask, operation, hash } from './fixtures.mjs';
+import { empty, withTask, operation, operationV2, withTaskV2, hash } from './fixtures.mjs';
 let db;
 before(async () => { db = await database(); });
 after(async () => { await db?.close(); });
-async function registered(account) {
+async function registered(account, supportedSchemaVersion = 1) {
   const d = await account.device();
-  await db.rpc(d,'register_sync_device',[d.id,'ios','1.0',1]);
+  await db.rpc(d,'register_sync_device',[d.id,'ios','1.0',supportedSchemaVersion]);
   return d;
 }
 async function initialized(state=empty()) {
@@ -137,6 +137,57 @@ test('old schema clients cannot read or overwrite a newer cloud schema',async()=
   await assert.rejects(db.rpc(d,'pull_sync_state',[d.id]),/schemaTooNew/);
   await assert.rejects(db.rpc(d,'commit_sync_state',[operation(d,cloud,state),state]),/schemaTooNew/);
   await assert.rejects(db.rpc(d,'replace_sync_state',[d.id,randomUUID(),cloud.generation,cloud.revision,state]),/schemaTooNew/);
+});
+test('a v2 device initializes, commits, and pulls v2 end to end',async()=>{
+  const a=await db.account(),d=await registered(a,2),id=randomUUID();
+  const initial=withTaskV2();
+  const cloud=await db.rpc(d,'initialize_sync_state',[d.id,id,initial]);
+  assert.equal(cloud.status,'accepted'); assert.equal(cloud.revision,1);
+  assert.equal(cloud.schemaVersion,2);
+  const row=(await db.admin.query('select schema_version from sync_private.user_sync_state where user_id=$1',[a.id])).rows[0];
+  assert.equal(row.schema_version,2);
+  cloud.state=initial;
+  const candidate=structuredClone(initial); candidate.tasks[0].title='updated';
+  const committed=await db.rpc(d,'commit_sync_state',[operationV2(d,cloud,candidate),candidate]);
+  assert.equal(committed.status,'accepted'); assert.equal(committed.resultRevision,2); assert.equal(committed.schemaVersion,2);
+  const pulled=await db.rpc(d,'pull_sync_state',[d.id]);
+  assert.equal(pulled.schemaVersion,2); assert.equal(pulled.revision,2); assert.deepEqual(pulled.state,candidate);
+  // A v1 device on the same account is read-protected, and its v1 operation is
+  // rejected. It is a late-registered device, so its stale generation trips the
+  // generationConflict gate that precedes the schema gate; acknowledge first so
+  // the version gate is the one under test.
+  const old=await registered(a,1);
+  await assert.rejects(db.rpc(old,'pull_sync_state',[old.id]),/schemaTooNew/);
+  await db.rpc(old,'acknowledge_sync_state',[old.id,pulled.generation,pulled.revision,pulled.stateHash]);
+  await assert.rejects(db.rpc(old,'commit_sync_state',[operation(old,pulled,initial),initial]),/schemaTooNew/);
+  // An unregistered higher schema is refused as schemaTooNew, not payloadInvalid, and
+  // the rejection happens before any write.
+  const tooNew=structuredClone(initial); tooNew.schemaVersion=3;
+  await assert.rejects(db.rpc(d,'initialize_sync_state',[d.id,randomUUID(),tooNew]),/schemaTooNew/);
+  const other=await db.account(),d3=await registered(other,3);
+  await assert.rejects(db.rpc(d3,'initialize_sync_state',[d3.id,randomUUID(),tooNew]),/schemaTooNew/);
+  await assert.rejects(db.rpc(d,'commit_sync_state',[operationV2(d,pulled,candidate,{schemaVersion:3}),candidate]),/schemaTooNew/);
+  assert.equal((await db.rpc(d,'pull_sync_state',[d.id])).revision,2);
+});
+test('a v2 device cannot fall back to the v1 contract or mislabel its payload',async()=>{
+  const a=await db.account(),d=await registered(a,2),id=randomUUID();
+  const v1=withTask();
+  // v1 payload declared as 2 still fails v2 shape validation.
+  const mislabeled=structuredClone(v1); mislabeled.schemaVersion=2;
+  await assert.rejects(db.rpc(d,'initialize_sync_state',[d.id,id,mislabeled]),/payloadInvalid/);
+  // Non-integer and missing dispatch keys take the existing payloadInvalid path,
+  // never a raw PostgreSQL integer-cast error. A JSON string "2" is caught by the
+  // v2 contract's {"const":2} instead, and is payloadInvalid for the same reason.
+  for(const bad of ['2',1.5,null,0]) {
+    const state=structuredClone(v1); state.schemaVersion=bad;
+    await assert.rejects(db.rpc(d,'initialize_sync_state',[d.id,randomUUID(),state]),/payloadInvalid/);
+  }
+  const missing=structuredClone(v1); delete missing.schemaVersion;
+  await assert.rejects(db.rpc(d,'initialize_sync_state',[d.id,randomUUID(),missing]),/payloadInvalid/);
+  // A v1 payload is still accepted by a v1 device: the v1 path is unchanged.
+  const v1device=await registered(a,1);
+  const cloud=await db.rpc(v1device,'initialize_sync_state',[v1device.id,randomUUID(),v1]);
+  assert.equal(cloud.status,'accepted'); assert.equal(cloud.schemaVersion,1);
 });
 test('safety checkpoints survive until their window and every required device acknowledgement',async()=>{
   const {a,d,cloud}=await initialized(withTask()),peer=await registered(a),id=randomUUID();

@@ -19,6 +19,17 @@ export function withTask(title = 'Read') {
     status:'todo', completedAt:null, overrides:null });
   return state;
 }
+export function withTaskV2(title = 'Read') {
+  const state = empty();
+  state.schemaVersion = 2;
+  const time = '2026-09-08T10:00:00.000Z';
+  state.tasks.push({ id:randomUUID(), title, note:'', estimatedDurationSlots:2, repeatRule:'none', repeatForWeeks:2,
+    repeatWeekdays:[], isPinned:false, colorHex:'#AABBCC', startReminder:'off', customColorHex:null, createdAt:time, updatedAt:time });
+  state.occurrences.push({ id:randomUUID(), taskID:state.tasks[0].id, occurrenceDate:'2026-09-08', unscheduledDate:null,
+    isAllDay:false, continuationSourceOccurrenceID:null, orderKey:'0:0000000000000000:'+randomUUID(),
+    status:'todo', completedAt:null, overrides:null });
+  return state;
+}
 export function operation(device, cloud, result, overrides = {}) {
   const fingerprints={};
   for(const collection of ['tasks','occurrences','scheduledTasks','externalEvents','focusSessions']) {
@@ -37,3 +48,7 @@ export function operation(device, cloud, result, overrides = {}) {
     clientResultStateHash:hash(result), ...overrides,
   };
 }
+// The v2 envelope is identical apart from schemaVersion; callers pass a v2 result
+// state so the fingerprints and clientResultStateHash line up with the v2 contract.
+export const operationV2 = (device, cloud, result, overrides = {}) =>
+  operation(device, cloud, result, { schemaVersion:2, ...overrides });

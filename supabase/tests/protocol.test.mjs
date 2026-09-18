@@ -105,7 +105,7 @@ test('generated v2 contracts are registered and v2 golden vectors match JavaScri
     assert.equal(row.canonical,v.canonical); assert.equal(row.hash,v.hash); assert.equal(hash(v.state),v.hash);
   }
 });
-test('v2 state schema rejects missing or invalid v2 fields and the v1 write path still rejects v2 data',async()=>{
+test('v2 state schema rejects missing or invalid v2 fields and the write path dispatches on schemaVersion',async()=>{
   const schema=JSON.parse(await readFile(new URL('../protocol/v2/cloud-state.schema.json',import.meta.url),'utf8'));
   const valid=new Ajv({strict:false,validateFormats:false}).compile(schema);
   const vectors=JSON.parse(await readFile(new URL('../protocol/v2/golden.json',import.meta.url),'utf8'));
@@ -127,9 +127,26 @@ test('v2 state schema rejects missing or invalid v2 fields and the v1 write path
     [legacy,s=>s.puzzle.dayArtworkIDs['2026-09-08']=null],
   ];
   for(const [source,edit] of edits){const state=source();edit(state);assert.equal(valid(state),false,edit.toString());}
-  // The v1 write path reads only the v1 cloud-state row, so v2 data is still rejected
-  // there. Whoever wires v2 contract dispatch must revisit this expectation.
-  await assert.rejects(check(base),/payloadInvalid/);
+  // Contract dispatch (202609180022) selects the row from the payload's own
+  // schemaVersion, so the v2 golden vector now validates through the write path.
+  assert.deepEqual(await check(base),base);
+  // An unregistered version is schemaTooNew -- never a v1 fallback, and never
+  // payloadInvalid, which the client would report as data corruption.
+  const tooNew=structuredClone(base);tooNew.schemaVersion=3;
+  await assert.rejects(check(tooNew),/schemaTooNew/);
+  // A v1 payload labelled 2 (and a v2 payload labelled 1) picks the other row and
+  // fails its shape check, so a mislabelled payload cannot pass as the other version.
+  const labelled2=withTask();labelled2.schemaVersion=2;
+  await assert.rejects(check(labelled2),/payloadInvalid/);
+  const labelled1=structuredClone(base);labelled1.schemaVersion=1;
+  await assert.rejects(check(labelled1),/payloadInvalid/);
+  // A missing, null, fractional, or non-numeric dispatch key takes the existing
+  // payloadInvalid path rather than a raw integer-cast error.
+  for(const bad of [undefined,null,1.5,'2']){
+    const state=structuredClone(base);
+    if(bad===undefined)delete state.schemaVersion;else state.schemaVersion=bad;
+    await assert.rejects(check(state),/payloadInvalid/);
+  }
 });
 test('v2 cloud-state accepts a state without puzzle, keeps accepting the legacy puzzle object, and the registered row no longer requires it',async()=>{
   const schema=JSON.parse(await readFile(new URL('../protocol/v2/cloud-state.schema.json',import.meta.url),'utf8'));
@@ -172,4 +189,41 @@ test('v2 operation contract keeps all v1 kinds, adds puzzle.applyChanges, and re
     {...puzzle,kind:'puzzle.replace'},
   ];
   for(const invalid of invalids){assert.equal(ajv(invalid),false);assert.equal(await sql(invalid),false);}
+});
+test('validate_operation dispatches on schemaVersion and rejects a mislabelled envelope',async()=>{
+  // Today the v2 operation examples only reach matches_schema with the contract row
+  // passed by hand; this drives the real dispatch entry point instead.
+  const examples=JSON.parse(await readFile(new URL('../protocol/v2/operation-examples.json',import.meta.url),'utf8'));
+  const shape=async value=>(await db.admin.query(
+    "select sync_private.matches_schema($1,sync_private.contract_for('operation',sync_private.require_schema_version($1)),"+
+    "sync_private.contract_for('operation',sync_private.require_schema_version($1))) as valid",[value])).rows[0].valid;
+  for(const example of examples){
+    assert.equal(await shape(example),true,example.kind);
+  }
+  // Most v2 envelopes are shape-identical to v1 apart from schemaVersion, so
+  // relabelling them legitimately selects the v1 row. The ones that carry v2-only
+  // task DTO fields must not survive that relabelling.
+  const v1contract=JSON.parse(await readFile(new URL('../protocol/v1/operation.schema.json',import.meta.url),'utf8'));
+  const v1shape=async value=>(await db.admin.query('select sync_private.matches_schema($1,$2,$2) as valid',[value,v1contract])).rows[0].valid;
+  const v2only=['task.create','schedule.createAndPlace'];
+  for(const kind of v2only){
+    const example=examples.find(x=>x.kind===kind);
+    assert.equal(await v1shape({...example,schemaVersion:1}),false,kind);
+  }
+  // puzzle.applyChanges is v2-only and unknown to the v1 enum.
+  const puzzle=examples.find(x=>x.kind==='puzzle.applyChanges');
+  assert.equal(await v1shape({...puzzle,schemaVersion:1}),false,'puzzle.applyChanges');
+  // An unregistered version is schemaTooNew; a missing or malformed key is payloadInvalid.
+  await assert.rejects(db.admin.query("select sync_private.contract_for('operation',3)"),/schemaTooNew/);
+  await assert.rejects(db.admin.query("select sync_private.contract_for('operation',0)"),/schemaTooNew/);
+  await assert.rejects(db.admin.query('select sync_private.contract_for($1,1)',['nope']),/schemaTooNew/);
+  for(const bad of [undefined,null,1.5,0,-1,'two']) {
+    const op={...examples[0]};
+    if(bad===undefined)delete op.schemaVersion;else op.schemaVersion=bad;
+    await assert.rejects(db.admin.query('select sync_private.require_schema_version($1)',[op]),/payloadInvalid/,String(bad));
+  }
+  // A JSON string "2" is textually a valid integer to the guard, but the contract
+  // row's {"const":2} does not equal the jsonb string, so it is still payloadInvalid.
+  const asString={...examples[0],schemaVersion:'2'};
+  assert.equal(await shape(asString),false,'string schemaVersion must not match the v2 row');
 });

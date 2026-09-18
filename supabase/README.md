@@ -57,11 +57,21 @@ already applied are never rewritten or regenerated.
 
 Once a migration is deployed, add a new migration; do not rewrite applied files.
 The contract generator rejects keywords unsupported by the restricted SQL
-validator. V1 remains the only schema accepted by any write path: v2 contract
-files are registered under the `cloud-state-v2`/`operation-v2` contract names,
-but no RPC reads them yet. The checkpointed, CAS-protected `migrate_sync_state`
-RPC that must exist before v2 state can be stored is a separate upcoming change;
-until it lands, writing v2 with an ordinary op is impossible by design.
+validator. Migration `202609180022` adds contract-version dispatch: the write path
+selects the contract row from the payload's own `schemaVersion` through
+`sync_private.contract_for(name, version)`, and an unregistered version raises
+`schemaTooNew` rather than falling back to v1. `initialize_sync_state` also records
+the accepted payload's `schemaVersion` in `user_sync_state.schema_version` and
+refuses a state newer than the device's `supported_schema_version`, so a v2 client
+can complete `initialize_sync_state` → `commit_sync_state` → `pull_sync_state` and
+`pull` reports `schemaVersion: 2`. Dispatch chooses the shape only: authorization
+still comes from `user_sync_state.schema_version` and the device capability, and
+all five `schemaTooNew` gates are unchanged, so v1 clients and stored v1 state keep
+their previous behavior word for word. The checkpointed, CAS-protected
+`migrate_sync_state` RPC is still a separate upcoming change; until it lands, an
+account whose stored `schema_version` is already 1 cannot be upgraded to v2 through
+`replace_sync_state` (which requires the versions to match) or through
+`initialize_sync_state` (which requires no existing row).
 
 Puzzle progress left multi-device sync scope, so `puzzle` is no longer a required
 top-level property of the v2 cloud-state: migration `202609170018` re-registers
