@@ -18,9 +18,13 @@
 
 以下章节描述原有 API-first 大模型服务，其运行约束为：
 
-- 3 个容器：`caddy`、`business-api`、`litellm`。
+- 基座容器为 `caddy`、`business-api`、`litellm`；账号切换再叠加 `time-fragment-api`
+  与 `billing-worker` 两个服务，并把 Caddy 配置换成 `Caddyfile.accounts`
+  （见 `docker-compose.accounts.yml`）。
 - 1 个公网端口：只有 Caddy 发布 `443`。
-- Pipeline、模型路由和 Schema 仍由代码或配置文件维护，没有业务数据库。
+- Pipeline、模型路由和 Schema 仍由代码或配置文件维护，基座侧不保存业务数据；
+  额度是独立持久状态：基座由 `quota_store.py` 写入与审计共用的 SQLite 文件，
+  账号路径由 Supabase Postgres 账本持有。
 - Business API 使用一个持久化 SQLite 文件保存模型请求审计和 Token 聚合数据。
 - 客户端选择版本化的业务 Pipeline，不直接选择供应商模型。
 - 后处理是独立的代码层，但目前和业务层运行在同一个 `business-api` 容器中。
@@ -39,7 +43,7 @@ flowchart LR
     Caddy --> Client
 ```
 
-外部模型供应商不属于这 3 个容器。它是 LiteLLM 通过互联网调用的第三方服务。
+外部模型供应商不属于上述基座容器。它是 LiteLLM 通过互联网调用的第三方服务。
 
 ## 2. 分层与职责
 
@@ -50,7 +54,8 @@ flowchart LR
 | 大模型层 | `model_client.py` 与 `litellm` 容器 | 形成 OpenAI 兼容请求、内部鉴权、模型别名解析、供应商适配、响应归一化 | 公开业务 API、最终业务结果校验 |
 | 确定性规划层 | `business-api` 容器中的 `time_fragment.py` | 把 V2 operations 应用于完整基线，生成时间片、显式删除集合和完整 PlanProposal，并执行领域无关的确定性校验 | App 本地领域写入、状态或 EventKit 回写 |
 | 后处理层 | `business-api` 容器中的 `postprocessors.py`、`time_fragment_postprocessor.py` | 文本清理、JSON 解析、Schema 校验、Time Fragment operations 解析和纠错输入构造 | 模型选择、外部网络调用 |
-| 可观测性层 | `observability.py`、`usage_store.py`、SQLite Docker Volume | 匿名设备维度、请求/响应原文、逐模型调用、Token、状态和耗时 | 用户账户、付费额度、安全鉴权 |
+| 账号与额度层 | 账号切换后的 `time-fragment-api` 与 `billing-worker`：`account_api.py`、`account_backend.py`、`billing_verify.py`、`billing_worker.py`、`appstore_client.py`，以及基座与账号路径共用的 `quota_store.py` | 设备/账号身份解析、游客令牌、持久额度计量、429/409 冲突码、购买校验、Apple 通知处理与权益投影 | 模型选择、提示词、确定性排程 |
+| 可观测性层 | `observability.py`、`usage_store.py`、SQLite Docker Volume | 匿名设备维度、请求/响应原文、逐模型调用、Token、状态和耗时 | 用户账户、安全鉴权、付费额度状态（由账号与额度层持有） |
 | 部署运维 | Compose、部署脚本和证书配置 | 容器编排、健康检查、证书续期、生产验证 | 业务逻辑 |
 
 这里的“分层”首先是代码职责边界，不完全等同于容器边界。当前业务层和后处理层可以独立修改代码，但发布时会一起重建 `business-api` 镜像。
@@ -62,8 +67,10 @@ model_server/
 ├── README.md                         # 项目入口、公共 API 和本地测试
 ├── supabase/                         # 独立部署的账号同步服务、迁移、契约和测试
 ├── .env.example                      # 部署环境变量模板，不包含真实密钥
-├── docker-compose.yml                # 3 个容器、端口、网络和健康检查
+├── docker-compose.yml                # 基座容器、端口、网络和健康检查
+├── docker-compose.accounts.yml       # 账号切换 overlay：叠加账号服务和 billing-worker
 ├── Caddyfile                         # HTTPS、响应头和反向代理规则
+├── Caddyfile.accounts                # 账号切换后的路由分流（基座 / 账号服务）
 ├── caddy/
 │   └── Dockerfile                    # 用静态 Caddy 二进制构建最小镜像
 ├── business_api/
@@ -83,7 +90,19 @@ model_server/
 │   │   ├── postprocessors.py          # 普通文本和结构化结果后处理
 │   │   ├── time_fragment.py           # V2 确定性排程、Proposal 生成和校验
 │   │   ├── time_fragment_service.py   # Time Fragment 最多两次模型调用编排
-│   │   └── time_fragment_postprocessor.py # operations 解析和纠错输入
+│   │   ├── time_fragment_postprocessor.py # operations 解析和纠错输入
+│   │   ├── account_main.py            # 账号服务 ASGI 入口（uvicorn app.account_main:app）
+│   │   ├── account_api.py             # 账号/额度/计费路由与 OpenAPI 契约
+│   │   ├── account_backend.py         # Supabase RPC 客户端、身份与额度动作
+│   │   ├── quota_store.py             # 基座 SQLite 额度主体、桶、请求幂等和额度判定
+│   │   ├── guest_auth.py              # 游客 HMAC 令牌签发和设备摘要
+│   │   ├── planning_auth.py           # 服务间短期、绑定 body 的内部规划凭据
+│   │   ├── billing_verify.py          # StoreKit 签名交易校验与权益绑定
+│   │   ├── billing_worker.py          # Apple 通知处理、重试和对账循环
+│   │   ├── appstore_client.py         # App Store Server API 客户端与 JWS 根证书校验
+│   │   ├── migrate_guest_quota.py     # 旧 SQLite 额度数据一次性导入
+│   │   ├── reverse_ai_quota_export.py # 回滚时把账号账本反向导出回 SQLite
+│   │   └── admin_dashboard.py         # /admin/observability HTML 面板（等，完整清单见目录）
 │   └── tests/
 │       ├── fixtures/time-fragment-planner-v1/ # 确定性排程 golden fixtures
 │       ├── test_api.py               # 通用 API、鉴权和错误映射测试
@@ -195,14 +214,39 @@ POST /v1/pipelines/{pipeline_id}:run
 
 ### 5.3 Time Fragment V2 规划接口
 
+Time Fragment 的公开路由分布在两个服务上，线上由账号服务受理。
+
+基座 `business-api`（`factory.py`）：
+
 ```text
 POST /api/auth/guest
 POST /api/plan/parse
 ```
 
+账号服务 `time-fragment-api`（`account_api.py`）：
+
+```text
+POST /api/auth/guest
+GET  /api/account/quota
+POST /api/account/claim-guest
+POST /billing/claims
+GET  /billing/entitlement
+POST /billing/apple/verify
+POST /webhooks/apple
+POST /api/plan/parse
+```
+
+`Caddyfile.accounts` 把 `/api/*`、`/billing/*`、`/webhooks/apple` 和
+`/admin/time-fragment/*` 反向代理到 `time-fragment-api:8000`；账号切换同时给基座设置
+`PLANNING_INTERNAL_ONLY=true`，基座对 `/api/*` 与 `/admin/time-fragment/*` 一律返回 404。
+所以线上 `/api/auth/guest`、`/api/plan/parse` 只由账号服务提供，身份和额度也由它解析，
+基座只保留内部规划入口。账号服务的 `/health/live`、`/health/ready`（`ready` 探 Supabase
+账本，导入闸门未关时返回 503）供容器健康检查使用，Caddy 不把 `/health/*` 分流给它。
+
 `/api/auth/guest` 接收当前 iOS 已有的 `{device_id}` 请求。服务只把完整设备标识
 用于计算 SHA-256 摘要，签发带过期时间的 HMAC 令牌；令牌载荷不包含原始设备标识。
-`/api/plan/parse` 只接受这种游客 Bearer 令牌，因此 App 不需要持有
+`/api/plan/parse` 只接受这种游客 Bearer 令牌（账号服务上携带 Supabase 账号会话的
+请求返回 401 `DEVICE_REQUIRED`），因此 App 不需要持有
 `BUSINESS_API_KEY`。规划请求采用 V2 契约，必需字段为：
 
 ```json
@@ -255,21 +299,36 @@ API 调用最多调用模型两次。
 配置上限返回 413；V2 请求结构错误返回 422；LiteLLM 拒绝或返回错误响应返回 502；
 LiteLLM 不可达或返回 5xx 返回 503。这些错误发生时不返回伪造的 PlanProposal。
 
-Time Fragment 路由没有应用层请求频率限制、限流状态或限流缓存，也不生成应用层
-429。当前 guest 只是设备级匿名身份；注册登录、正式用户 Session、游客升级、
-持久配额、成本记账以及上线阶段的地区/合规路由均未实现。
+Time Fragment 路由对每个设备主体使用持久额度。基座免费主体用
+`TIME_FRAGMENT_GUEST_QUOTA_LIMIT`（默认 30，不重置的一次性额度）；白名单内已开启的
+开发会员设备每自然日 50 次（`Asia/Shanghai` 00:00 重置，是 `quota_store.py` 中的固定值）。
+账号服务的额度由 Supabase 账本持有，Python 侧只按 `TIME_FRAGMENT_GUEST_QUOTA_LIMIT` 与
+`TIME_FRAGMENT_MEMBER_QUOTA_LIMIT`（默认均为 30）下发 `freeLimit`/`memberLimit`。
+额度耗尽返回 429 `AI_QUOTA_EXHAUSTED`（额度用完且不重置）或
+`AI_DAILY_QUOTA_EXHAUSTED`（当日额度用完，带 `resetsAt`）。同一 `requestID` 并发重复
+返回 409 `AI_REQUEST_IN_PROGRESS`，已完成返回 409 `AI_REQUEST_ALREADY_COMPLETED`。
+注册登录、正式用户 Session、游客额度合并、按购买链共享的 Plus 权益由账号服务
+（`account_api.py`）与 Supabase 账本实现，见 [account-api.md](account-api.md)。
+额度之外，服务只保留 `MAX_INPUT_CHARS` 作为模型输入大小保护（线上由基座在内部规划
+入口执行），没有请求频率限制或限流缓存。
 
-### 5.4 可观测性管理接口
+### 5.4 可观测性与额度管理接口
 
 ```text
-GET /admin/observability/requests
-GET /admin/observability/summary
+GET  /admin/observability/requests
+GET  /admin/observability/summary
+GET  /admin/time-fragment/quotas/{support_code}
+POST /admin/time-fragment/quotas/{support_code}/reset
+POST /admin/time-fragment/quotas/reset-all
 ```
 
-两者只接受独立的 `ADMIN_API_KEY`。明细接口可通过原始 `device_id`（服务现场计算摘要）
+这些端点只接受独立的 `ADMIN_API_KEY`。明细接口可通过原始 `device_id`（服务现场计算摘要）
 或已知 `device_key`、ISO 8601 起止时间筛选，并返回顶层业务请求及其逐次模型调用。
 聚合接口返回整体和逐设备的请求数、成功/失败数、模型调用数、Token 合计、Token
 上报请求数、平均耗时以及首次/最近请求时间。
+
+三条额度端点按支持码查询或重置单个设备主体的额度，`reset-all` 重置全部主体。基座与
+账号服务各有一套同名路由；账号切换后由账号服务受理（线上分流见 §5.3）。
 
 原始业务请求、业务响应、模型输入和模型输出默认保留 30 天，之后置空；设备摘要、
 状态、耗时和 Token 元数据继续保留。鉴权头和 Bearer Token 不进入 SQLite。
@@ -285,6 +344,7 @@ GET /admin/observability/summary
 | `general-text-v1` | 准确、简洁地回答 | `0.2` | `2000` | 字符串 |
 | `general-analysis-v1` | 为下游业务系统分析输入 | `0.1` | `2000` | 符合 `ANALYSIS_SCHEMA` 的对象 |
 | `time-fragment-plan-v2` | 把 V2 规划请求转换为受限 operations | `0.0` | `20000` | 符合 operations Schema 的对象 |
+| `time-fragment-plan-v1` | 旧版整日任务列表生成（保留兼容） | `0.1` | `4000` | 符合 `TIME_FRAGMENT_PLAN_SCHEMA` 的对象 |
 
 Pipeline ID 是公网业务契约，模型别名是内部实现。调用方选择：
 
@@ -338,6 +398,16 @@ Time Fragment V2 复用模型协议层的 JSON Schema 约束，但采用独立�
 | `STRUCTURED_OUTPUT_MODE` | Business API | `json_schema` 或 `json_object` |
 | `TIME_FRAGMENT_TOKEN_SECRET` | Business API | 签发 Time Fragment 游客令牌，至少 32 字符 |
 | `TIME_FRAGMENT_TOKEN_TTL_SECONDS` | Business API | 游客令牌有效期，默认 30 天 |
+| `TIME_FRAGMENT_GUEST_QUOTA_LIMIT` | Business API、账号服务 | 免费设备主体的持久额度，默认 30 |
+| `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` | 账号服务 | 会员日额度，默认 30 |
+| `PLANNING_INTERNAL_SECRET` | Business API（账号切换）、账号服务、billing-worker | 服务间短期、绑定 body 的内部规划凭据 |
+| `PLANNING_INTERNAL_ONLY` | Business API | 账号切换下为 `true`，基座不再受理 `/api/*` 与 `/admin/time-fragment/*` |
+| `ADMIN_API_KEY` | Business API、账号服务、billing-worker | 可观测性和额度管理端点鉴权，账号切换下为必填 |
+
+账号切换叠加的环境变量（`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、
+`SUPABASE_SERVICE_ROLE_KEY`、`APPLE_*`、`STORE_REFERENCE_KEY`、
+`BILLING_WORKER_INTERVAL_SECONDS` 等）见 [account-api.md](account-api.md) 和
+`docker-compose.accounts.yml`。
 
 `Settings` 还定义了当前默认值：
 
@@ -347,8 +417,10 @@ Time Fragment V2 复用模型协议层的 JSON Schema 约束，但采用独立�
 
 当前 Compose 固定传入 `primary-model`，没有把后两个值从宿主机传入容器，因此它们在当前部署中使用代码默认值。若要在部署时调整，应先在 `docker-compose.yml` 中显式增加对应环境变量。
 
-Time Fragment V2 没有请求频率、每设备配额或限流缓存配置。`MAX_INPUT_CHARS` 是首轮
-与唯一一次纠错模型输入的大小保护，不是频率限制。
+Time Fragment V2 的每设备额度由 `TIME_FRAGMENT_GUEST_QUOTA_LIMIT`（默认 30，基座的
+一次性额度）与会员日额度 `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT`（账号服务，默认 30；基座的
+开发会员固定 50）决定。`MAX_INPUT_CHARS` 是首轮与唯一一次纠错模型输入的大小保护，
+不是频率限制。
 
 真实 `.env` 不得提交到 Git。`.env.example` 只保存变量名称和占位值。
 
@@ -357,16 +429,20 @@ Time Fragment V2 没有请求频率、每设备配额或限流缓存配置。`MA
 | HTTP 状态 | 错误码或场景 | 适用范围与产生位置 |
 | ---: | --- | --- |
 | `401` | `UNAUTHORIZED` | 通用 Pipeline 的业务密钥，或 Time Fragment guest Bearer Token 缺失/无效/过期 |
+| `401` | `DEVICE_REQUIRED` | 账号服务的计费路由或 `/api/plan/parse` 收到 Supabase 账号会话，而不是设备游客令牌 |
 | `404` | `PIPELINE_NOT_FOUND` | 通用 Pipeline ID 不存在，且不会调用模型 |
+| `409` | `AI_REQUEST_IN_PROGRESS` / `AI_REQUEST_ALREADY_COMPLETED` | 同一 `requestID` 并发重复，或该 `requestID` 已经完成 |
 | `413` | `INPUT_TOO_LARGE` | 通用输入，或 Time Fragment 首轮/纠错模型输入超过服务器限制 |
 | `422` | 请求体格式、空字符串、缺字段或额外字段不合法 | FastAPI/Pydantic 请求校验；Time Fragment 此时不调用模型 |
+| `429` | `AI_QUOTA_EXHAUSTED` / `AI_DAILY_QUOTA_EXHAUSTED` | 设备主体的持久额度耗尽：一次性额度用完，或当日额度用完并带 `resetsAt` |
 | `502` | `MODEL_GATEWAY_ERROR` | LiteLLM 拒绝请求或返回错误响应 |
 | `502` | `MODEL_OUTPUT_INVALID` | 仅通用结构化 Pipeline 的模型结果无法通过后处理和 Schema 校验 |
 | `503` | `MODEL_GATEWAY_UNAVAILABLE` | 无法连接 LiteLLM，或 LiteLLM 返回 5xx |
+| `503` | `ACCOUNT_SERVICE_UNAVAILABLE` | 账号服务无法访问 Supabase 账本 RPC；账号服务的 `/health/ready` 探账本失败也返回 503 |
 
 Time Fragment 可安全解析的规划内容错误不是 HTTP 错误：第二次候选仍有语义问题时
 返回 HTTP 200 和完整 proposal；第二次完全解析失败时返回 HTTP 200、
-`proposal: null` 和 `PARSE_FAILED`。该路由没有应用层 429。
+`proposal: null` 和 `PARSE_FAILED`。该路由的 429 只表示额度耗尽，不是频率限制。
 
 所有 HTTP 响应都会带 `X-Request-ID`，可用于串联客户端错误与服务日志。
 
@@ -379,6 +455,10 @@ Time Fragment 可安全解析的规划内容错误不是 HTTP 错误：第二次
 | `litellm` | `4000` | 否，仅 `expose` | LiteLLM 配置只读挂载 |
 
 `expose` 只表示容器网络中的服务端口，不会像 `ports` 一样把端口开放给公网。
+
+上表是基座拓扑。账号切换（`docker-compose.accounts.yml`）再叠加 `time-fragment-api`
+（`8000`，仅 `expose`）与 `billing-worker`（无端口），并提供 `rollback` profile 下的
+一次性 `quota-rollback`；这些服务同样不发布宿主机端口。
 
 Caddy 等待 `business-api` 健康后启动反向代理。Business API 的 Compose 健康检查只检查 `/health/live`；公开的 `/health/ready` 会继续检查 LiteLLM 是否可达。
 
@@ -432,9 +512,8 @@ LLM_API_KEY
 - 每个 Pipeline 独立选择模型别名。
 - 多模型负载均衡、供应商回退和基础设施自动重试策略；Time Fragment 仅有一次内容纠错调用。
 - 流式响应、异步任务和批处理接口。
-- 数据库、对话历史、缓存和持久化费用记录。
-- AI 接口接入 Supabase 用户 JWT/Session，以及游客额度升级到正式账号。
-- 按调用方持久化的配额、租户、权限、成本记账和调用审计。
+- 对话历史、响应缓存和长期保存的模型响应；账号账本只保留标识、body hash 与额度状态，
+  可观测性明细按 §5.4 的保留期保存。
 - 可持久化或服务端可撤销的 Time Fragment 游客令牌。
 - 上线阶段的地区路由、合规展示和额外网关防滥用策略。
 - 完整的指标、分布式追踪和集中日志平台。
