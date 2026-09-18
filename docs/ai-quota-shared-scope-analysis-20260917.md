@@ -4,6 +4,22 @@
 written for this document.** Every claim below was read out of the repository at the cited
 `file:line`; anything I could not check is marked **[unverified]** in §6.
 
+**Status update (2026-09-18) — the status line above is superseded by later implementation.** This
+was a pure design when it was written; §2–§5 below stay as the 2026-09-17 record.
+
+- **Landed.** E1/E2/E4 shipped in `supabase/migrations/202609170020_shared_member_quota.sql`: it adds
+  `billing_private.plus_source`, and both `ai_private.quota_status` and the `reserve` path of
+  `public.ai_quota_service` now read and write the chain owner's member bucket (`ai_private.buckets`,
+  keyed by the resolved `scope` with `period = 'member:YYYY-MM-DD'`, row-locked before the
+  remaining-check). The free layer is unchanged and still meters `ai_private.free_pools`.
+- **Still open.** E5 remains recorded but not fixed (§5.0.1); E3 remains open.
+- **The artifact names in §3/§4 are design codenames, not what shipped.** The proposed
+  `202609180018_shared_member_quota.sql` shipped as `202609170020_shared_member_quota.sql`; no
+  `202609180018_…_rollback.sql` was ever created (there is no `202609170020` rollback in
+  `supabase/migrations/`); and `supabase/tests/member-shared-quota.test.mjs` does not exist — those
+  cases landed in the existing `supabase/tests/ai-quota.test.mjs`, `supabase/tests/billing.test.mjs`
+  and `supabase/tests/guest-signout-quota.test.mjs`.
+
 - Repository: `model_server` (Supabase Postgres + FastAPI), worktree
   `/Volumes/mac2/codex-worktrees/model-server-quota-analysis-20260917`
 - Branch `codex/quota-shared-account-analysis-20260917`, based on `origin/main` @ `d65825c`
@@ -361,7 +377,7 @@ lexical order after `202609170017` matters. Must be applied **after** `202609170
 
 | # | Object | Action |
 | --- | --- | --- |
-| 1 | `billing_private.plus_source(p_actor text) returns table(plan text, status text, account_timezone text, scope text)` | **new** (`create or replace`, `security definer`, `set search_path=''`). Implements §3.1 steps 1–2. Reads `billing_private.account_entitlements`, `billing_private.store_purchases`, `billing_private.purchase_devices`, `ai_private.principals`. Optionally also requires `store_status in ('active','billing_retry')` and a non-expired `expires_at` at read time instead of trusting the projection — see **E5**, this would also narrow the accepted D5 gap. |
+| 1 | `billing_private.plus_source(p_actor text) returns table(plan text, status text, account_timezone text, scope text)` | **new** (`create or replace`, `security definer`, `set search_path=''`). Implements §3.1 steps 1–2. Reads `billing_private.account_entitlements`, `billing_private.store_purchases`, `billing_private.purchase_devices`, `ai_private.principals`. Optionally also requires `store_status in ('active','billing_retry')` and a non-expired `expires_at` at read time instead of trusting the projection — see **E5**, this would also narrow the accepted D5 gap. **Not implemented as designed:** the shipped `billing_private.plus_source(p_actor text)` returns `table(account_timezone text, scope text)` only — the proposed `plan`/`status` return columns were dropped; the `ae.plan = 'plus' and ae.status in ('active','grace')` gate lives in the function body instead (see `supabase/migrations/202609170020_shared_member_quota.sql`). |
 | 2 | `billing_private.member_scope(p_actor text) returns text` | new thin wrapper selecting `scope` from (1), or fold into (1). Keeps call sites short. |
 | 3 | `ai_private.quota_status(actor text, dev_allowed boolean, member_limit integer)` | `create or replace` (`202609170017…:171-201` shape). Replace the membership lookup at `:181-184` with `plus_source(actor)`, and replace `where principal=actor` at `:193` with `where principal = coalesce(scope, actor) and period = period_key`. `resetsAt` still comes from the entitlement timezone. |
 | 4 | `public.ai_quota_service(p_action text, p_data jsonb)` | `create or replace`. In `reserve` (`202609140016…:222-251`), take `plus_source(actor)` and write the bucket at `coalesce(scope, actor)` at `:244-245`. **Take a row lock on the shared meter before the remaining-check** — `perform 1 from ai_private.buckets where principal = scope and period = period_key for update` (after an idempotent `insert … on conflict do nothing`), or lock `ai_private.principals where id = scope for update`, mirroring the free-pool lock at `:200`. Without this, two devices on one chain can each pass the `:241-242` check at `remaining = 1` and overspend, because `:201` only serializes requests from the *same* actor. In `admin_reset` (`:212-221`) also zero the scope's member buckets. |
@@ -581,11 +597,13 @@ by `account_by_token` from the notification's `appAccountToken`, then passed to 
 **Consequence for a 3-device chain.** Device A (the one in the notification) is recomputed to
 `plan='free'` and is immediately correct. Devices B and C keep `plan='plus', status='active'`.
 `billing_private.plus_source`'s gate is `ae.plan = 'plus' and ae.status in ('active','grace')`
-(`202609170020`), so it still passes; and its chain ordering
-(`case sp.store_status when 'active' then 0 else 2 end`) only ranks chains **against each other** — it
-never checks that the selected chain is still valid, so a refunded chain with no competitor is still
-selected. B and C therefore keep Plus, metered against **the chain owner's bucket**, i.e. the chain's
-whole daily 30, until their own notifications arrive — which for a refund they may never do.
+(`202609170020`), so it still passes; and its chain ordering as shipped
+(`case sp.store_status when 'active' then 0 when 'billing_retry' then 1 else 2 end, sp.expires_at desc
+nulls last, sp.id` — three tiers, then expiry and id as tie-breaks) only ranks chains **against each
+other** — it never checks that the selected chain is still valid, so a refunded chain with no
+competitor is still selected. B and C therefore keep Plus, metered against **the chain owner's
+bucket**, i.e. the chain's whole daily 30, until their own notifications arrive — which for a refund
+they may never do.
 
 **Why sharing makes it worse, precisely.** Under per-device metering a stale projection was
 **self-limiting**: B could at most give itself 30/day it should not have. Under per-chain metering B

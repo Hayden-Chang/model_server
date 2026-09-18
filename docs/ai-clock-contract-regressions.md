@@ -51,8 +51,8 @@ test helper parses the prose or invokes production recovery to fabricate it.
 | Continuous commute narrative | Eight intervals; nearest-quarter rounding; two meal defaults; commute endpoints not extra tasks; 09:45–12 and 19–19:30 remain gaps | `test_time_fragment_api.py::test_continuous_chinese_timepoints_round_and_return_only_intended_intervals` |
 | Global start plus priorities | A1–A5, B1–B4, C1 from 16:00; no per-task anchors invented | `test_time_fragment_api.py::test_global_start_schedules_untimed_adds_by_requested_priority` |
 | Complete labels without explicit relation | Same natural precedence and scores 10 through 1 | `test_time_fragment_api.py::test_complete_priority_labels_use_natural_order_without_relation` |
-| Past and insufficient capacity | All 14 tasks retained; four unplaced; warnings only; one call | `test_time_fragment_api.py::test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_correction` |
-| Correction and ordinary warnings together | Only UNKNOWN_TARGET sent for correction; legal past task retained in corrected candidate | `test_time_fragment_api.py::test_semantic_correction_excludes_normal_unplaced_warnings` |
+| Past and insufficient capacity | All 14 tasks retained; four unplaced; warnings only; one call | `test_time_fragment_api.py::test_explicit_past_add_schedules_and_capacity_unplaced_adds_remain_without_correction` |
+| Correction and ordinary warnings together | Only UNKNOWN_TARGET sent for correction; legal past task retained in corrected candidate | `test_time_fragment_api.py::test_semantic_correction_preserves_explicit_past_clock` |
 | Relative insertion and cascade | Existing report, pinned/external blocks, explicit moves, and unaffected gaps preserved | `test_time_fragment_planner.py::test_explicit_add_cascades_following_tasks_around_pinned_and_external_blocks` and adjacent mapped insertion cases |
 | Shared client/server goldens | Only the authorized midnight-add fixture and its hash change; the other 23 fixtures remain untouched | `test_time_fragment_planner.py::test_time_fragment_planner_golden_fixture`, `test_golden_fixture_manifest_matches_exact_bytes_and_case_set` |
 | Current full-day report | All 12 stated anchors preserved; combined commute 19:30–20:00; 24:00 sleep remains unscheduled with warnings, never noon or next-day placement; no retry | `test_time_fragment_clock_extraction.py::test_entire_reported_day_preserves_clock_anchors_and_flags_only_midnight_boundary` |
@@ -61,6 +61,12 @@ test helper parses the prose or invokes production recovery to fabricate it.
 | Captured dinner context omission | Raw `给吃晚饭` + null cannot silently become00:30; corrected full context starts20:00, retains all other tasks and midnight warnings | `test_shared_clock_context.py::test_recorded_cropped_dinner_context_cannot_become_a_valid_midnight_schedule`, `test_correction_restores_shared_dinner_clock_without_changing_other_operations` |
 | Shared vs independent clock mentions | Commute end20:00 and dinner start08:00 citing the same original span are rejected; distinct8点 breakfast/dinner mentions can resolve differently | `test_shared_clock_context.py::test_shared_arrival_clock_has_one_resolution_across_commute_and_dinner`, `test_distinct_eight_oclock_mentions_can_still_resolve_to_different_periods` |
 | Flexible activity after arrival | Independent tasks and 有空再/稍后/等一会儿/再 actions do not automatically inherit arrival time | `test_shared_clock_context.py::test_independent_or_explicitly_flexible_tasks_do_not_inherit_arrival_clock` |
+
+The selectors for the past/capacity and correction cases above were renamed on 2026-09-09 together
+with the explicit-time-priority change, which replaced their old bug-level expectations
+(`test_past_and_capacity_unplaced_adds_remain_in_first_candidate_without_correction` and
+`test_semantic_correction_excludes_normal_unplaced_warnings` no longer exist in
+`business_api/tests`); see [explicit-time-priority.md](explicit-time-priority.md).
 
 Two old *bug* expectations are deliberately not retained: a 10:00 request with
 an 11:00 model clock may no longer become a valid 08:00 free task; a negated
