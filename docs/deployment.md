@@ -90,9 +90,10 @@ overlay. `quota-rollback` is a one-off in the same overlay, gated behind the
 `rollback` profile, with a writable legacy volume and no published port; only the
 cutover rollback procedure in [account API](account-api.md) starts it.
 
-Neither Compose file pulls the application images: `caddy`, `business-api`,
-`time-fragment-api`, `billing-worker`, and `quota-rollback` are baked on this
-host from the local build context, and `litellm` is the only pulled image.
+Every application service (`caddy`, `business-api`, `time-fragment-api`,
+`billing-worker`, and `quota-rollback`) is built on this host from the local build
+context, and `caddy` also carries a local image tag,
+`model-server-caddy:2.11.4`. The only image pulled from a registry is `litellm`.
 `docker compose up -d` on its own therefore recreates containers on the previous
 image. A code change takes effect only after `build` for the services it touched
 and then `up -d`.
@@ -184,12 +185,14 @@ arguments and required environment.
 - `scripts/billing-deploy.sh` — billing rollout (Phase A1–A6): backup, code
   update, build, start, verify. Run as root in `/opt/model_server`, with the
   Supabase migrations already applied to the hosted project.
-- `scripts/billing-rollback-device-principal.sh` — **the recommended production
-  rollback entry point.** Emergency reversal of the device-principal billing
-  rollout: it reverses migrations `202609170017`–`202609170020` in the hosted
-  database behind a fail-closed preflight guard, then restores the pre-deploy
-  code. It requires `SUPABASE_DB_URL` (the direct Postgres connection string, not
-  the REST URL) and a clean checkout. Test it before you need it.
+- `scripts/billing-rollback-device-principal.sh` — the supported production
+  rollback entry point, and the only path that reverses the database and restores
+  the pre-deploy code together. It reverses migrations
+  `202609170017`–`202609170020` in the hosted database behind a fail-closed
+  preflight guard, then rebuilds and restarts from the pre-deploy revision. It
+  requires `SUPABASE_DB_URL` (the direct Postgres connection string, not the REST
+  URL) and a usable checkout, which must be confirmed **before** the window — see
+  the preconditions below. Test it before you need it.
 - `scripts/billing-rollback.sh` — superseded. It is kept only so the rollback
   instruction `billing-deploy.sh` prints still resolves, and it delegates to
   `billing-rollback-device-principal.sh` with the same argument.
@@ -202,3 +205,37 @@ arguments and required environment.
 - `scripts/rollback-business-api.sh` — restore only `business-api` to the
   immutable image retained by `deploy-business-api.sh`.
 - `scripts/verify-production.sh` — the production smoke described above.
+
+### Rollback preconditions
+
+`scripts/billing-rollback-device-principal.sh` needs the deployment root to be a
+usable git checkout and refuses to do anything otherwise. Confirm that before the
+window, not during an incident:
+
+```bash
+git -C /opt/model_server rev-parse --is-inside-work-tree
+```
+
+The presence of a `.git` entry does not prove it. A tree that was copied or
+packed can keep an ASCII `gitfile` whose `gitdir:` line still points at the
+machine that produced it, and the command above then answers
+`fatal: not a git repository`; the `git pull --ff-only` in
+`scripts/billing-deploy.sh` fails for the same reason. This check is the rollback
+script's first preflight step, so it exits there, before any container is stopped
+and before the database is touched. The refusal is safe, but it leaves no
+rollback path until a real checkout exists. Prepare one at `/opt/model_server`,
+or point `MODEL_SERVER_DIR` at one, and re-run.
+
+If no usable checkout can be prepared in time, run the reverse migration by hand
+as the single transaction its header defines, with the same guard the script
+extracts from it:
+
+```bash
+psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 \
+  -f supabase/migrations/202609170099_billing_device_principal_down.sql
+```
+
+That path reverses the database only: the file's header states that the deploy
+code has to move with it, so the pre-deploy revision must still be restored
+separately. Keep `-v ON_ERROR_STOP=1`, or a failed transaction is reported as
+success.
