@@ -1,8 +1,13 @@
 # Account-aware AI API
 
-The optional `time-fragment-api` service accepts either the existing installation
-token or a Supabase account access token. It resolves the account through
-`ai_account_identity`, reserves quota in Postgres, and calls the private planner.
+The optional `time-fragment-api` service serves both identities, but not on every
+route. `GET /api/account/quota` accepts either a Supabase account access token
+(resolved through `ai_account_identity`) or the installation token, and
+`POST /api/account/claim-guest` requires the account token plus the guest token
+it is asked to merge. `/api/plan/parse` and every `/billing/*` route require the
+device token and refuse an account session with `401 DEVICE_REQUIRED`. Quota is
+reserved in Postgres and the private planner is called with an internal HMAC
+credential.
 The existing planner, correction loop and candidate-plan contract are reused.
 An AI result never writes a user's cloud state or applies a plan to the App.
 
@@ -14,7 +19,11 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 | `POST /api/plan/parse` | guest only | Existing V2 input/output; linked identities cannot execute the same request ID twice. An account token is refused with `401 DEVICE_REQUIRED` before any quota is reserved. |
 | `GET /api/account/quota` | guest or account | `supportCode`, `limit`, `used`, `remaining`. |
 | `POST /api/account/claim-guest` | account | Body `{"guest_token":"…"}`; verify both credentials and merge free usage by maximum. |
-| `GET/POST /api/development/membership` | allowlisted guest | Existing development toggle and 50/day Shanghai quota; not a paid subscription. |
+| `POST /billing/claims` | device token | Body `{"provider":"apple","productId":"…","claimId":"…"}` (`claimId` optional; the server mints one). Returns `claimId`, this device's `appAccountToken` and a one-hour `expiresAt`. An account session gets `401 DEVICE_REQUIRED`. |
+| `GET /billing/entitlement` | device token | Device-scoped projection: `plan`, `status`, `validUntil`, `serviceEndAt`, `entitlementRevision`, `aiQuota` (`limit`/`used`/`remaining`/`resetsAt`) and `billingSources` (`provider`/`productId`/`expiresAt`). |
+| `POST /billing/apple/verify` | device token | Body `{"signedTransaction":"…","productId":"…"}` (`claimId` optional); verifies the StoreKit JWS against the pinned Apple root, re-queries the chain's authoritative status and binds this device. Returns the `/billing/entitlement` projection; `503 BILLING_NOT_CONFIGURED` without the Apple key or store reference key. |
+| `POST /webhooks/apple` | Apple JWS | No bearer credential: the `signedPayload` JWS is the authentication. Verified and deduplicated by `notificationUUID` into `billing_events`; a processing failure answers `500 EVENT_RETRY_SCHEDULED` and stays for the worker to replay. |
+| ~~`GET/POST /api/development/membership`~~ | — | **Not accepted by this service** (404): the development toggle exists only in the base `business-api` (`business_api/app/factory.py`, see [development-membership.md](development-membership.md)). This service's member allowance is the entitlement-driven Plus daily limit from `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` (default 30, `business_api/app/account_backend.py`); the base's 50/day is a fixed value of its SQLite quota store, not this service's limit. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
 
 The AI route is device-metered. Membership resolves by principal identity
@@ -29,8 +38,10 @@ guest token (the catch in `AIPlanningClient.authenticatedSend` checks only
 `failure.status == 401`), so the refusal costs one extra round trip until the
 companion client release stops sending the account token; if the account token is
 refreshed between those two attempts the client keeps using the account token and
-that request fails instead of falling back. Membership and quota reads stay on
-`/billing/*`, which requires the device token by the same rule (`billing_device`).
+that request fails instead of falling back. Membership reads and the device-scoped
+quota surface stay on `/billing/*`, which requires the device token by the same
+rule (`billing_device`). The one exception is `GET /api/account/quota`, which
+deliberately keeps reading the requesting actor's own merged free pool (below).
 
 ### Membership quota scope
 
@@ -38,6 +49,10 @@ The daily Plus allowance is **one counter per purchase chain**, shared by that
 chain's active member devices (`billing_private.purchase_devices` rows with
 `revoked_at is null`), reset at local midnight in the entitlement's
 `account_timezone` (`202609170020_shared_member_quota.sql`; product decision E1).
+Current implementation boundary: the reset instant is computed in
+`account_timezone`, but `quota_status` renders the member `resetsAt` with a fixed
+`+08:00` offset, so that label is only correct while entitlements keep the
+`Asia/Shanghai` default (`202609110014_member_quota.sql`).
 It is explicitly *not* per Time Fragment account: an account is not a billing
 subject, and a signed-in member's AI request is refused on `/api/plan/parse` and
 retried with the device token, so the device principal is the only AI identity.
@@ -113,6 +128,58 @@ The ledger keeps only identifiers, body hashes and quota state. Internal plannin
 observability retains model/token/timing metadata, with input, output and provider
 error content redacted. No response cache stores a user's schedule. Existing
 pre-cutover observability records retain their existing retention policy.
+
+## Verification diagnostics and event retries
+
+`POST /billing/apple/verify` never trusts the client's claim about subscription
+state. After verifying the submitted JWS it re-queries Apple's
+`/inApps/v1/subscriptions/{originalTransactionId}` endpoint. That response is a
+container, not a JWS: the authoritative entries live at
+`data[].lastTransactions[]`, and each entry's `signedTransactionInfo` is verified
+against the pinned root before its `expiresDate` is used. The entry's `status`
+code is mapped through `STATUS_MAP` in `business_api/app/billing_verify.py`:
+`1=active`, `2=expired`, `3=billing_retry`, `4=revoked`, and an unknown code is
+treated as `expired`. A chain Apple does not list at all is a
+`422 VERIFICATION_FAILED` (`TRANSACTION_NOT_FOUND`).
+
+The retry split follows the failure class. Transport failure, a 5xx or 429 from
+Apple, and an unparsable envelope are transient: they return
+`202 VERIFICATION_PENDING` with a `reason` so the client retries later. A rejected
+response, an environment mismatch, a failed JWS check or a mismatched product is
+terminal: `422 VERIFICATION_FAILED`, `422 ENVIRONMENT_MISMATCH` or
+`422 PRODUCT_MISMATCH`. Missing Apple configuration answers
+`503 BILLING_NOT_CONFIGURED` before any Apple call.
+
+Every verification writes one INFO line comparing the submitted transaction with
+the chain state Apple reports:
+
+```text
+apple verify chain=<originalTransactionId> submitted tx=<transactionId> purchaseDate=<iso> expiresDate=<iso> | apple status=<STATUS_MAP value> expiresAt=<iso>
+```
+
+`purchaseDate` and `expiresDate` come from the submitted JWS; `status` and
+`expiresAt` come from Apple. When they disagree the client is handing back an old
+transaction from StoreKit's queue instead of a fresh purchase, which otherwise
+looks like a server fault. The line carries chain and transaction identifiers
+only: no account, session, support code or credential. The application logger is
+set to INFO in `business_api/app/account_main.py`, because uvicorn configures only
+its own loggers and the line would otherwise be invisible in the container log;
+`billing-worker` sets the same level.
+
+Webhook deliveries and verification failures are stored in
+`billing_private.billing_events` (initial `status` `received`, `attempts` 0). The
+`billing-worker` container polls every `BILLING_WORKER_INTERVAL_SECONDS`, default
+300 seconds (the compose default as well), replays pending events and then
+reconciles active chains. Each tick selects up to 20 events with
+`status in ('received','failed')` and `attempts < 8`, oldest `received_at` first —
+the defaults of `process_pending_events` and of the `event_pending` action. A
+replayed event is already stored, so the receive/dedupe step is skipped. `event_mark`
+increments `attempts` only for a `failed` or `processed` status, so a persistently
+failing event leaves the pending set after eight recorded attempts and is never
+retried forever. Every failure also records `last_error_code` (the upstream code,
+`PROCESSING_FAILED`, or the exception class name). A processing failure answers the
+webhook with `500 EVENT_RETRY_SCHEDULED`, so Apple's own retries act as the second
+net.
 
 ## Deployment and quota cutover
 
