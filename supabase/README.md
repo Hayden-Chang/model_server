@@ -191,7 +191,7 @@ follow the versioned JSON Schemas.
 | `pull_sync_state` | `p_device_id,p_operation_ids?,p_control_request_ids?` | current state/hash/lineage and requested accepted-ID receipts |
 | `acknowledge_sync_state` | `p_device_id,p_generation,p_revision,p_state_hash` | records confirmation of the exact current cloud state |
 | `commit_sync_state` | `p_operation,p_result_state` | `accepted` or original `duplicate` receipt; duplicate includes current revision/generation |
-| `replace_sync_state` | `p_device_id,p_replace_id,p_expected_generation,p_expected_revision,p_state` | atomic safety snapshot + new generation/revision; requires user-confirmed first-sync choice |
+| `replace_sync_state` | `p_device_id,p_replace_id,p_expected_generation,p_expected_revision,p_state` | atomic safety snapshot + new generation/revision; requires an existing cloud state, so a fresh account gets `firstSyncRequired` and must use `initialize_sync_state` for its first sync; only after a user-confirmed local overwrite |
 | `export_sync_checkpoint` | `p_device_id,p_checkpoint_id` | own protocol recovery snapshot; caller already knows the checkpoint ID |
 | `request_account_deletion` | `p_deletion_request_id,p_receipt` | persistent `pending` job; requires OTP authentication within 10 minutes |
 | `account_deletion_status` | `p_receipt` | `pending/dataDeleted/completed/unknown`; also available to anon after Auth deletion |
