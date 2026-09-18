@@ -295,6 +295,20 @@ def test_expired_purchase_maps_to_expired_status(certs, configuration):
     assert backend.calls[0][2]["storeStatus"] == "expired"
 
 
+def test_verify_logs_submitted_transaction_against_apple_status(certs, configuration, caplog):
+    """A client replaying an old queued transaction is indistinguishable from a
+    server fault without this comparison in the log."""
+    apple = FakeApple(payload={"environment": "Sandbox",
+        "subscriptionGroupIdentifierItems": [{"subscriptionGroupIdentifier": "group1",
+            "subscriptionItems": [{"originalTransactionId": "123", "status": 2,
+                                   "expiresDate": EXPIRES_MS}]}]})
+    with caplog.at_level(logging.INFO, logger="app.billing_verify"):
+        _verify(certs, FakeBackend(), apple)
+    assert "apple verify chain=123" in caplog.text
+    assert "submitted tx=" in caplog.text
+    assert "apple status=expired" in caplog.text
+
+
 def test_app_store_client_missing_environment_is_rejected(configuration):
     with pytest.raises(ValueError):
         AppStoreServerAPIClient(environment="staging", key_p8=b"x", key_id="k",
