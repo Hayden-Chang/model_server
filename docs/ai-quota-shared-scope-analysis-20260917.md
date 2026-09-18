@@ -19,6 +19,14 @@ was a pure design when it was written; §2–§5 below stay as the 2026-09-17 re
   `supabase/migrations/`); and `supabase/tests/member-shared-quota.test.mjs` does not exist — those
   cases landed in the existing `supabase/tests/ai-quota.test.mjs`, `supabase/tests/billing.test.mjs`
   and `supabase/tests/guest-signout-quota.test.mjs`.
+- **Two further §3.2 statements are stale as of 2026-09-18.** The `test:sync` gap no longer exists:
+  `npm run test:sync` now lists both `ai-quota.test.mjs` and `guest-signout-quota.test.mjs` (see
+  `supabase/package.json`), so the §3.2 row and the §4 "not currently run by `npm run test:sync`"
+  caveat are both obsolete.
+- **The shipped migration is 434 lines, not the estimated 550–650.** §3.2 sized the work assuming
+  `public.billing_service` would be re-emitted (~250 lines); the migration deliberately does not
+  re-emit it, so the ≤400-line PR-convention exception discussed there still applies, but the real
+  size is smaller than predicted.
 
 - Repository: `model_server` (Supabase Postgres + FastAPI), worktree
   `/Volumes/mac2/codex-worktrees/model-server-quota-analysis-20260917`
