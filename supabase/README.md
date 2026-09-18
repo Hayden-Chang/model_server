@@ -3,7 +3,8 @@
 This directory implements the first service from the account/cloud architecture.
 It contains deployable Supabase migrations, passwordless email Auth configuration,
 content-free Realtime signals, account-deletion processing, and database tests.
-It does not add an iOS login screen or sync coordinator, billing, or AI routing.
+Billing and AI quota migrations and their database tests now live here too; it
+does not add an iOS login screen, a sync coordinator, or AI routing.
 
 ## Repository ownership and existing project
 
@@ -82,6 +83,18 @@ supabase db reset --local
 This applies the migrations to the **local** Supabase project. Auth email is
 captured in its local Inbucket mailbox. Cloud deployment requires a selected
 Supabase project and securely configured CLI credentials:
+
+**This directory also contains a manual recovery script.**
+`supabase/migrations/202609170099_billing_device_principal_down.sql` reverses the
+billing device-principal rollout and is not part of the forward migration
+history. Its version sorts after every forward migration (`202609170020` is the
+highest), so `supabase db push` treats it as pending and would apply it to
+whatever database it targets, and a plain `supabase db reset` applies it as
+well. Before pushing, run `supabase db push --dry-run` and confirm the pending
+set does not contain it. The supported way to run it is
+`scripts/billing-rollback-device-principal.sh`, which extracts its guard as a
+read-only preflight; the local test runner already excludes the file through
+`recoveryScripts` in `supabase/tests/database.mjs`.
 
 ```sh
 supabase link --project-ref "$DAYMOSAIC_SUPABASE_PROJECT_REF"

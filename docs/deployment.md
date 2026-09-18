@@ -67,21 +67,63 @@ install -m 0755 caddy /opt/model_server/caddy/caddy
 
 Copy `.env.example` to `.env`, replace every placeholder with independent
 secrets/provider settings, including a dedicated `ADMIN_API_KEY` for
-observability reads and Time Fragment quota resets, then:
+observability reads and Time Fragment quota resets, provide the Apple signing key
+described below, then:
 
 ```bash
 cd /opt/model_server
-sudo docker compose config
-sudo docker compose pull litellm
-sudo docker compose build caddy business-api
-sudo docker compose up -d
-sudo docker compose ps
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml config
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml pull litellm
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
+  build caddy business-api time-fragment-api billing-worker
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml up -d
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml ps
 ```
 
-Never commit `.env`. Only Caddy should show a published host port in
-`docker compose ps`. The named `model-server-usage` volume stores SQLite data
-across `business-api` container rebuilds. Back up or migrate that volume before
-removing it; `docker compose down` without `--volumes` preserves it.
+The accounts overlay is the deployed topology, so every command that creates or
+recreates this stack needs both files. It adds the `time-fragment-api` and
+`billing-worker` containers and mounts `Caddyfile.accounts` over
+`/etc/caddy/Caddyfile`; that file owns the `/api/*`, `/billing/*`, and
+`/webhooks/apple` routes to `time-fragment-api`, so the base `Caddyfile` is no
+longer the configuration Caddy serves and those routes do not exist without the
+overlay. `quota-rollback` is a one-off in the same overlay, gated behind the
+`rollback` profile, with a writable legacy volume and no published port; only the
+cutover rollback procedure in [account API](account-api.md) starts it.
+
+Neither Compose file pulls the application images: `caddy`, `business-api`,
+`time-fragment-api`, `billing-worker`, and `quota-rollback` are baked on this
+host from the local build context, and `litellm` is the only pulled image.
+`docker compose up -d` on its own therefore recreates containers on the previous
+image. A code change takes effect only after `build` for the services it touched
+and then `up -d`.
+
+Compose never updates the tree it builds from. `scripts/billing-deploy.sh` runs
+`git pull --ff-only` inside `/opt/model_server`, and
+`scripts/billing-rollback-device-principal.sh` refuses to run when that directory
+is not a git checkout; `scripts/deploy-business-api.sh` also accepts an unpacked
+release archive that records its revision in `.candidate-source-sha`. Sync the
+revision you intend to run before building, and never assume the deployed tree
+matches the branch you reviewed.
+
+### Apple signing key
+
+The overlay bind-mounts `./.secrets` read-only at `/opt/model_server/.secrets` in
+both `time-fragment-api` and `billing-worker`, and `APPLE_PRIVATE_KEY_PATH`
+defaults to `/opt/model_server/.secrets/apple.p8`. The key must exist on the host
+at that path and be readable by the container user (UID 10001); the configured
+path must stay in step with the mount, because the container cannot see any other
+host path. A missing or unreadable key does not stop the service: it fails closed,
+so every purchase returns `BILLING_NOT_CONFIGURED` (503) after StoreKit has
+already charged the user. Exercise a real purchase or restore right after
+rollout. `STORE_REFERENCE_KEY`, which encrypts the stored original transaction
+ids, is required outright: the Compose file refuses to render the account
+services while it is unset or empty.
+
+Neither `.env` nor `.secrets/` may be committed. Only Caddy should show a
+published host port in `docker compose ps`. The named `model-server-usage` volume
+stores SQLite data across `business-api` container rebuilds. Back up or migrate
+that volume before removing it; `docker compose down` without `--volumes`
+preserves it.
 
 ## Production verification
 
@@ -133,3 +175,30 @@ verify compliance presentation, or test additional gateway anti-abuse controls.
 The smoke also queries the observability summary
 for its Time Fragment device and confirms that the just-completed request and
 reported Token metadata are visible; it does not inspect or print raw content.
+
+## Operational scripts
+
+Run these from the deployment root; each script's own header documents its exact
+arguments and required environment.
+
+- `scripts/billing-deploy.sh` — billing rollout (Phase A1–A6): backup, code
+  update, build, start, verify. Run as root in `/opt/model_server`, with the
+  Supabase migrations already applied to the hosted project.
+- `scripts/billing-rollback-device-principal.sh` — **the recommended production
+  rollback entry point.** Emergency reversal of the device-principal billing
+  rollout: it reverses migrations `202609170017`–`202609170020` in the hosted
+  database behind a fail-closed preflight guard, then restores the pre-deploy
+  code. It requires `SUPABASE_DB_URL` (the direct Postgres connection string, not
+  the REST URL) and a clean checkout. Test it before you need it.
+- `scripts/billing-rollback.sh` — superseded. It is kept only so the rollback
+  instruction `billing-deploy.sh` prints still resolves, and it delegates to
+  `billing-rollback-device-principal.sh` with the same argument.
+- `scripts/rollback-account-ai-cutover.sh` — emergency rollback from the
+  account-aware AI cutover to the legacy topology: stop public traffic, reverse
+  export post-cutover usage, close the new ledger gate, then restore the legacy
+  Compose stack. Check the plan with `--dry-run` before the window.
+- `scripts/deploy-business-api.sh` — build and switch only `business-api`,
+  automatically restoring its previous image when verification fails.
+- `scripts/rollback-business-api.sh` — restore only `business-api` to the
+  immutable image retained by `deploy-business-api.sh`.
+- `scripts/verify-production.sh` — the production smoke described above.
