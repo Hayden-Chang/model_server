@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+from pathlib import Path
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -348,3 +349,9 @@ def test_private_key_resolution_follows_path_then_inline(configuration, tmp_path
     assert resolve_apple_key_p8(inline) == key_pem.encode()
     assert resolve_apple_key_p8(configuration.model_copy(update={
         "apple_private_key": None, "apple_private_key_path": ""})) is None
+
+
+def test_account_api_enables_info_logging():
+    """The verify comparison log is useless if the app never emits INFO."""
+    source = (Path(__file__).resolve().parents[1] / "app" / "account_main.py").read_text()
+    assert "logging.basicConfig(level=logging.INFO)" in source
