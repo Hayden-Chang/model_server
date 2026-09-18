@@ -399,7 +399,7 @@ Time Fragment V2 复用模型协议层的 JSON Schema 约束，但采用独立�
 | `TIME_FRAGMENT_TOKEN_SECRET` | Business API | 签发 Time Fragment 游客令牌，至少 32 字符 |
 | `TIME_FRAGMENT_TOKEN_TTL_SECONDS` | Business API | 游客令牌有效期，默认 30 天 |
 | `TIME_FRAGMENT_GUEST_QUOTA_LIMIT` | Business API、账号服务 | 免费设备主体的持久额度，默认 30 |
-| `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` | 账号服务 | 会员日额度，默认 30 |
+| `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` | 账号服务 | 会员日额度，默认 30；当前 `docker-compose.accounts.yml` 未向 `time-fragment-api`/`billing-worker` 转发该变量，且 `.env.example` 未列出，因此账号切换部署下在 `.env` 里设置它不会生效，实际取代码默认值 30 |
 | `PLANNING_INTERNAL_SECRET` | Business API（账号切换）、账号服务、billing-worker | 服务间短期、绑定 body 的内部规划凭据 |
 | `PLANNING_INTERNAL_ONLY` | Business API | 账号切换下为 `true`，基座不再受理 `/api/*` 与 `/admin/time-fragment/*` |
 | `ADMIN_API_KEY` | Business API、账号服务、billing-worker | 可观测性和额度管理端点鉴权，账号切换下为必填 |
