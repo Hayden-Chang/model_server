@@ -27,6 +27,7 @@ services:
       TIME_FRAGMENT_TOKEN_SECRET: ${TIME_FRAGMENT_TOKEN_SECRET:?TIME_FRAGMENT_TOKEN_SECRET is required}
       TIME_FRAGMENT_TOKEN_TTL_SECONDS: ${TIME_FRAGMENT_TOKEN_TTL_SECONDS:-2592000}
       TIME_FRAGMENT_GUEST_QUOTA_LIMIT: ${TIME_FRAGMENT_GUEST_QUOTA_LIMIT:-30}
+      TIME_FRAGMENT_MEMBER_QUOTA_LIMIT: ${TIME_FRAGMENT_MEMBER_QUOTA_LIMIT:-30}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       # This service owns POST /billing/apple/verify, which decodes the JWS and
       # calls the App Store Server API, so it needs the same Apple credentials as

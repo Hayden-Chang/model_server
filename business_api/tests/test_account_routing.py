@@ -45,6 +45,15 @@ def test_compose_keeps_private_services_unpublished_and_uses_internal_credential
     # Apple credentials as the worker; it previously had none and every purchase
     # failed closed with BILLING_NOT_CONFIGURED after StoreKit had charged.
     assert overlay["time-fragment-api"]["environment"]["APPLE_KEY_ID"]==overlay["billing-worker"]["environment"]["APPLE_KEY_ID"]
+    # AccountBackend.quota() is the only reader of the member daily limit and
+    # only account_main.py wires it up, so the API must forward it while the
+    # worker -- which never calls quota() -- must not, exactly as with the guest
+    # limit. Omitting it silently pinned every signed-in member to the code
+    # default 30, because no Compose file declares env_file.
+    api_environment=overlay["time-fragment-api"]["environment"]
+    assert "TIME_FRAGMENT_MEMBER_QUOTA_LIMIT" in api_environment
+    assert api_environment["TIME_FRAGMENT_MEMBER_QUOTA_LIMIT"].split(":-",1)[1].rstrip("}")=="30"
+    assert "TIME_FRAGMENT_MEMBER_QUOTA_LIMIT" not in overlay["billing-worker"]["environment"]
     rollback=overlay["quota-rollback"]
     assert "ports" not in rollback
     assert rollback["profiles"]==["rollback"]
