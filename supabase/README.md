@@ -87,7 +87,7 @@ Supabase project and securely configured CLI credentials:
 **This directory also contains a manual recovery script.**
 `supabase/migrations/202609170099_billing_device_principal_down.sql` reverses the
 billing device-principal rollout and is not part of the forward migration
-history. Its version sorts after every forward migration (`202609170020` is the
+history. Its version sorts after every forward migration (`202609180021` is the
 highest), so `supabase db push` treats it as pending and would apply it to
 whatever database it targets, and a plain `supabase db reset` applies it as
 well. Before pushing, run `supabase db push --dry-run` and confirm the pending

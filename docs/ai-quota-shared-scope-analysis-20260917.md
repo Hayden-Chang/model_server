@@ -27,6 +27,14 @@ was a pure design when it was written; §2–§5 below stay as the 2026-09-17 re
   `public.billing_service` would be re-emitted (~250 lines); the migration deliberately does not
   re-emit it, so the ≤400-line PR-convention exception discussed there still applies, but the real
   size is smaller than predicted.
+- **A follow-up fixed the `resetsAt` label (2026-09-18).**
+  `supabase/migrations/202609180021_member_resets_offset.sql` re-emits `ai_private.quota_status` so
+  the member `resetsAt` carries the entitlement zone's real UTC offset. Before it, every definition
+  from `202609110014` through `202609170020` appended a literal `+08:00` to the wall clock, which was
+  correct only because `account_timezone` defaults to `Asia/Shanghai` and nothing in the repository
+  writes another value; the reset *instant* was already computed in `account_timezone`. §3.1's
+  "`resetsAt` still comes from the entitlement timezone" (`:390`) was therefore true of the instant
+  and false of the offset label.
 
 - Repository: `model_server` (Supabase Postgres + FastAPI), worktree
   `/Volumes/mac2/codex-worktrees/model-server-quota-analysis-20260917`

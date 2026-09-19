@@ -62,6 +62,15 @@ const activeDevices=async id=>(await db.admin.query(
 const entitlementOf=async principal=>(await db.admin.query(
   `select plan,status,valid_until,entitlement_revision from billing_private.account_entitlements
     where principal=$1`,[principal])).rows[0];
+// The offset a member `resetsAt` label must carry, taken from the runtime's IANA
+// zone data rather than a constant, so an entitlement kept in a DST zone is
+// checked against the offset in force at that instant.
+const zoneOffset=(zone,instant)=>new Intl.DateTimeFormat('en-US',
+  {timeZone:zone,timeZoneName:'longOffset'}).formatToParts(instant)
+  .find(part=>part.type==='timeZoneName').value.replace('GMT','')||'+00:00';
+const zoneWall=(zone,instant)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',
+  month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
+  .format(instant).replace(', ','T');
 // Charge `count` calls through the same service-role RPC the AI route charges with.
 async function charge(principal,count){
   const supportCode=(await db.admin.query('select support_code from ai_private.principals where id=$1',
@@ -252,6 +261,54 @@ test('both devices on one chain read the same shared daily counter',async()=>{
     join ai_private.principals p on p.free_pool_id=f.id where p.id=any($1::text[])`,
     [m.map(x=>x.principal)])).rows;
   assert.deepEqual(free.map(r=>r.used),[0,0]);
+});
+
+// Regression: the member `resetsAt` label used to append a literal '+08:00' to
+// the entitlement timezone's wall clock, so any entitlement whose
+// account_timezone was not Asia/Shanghai advertised the wrong offset. Nothing
+// in this repository ever wrote a different zone, which is why the defect was
+// invisible: it showed up only once a row carried one. The default is kept in
+// the case above, so this one moves the row instead of adding a second surface.
+test('the member resetsAt offset labels the entitlement timezone, not a fixed +08:00',async()=>{
+  const zones=['Asia/Kolkata','America/New_York'];
+  for(const zone of zones){
+    const [d]=await join('resets-offset-'+zone,1);
+    // The zone lives on the entitlement row, which is what quota_status reads.
+    await db.admin.query(`update billing_private.account_entitlements set account_timezone=$2
+      where principal=$1`,[d.principal,zone]);
+    const entitlement=await billingRpc('entitlement',{principal:d.principal});
+    const status=entitlement.aiQuota;
+    assert.equal(entitlement.plan,'plus',JSON.stringify(entitlement));
+    assert.equal(status.limit,30);
+    assert.equal(status.remaining,30);
+    assert.equal(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(status.resetsAt),true,
+      JSON.stringify(status));
+    const resets=new Date(status.resetsAt);
+    // The label is an ISO 8601 instant: the offsets below are real, so parsing it
+    // must land on the true reset instant and not on a shifted one.
+    assert.equal(status.resetsAt.endsWith(zoneOffset(zone,resets)),true,
+      zone+': '+status.resetsAt+' must carry its own offset');
+    assert.equal(status.resetsAt.slice(0,19),zoneWall(zone,resets),
+      zone+': the wall clock must be local midnight in that zone');
+    assert.equal(status.resetsAt.slice(11),'00:00:00'+zoneOffset(zone,resets),
+      zone+': a daily member reset is local midnight');
+    // The instant is the point of the fix: correcting the label must not move it.
+    // A daily meter resets at the next local midnight, so the instant must be
+    // within the coming day and exactly on that boundary.
+    const untilReset=resets.getTime()-Date.now();
+    assert.equal(untilReset>0&&untilReset<=86400000,true,
+      zone+': the reset must be the next local midnight, not a shifted instant: '+status.resetsAt);
+    // apple_verify answers from the same function, so it carries the same label.
+    const reverified=await verify(d.principal,{transaction:'resets-offset-'+zone,token:d.token});
+    assert.equal(reverified.plan,'plus',JSON.stringify(reverified));
+    assert.equal(reverified.aiQuota.resetsAt,status.resetsAt);
+    // The label change must not touch the meter the AI path charges.
+    assert.equal((await db.admin.query(`select used from ai_private.buckets
+      where principal=$1 and period=$2`,[d.principal,status.period])).rows.length,0);
+  }
+  // A free principal still reports no reset at all.
+  const free=await device();
+  assert.equal((await billingRpc('entitlement',{principal:free.principal})).aiQuota.resetsAt,null);
 });
 
 test('device cap case 1: the first device creates the chain and gets plus',async()=>{
