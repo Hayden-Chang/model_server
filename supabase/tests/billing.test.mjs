@@ -556,6 +556,19 @@ test('billing events dedupe, conflict on hash change and list for retry',async()
   assert.equal(drained.events.find(e=>e.eventId===eventId),undefined);
 });
 
+test('billing event accepts and replays an Apple-sized signed payload',async()=>{
+  const eventId=randomUUID();
+  const signedPayload='j'.repeat(19039);
+  const payloadHash=createHash('sha256').update(signedPayload).digest('hex');
+  const data={provider:'apple',environment:'sandbox',eventId,payloadHash,
+    replayMaterialCiphertext:signedPayload};
+  assert.deepEqual(await billingRpc('event_receive',data),{received:true});
+  assert.deepEqual(await billingRpc('event_receive',data),{received:false});
+  const pending=await billingRpc('event_pending',{maxAttempts:8,limit:100});
+  assert.equal(pending.events.find(event=>event.eventId===eventId)?.replayMaterialCiphertext,
+    signedPayload);
+});
+
 test('reconcile list exposes bound active chains with their principal and token',async()=>{
   const m=await join('reconcile-1',2);
   const resolved=await billingRpc('account_by_token',{appAccountToken:m[0].token});
