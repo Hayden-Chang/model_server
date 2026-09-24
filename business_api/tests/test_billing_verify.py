@@ -173,6 +173,22 @@ def test_verify_success_binds_and_returns_entitlement(certs, configuration):
     assert apple.calls == ["123"]
 
 
+def test_offer_code_transaction_without_account_token_reaches_device_binding(certs, configuration):
+    body = type("Body", (), {})()
+    body.signed_transaction = tsc._build_jws(
+        {"environment": "Sandbox", "productId": PRODUCT,
+         "originalTransactionId": "123"}, certs, certs.leaf_certificate)
+    body.product_id = PRODUCT
+    body.claim_id = None
+    apple, backend = FakeApple(), FakeBackend()
+    result = _verify(certs, backend, apple, body=body)
+    assert result["plan"] == "plus"
+    assert backend.calls[0][2]["appAccountToken"] == ""
+    assert backend.calls[0][2]["bindDevice"] is True
+    assert backend.calls[0][2]["claimId"] is None
+    assert apple.calls == ["123"]
+
+
 def test_family_shared_transaction_is_rejected_before_the_rpc(certs, configuration):
     # Design §5.5: only the exact value FAMILY_SHARED is refused, and it is
     # refused before the billing RPC, so no store_purchases row can be created.

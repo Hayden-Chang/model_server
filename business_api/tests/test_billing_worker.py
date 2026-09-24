@@ -91,10 +91,12 @@ class FakeApple:
 
 class WorkerBackend:
     def __init__(self, *, event_receive=None, account_by_token=None,
-                 reconcile_chains=None, event_pending=None):
+                 account_by_purchase=None, reconcile_chains=None, event_pending=None):
         self.calls = []
         self._event_receive = event_receive if event_receive is not None else {"received": True}
         self._account_by_token = account_by_token or {"principal": DEVICE_PRINCIPAL}
+        self._account_by_purchase = account_by_purchase or {
+            "principal": DEVICE_PRINCIPAL, "appAccountToken": "known-chain-token"}
         self._reconcile_chains = reconcile_chains or []
         self._event_pending = event_pending or {"events": []}
 
@@ -111,6 +113,10 @@ class WorkerBackend:
             if isinstance(self._account_by_token, Exception):
                 raise self._account_by_token
             return self._account_by_token
+        if action == "account_by_purchase":
+            if isinstance(self._account_by_purchase, Exception):
+                raise self._account_by_purchase
+            return self._account_by_purchase
         if action == "reconcile_list":
             return {"chains": self._reconcile_chains}
         if action == "event_pending":
@@ -189,11 +195,14 @@ def _encrypted_reference(configuration, reference: str) -> str:
 
 def _notification_token(certs, *, notification_uuid=None, environment="Sandbox",
                         product=PRODUCT, app_account_token=None,
-                        original_transaction_id="123", ownership=None):
+                        original_transaction_id="123", ownership=None,
+                        omit_app_account_token=False):
     transaction_body = {"originalTransactionId": original_transaction_id,
                         "productId": product,
                         "appAccountToken": app_account_token or str(uuid4()),
                         "environment": environment}
+    if omit_app_account_token:
+        del transaction_body["appAccountToken"]
     if ownership is not None:
         # App Store JWS payload field. `ownershipType` is the StoreKit 2
         # client-side Swift property name and never appears in a receipt.
@@ -234,6 +243,20 @@ def test_process_notification_success(certs, configuration):
     assert "requireSession" not in verify_call[2] and "sessionID" not in verify_call[2]
     assert verify_call[2]["appAccountToken"] == account_token
     assert apple.calls == ["123"]
+
+
+def test_claimless_offer_code_notification_resolves_an_existing_chain(certs, configuration):
+    backend = WorkerBackend()
+    signed = _notification_token(certs, omit_app_account_token=True)
+    result = _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                       settings=configuration, signed_payload=signed,
+                                       pinned_roots=[certs.root_certificate]))
+    assert result["bound"] is True
+    assert [call[0] for call in backend.calls] == [
+        "event_receive", "account_by_purchase", "apple_verify", "event_mark"]
+    assert backend.calls[1][1] == {"originalTransactionId": "123", "environment": "sandbox"}
+    assert backend.calls[2][2]["appAccountToken"] == "known-chain-token"
+    assert backend.calls[2][2]["bindDevice"] is False
 
 
 def test_webhook_stores_the_encrypted_original_transaction_id(certs, configuration):
@@ -380,6 +403,19 @@ def test_unknown_account_token_raises_instead_of_being_skipped(certs, configurat
                                                    "event_mark"]
     assert backend.calls[2][1]["status"] == "failed"
     assert backend.calls[2][1]["lastErrorCode"] == "ACCOUNT_TOKEN_UNKNOWN"
+
+
+def test_claimless_notification_retries_until_its_chain_is_bound(certs, configuration):
+    backend = WorkerBackend(account_by_purchase=failure("ACCOUNT_TOKEN_UNKNOWN", 404))
+    signed = _notification_token(certs, omit_app_account_token=True)
+    with pytest.raises(HTTPException) as error:
+        _run(process_notification(backend=backend, apple_client=FakeApple(),
+                                  settings=configuration, signed_payload=signed,
+                                  pinned_roots=[certs.root_certificate]))
+    assert error.value.detail["code"] == "ACCOUNT_TOKEN_UNKNOWN"
+    assert [call[0] for call in backend.calls] == [
+        "event_receive", "account_by_purchase", "event_mark"]
+    assert backend.calls[2][1]["status"] == "failed"
 
 
 def test_processing_failure_marks_event_for_retry(certs, configuration):
