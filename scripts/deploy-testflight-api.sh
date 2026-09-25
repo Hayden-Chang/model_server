@@ -53,10 +53,10 @@ compose=(docker compose --project-name model-server --env-file "$SERVER_ROOT/.en
 "${compose[@]}" up -d --no-deps --wait testflight-api
 # Verify the running container before touching the public proxy.
 docker exec model-server-testflight-api-1 python -c '
-import httpx
+import os, httpx
+assert os.environ["APPLE_ENVIRONMENT"]=="sandbox"
 r=httpx.get("http://127.0.0.1:8000/health/ready",timeout=20)
 r.raise_for_status()
-assert r.headers.get("X-Apple-Billing-Environment")=="sandbox"
 '
 cp Caddyfile.accounts "$SERVER_ROOT/Caddyfile.accounts"
 docker exec model-server-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
