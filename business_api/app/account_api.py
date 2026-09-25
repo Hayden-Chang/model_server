@@ -91,6 +91,12 @@ class BillingVerifyRequest(BaseModel):
     claim_id: UUID | None = Field(default=None, alias="claimId")
 
 
+class BillingSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # The app has one subscription group: at most one current membership.
+    transaction: BillingVerifyRequest | None
+
+
 def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     backend = backend or AccountBackend(settings)
     apple_client = None
@@ -228,6 +234,17 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         return EntitlementResponse.model_validate(await verify_apple_purchase(
             backend=backend, apple_client=apple_client, settings=settings,
             actor=current, payload_body=payload))
+
+    @app.post("/billing/apple/sync", response_model=EntitlementResponse)
+    async def billing_apple_sync(payload: BillingSyncRequest,
+                                 current: Actor = Depends(billing_device)):
+        if payload.transaction is None:
+            return EntitlementResponse.model_validate(await backend.billing("apple_sync", current))
+        if apple_client is None or settings.store_reference_key is None:
+            raise failure("BILLING_NOT_CONFIGURED", 503)
+        return EntitlementResponse.model_validate(await verify_apple_purchase(
+            backend=backend, apple_client=apple_client, settings=settings,
+            actor=current, payload_body=payload.transaction, synchronize_current=True))
 
     @app.post("/api/plan/parse", response_model=TimeFragmentPlanResponseV2)
     async def plan(

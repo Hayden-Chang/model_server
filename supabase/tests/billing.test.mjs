@@ -722,3 +722,63 @@ test('reconcile list exposes bound active chains with their principal and token'
   // The joining device is a member, not an owner, so it is not a chain to reconcile.
   assert.equal(chains.find(c=>c.principal===m[1].principal),undefined);
 });
+
+// The Apple account can change while the guest/device token stays the same.
+const syncCurrent=(d,transaction,token,environment='sandbox')=>billingRpc('apple_sync',{
+  principal:d.principal,billingEnvironment:environment,
+  ...(transaction ? {originalTransactionId:transaction,productId:PRODUCT_MONTHLY,
+    appAccountToken:token,storeStatus:'active',expiresAt:'2026-12-01T00:00:00.000Z',
+    environment,storeReferenceCiphertext:'cipher',bindDevice:true}: {})
+});
+
+test('current StoreKit empty snapshot removes old device membership without changing another device',async()=>{
+  const [a,b]=await join('switch-empty-'+randomUUID(),2);
+  await syncCurrent(a,null);
+  const result=await billingRpc('entitlement',{principal:a.principal});
+  assert.equal(result.plan,'free');
+  assert.deepEqual(result.billingSources,[]);
+  assert.equal((await billingRpc('entitlement',{principal:b.principal})).plan,'plus');
+  await db.rpc(null,'ai_quota_service',['finish_import',{}],'service_role');
+  const quota=await db.rpc(null,'ai_quota_service',['status',{principal:a.principal,
+    billingEnvironment:'sandbox',freeLimit:30,supportCode:(await db.admin.query('select support_code from ai_private.principals where id=$1',[a.principal])).rows[0].support_code}],'service_role');
+  assert.equal(quota.period,'free');
+});
+
+test('current StoreKit selection survives delayed old transactions and can switch back',async()=>{
+  const a=await device(), token=await claimToken(a);
+  const old='old-'+randomUUID(), current='new-'+randomUUID();
+  await verify(a.principal,{transaction:old,token});
+  await syncCurrent(a,current,token);
+  let result=await syncCurrent(a,null);
+  assert.equal(result.plan,'free');
+  await verify(a.principal,{transaction:old,token});
+  assert.equal((await billingRpc('entitlement',{principal:a.principal})).plan,'free');
+  result=await syncCurrent(a,old,token);
+  assert.equal(result.plan,'plus');
+  assert.equal(result.billingSources.length,1);
+});
+
+test('current StoreKit snapshot is environment scoped and failed verification preserves selection',async()=>{
+  const a=await device(), token=await claimToken(a);
+  const transaction='scope-'+randomUUID();
+  await syncCurrent(a,transaction,token);
+  assert.equal((await syncCurrent(a,null,null,'production')).plan,'free');
+  assert.equal((await billingRpc('entitlement',{principal:a.principal,billingEnvironment:'sandbox'})).plan,'plus');
+  assert.equal((await syncCurrent(a,'bad-'+randomUUID(),randomUUID())).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await billingRpc('entitlement',{principal:a.principal})).plan,'plus');
+});
+
+test('current StoreKit selection filters quota source and denies public snapshot writes',async()=>{
+  const [a]=await join('prior-'+randomUUID(),1);
+  const current='current-'+randomUUID();
+  const [owner]=await join(current,1);
+  await syncCurrent(a,current,owner.token);
+  await db.admin.query(`select set_config('app.billing_environment','sandbox',false)`);
+  const meter=(await db.admin.query('select * from billing_private.plus_source($1)',[a.principal])).rows[0];
+  assert.equal(meter.scope,owner.principal);
+  for(const role of ['anon','authenticated','service_role']) {
+    await assert.rejects(db.call(null,'select * from billing_private.storekit_selections',[],role),/permission denied/);
+  }
+  assert.equal((await billingRpc('apple_sync',{principal:'account:'+randomUUID()})).code,'DEVICE_REQUIRED');
+  assert.equal((await billingRpc('apple_sync',{principal:'guest_'+'f'.repeat(24)})).code,'UNAUTHORIZED');
+});

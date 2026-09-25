@@ -92,3 +92,30 @@ The script does not claim automatic rollback after a partial failure.
 The updated iOS cache is endpoint scoped and discards the old unscoped cache.
 Old app versions can still show cached membership offline until expiry/refresh;
 server configuration cannot remotely clear their Keychain.
+
+
+## Current StoreKit account selection (schema 26)
+
+Apply `202609250026_storekit_current_purchase.sql` before deploying the API
+that exposes `POST /billing/apple/sync`. The request must explicitly contain
+`transaction: null` or a `transaction` object with `signedTransaction` and
+`productId`. The deployment's configured environment and authenticated device
+principal determine the scope; App login accounts and email addresses do not.
+The app has one subscription group and submits its verified current entitlement.
+Apple verification failures preserve the previous server selection. A verified
+empty snapshot selects no membership. Historical verifications and worker
+reconciliation update the purchase ledger but cannot override that selection.
+Other devices and the other environment retain their independent selection.
+Existing clients without a snapshot retain the previous behavior until updated.
+
+The iOS device cache is usable offline only after its original transaction ID matches a
+verified current StoreKit transaction. Older caches without an original transaction ID
+require one successful online synchronization. An empty current account clears
+local access even if the server is unreachable; network failure is not submitted
+as an empty snapshot. `AppStore.sync()` remains behind explicit Restore only.
+
+Release checks: switch from subscribed tester A to empty tester B and restore;
+verify B is free with free quota, relaunch, then switch back to A and restore.
+Verify a second device on A retains membership. Only then proceed to production.
+Do not roll back only the API after clients begin sending snapshots. Keep the
+selection migration so historical transactions cannot silently grant membership.

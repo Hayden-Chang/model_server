@@ -355,3 +355,29 @@ def test_account_api_enables_info_logging():
     """The verify comparison log is useless if the app never emits INFO."""
     source = (Path(__file__).resolve().parents[1] / "app" / "account_main.py").read_text()
     assert "logging.basicConfig(level=logging.INFO)" in source
+
+
+def test_current_storekit_sync_verifies_proof_before_selecting_chain(certs, configuration):
+    from app.account_api import BillingVerifyRequest
+    body = BillingVerifyRequest(signedTransaction=_jws_token(certs), productId=PRODUCT)
+    backend, apple = FakeBackend(), FakeApple()
+    asyncio.run(verify_apple_purchase(backend=backend, apple_client=apple,
+        settings=configuration, actor=Actor(DEVICE_PRINCIPAL), payload_body=body,
+        pinned_roots=[certs.root_certificate], synchronize_current=True))
+    assert apple.calls == ['123']
+    action, actor, data = backend.calls[0]
+    assert action == 'apple_sync'
+    assert data['originalTransactionId'] == '123'
+    assert data['environment'] == 'sandbox'
+    assert data['bindDevice'] is True
+
+
+def test_failed_current_storekit_verification_never_changes_selection(certs, configuration):
+    from app.account_api import BillingVerifyRequest
+    body = BillingVerifyRequest(signedTransaction=_jws_token(certs, environment='Production'), productId=PRODUCT)
+    backend = FakeBackend()
+    with pytest.raises(HTTPException):
+        asyncio.run(verify_apple_purchase(backend=backend, apple_client=FakeApple(),
+            settings=configuration, actor=Actor(DEVICE_PRINCIPAL), payload_body=body,
+            pinned_roots=[certs.root_certificate], synchronize_current=True))
+    assert backend.calls == []
