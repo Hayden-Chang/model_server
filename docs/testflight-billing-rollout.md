@@ -81,8 +81,11 @@ The script does not claim automatic rollback after a partial failure.
   change its `APPLE_ENVIRONMENT` to `production`, stop the old sandbox worker,
   then recreate only `time-fragment-api`, `billing-worker`, and
   `testflight-billing-worker` under the existing `model-server` project with
-  `--no-deps`. Verify the production header is `production` and beta remains
-  `sandbox`, then verify real entitlement/AI behavior in each channel.
+  `--no-deps`. Inspect the production API/worker container configuration and
+  require `APPLE_ENVIRONMENT=production`; the production proxy does not expose
+  an environment header. Verify both public readiness endpoints and that beta
+  retains its `sandbox` proxy header, then verify real entitlement/AI behavior
+  in each channel.
 - Release a distinct iOS App Store archive embedding `https://api.keeline.xyz`.
   Never submit the staging-endpoint beta archive for public release.
 
