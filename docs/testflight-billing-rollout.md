@@ -51,8 +51,8 @@ The script requires schema 25 before building or recreating anything, uses the
 stable `/opt/model_server/.env` and signing secrets, and deploys only
 `testflight-api` with `--no-deps`. It saves the prior image ID, private container
 inspection, environment and Caddy configuration in a private rollback directory,
-reloads the proxy, and requires sandbox headers on internal and public readiness
-responses. It does not start a second sandbox worker or rebuild the production
+reloads the proxy, and checks the container sandbox configuration and internal readiness,
+then requires the sandbox header on the public proxy response. It does not start a second sandbox worker or rebuild the production
 API/planner. Do not use historical `billing-deploy.sh` on an archive-based host.
 
 If a command fails after replacement, recover explicitly using the printed

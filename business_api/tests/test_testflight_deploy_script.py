@@ -70,3 +70,23 @@ def test_archive_release_deploys_only_testflight_and_preserves_recovery_material
     assert (backups[0] / "Caddyfile.accounts").read_text() == "previous config"
     assert (backups[0] / "previous-image-id").read_text().strip() == "sha256:old"
     assert (backups[0] / "previous-container.json").stat().st_mode & 0o077 == 0
+
+
+def test_internal_health_probe_accepts_sandbox_without_proxy_headers(monkeypatch):
+    import re
+    import pytest
+    import sys
+    from types import SimpleNamespace
+    source = (ROOT / "scripts/deploy-testflight-api.sh").read_text()
+    probe = re.search(r"docker exec model-server-testflight-api-1 python -c '([^']+)'", source).group(1)
+    monkeypatch.setenv("APPLE_ENVIRONMENT", "sandbox")
+    calls = []
+    def get(url, timeout):
+        calls.append(url)
+        return SimpleNamespace(headers={}, raise_for_status=lambda: None)
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(get=get))
+    exec(probe, {})
+    assert calls == ["http://127.0.0.1:8000/health/ready"]
+    monkeypatch.setenv("APPLE_ENVIRONMENT", "production")
+    with pytest.raises(AssertionError):
+        exec(probe, {})
