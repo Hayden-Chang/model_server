@@ -72,15 +72,17 @@ const zoneWall=(zone,instant)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,ye
   month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
   .format(instant).replace(', ','T');
 // Charge `count` calls through the same service-role RPC the AI route charges with.
-async function charge(principal,count){
+async function charge(principal,count,billingEnvironment='sandbox'){
   const supportCode=(await db.admin.query('select support_code from ai_private.principals where id=$1',
     [principal])).rows[0].support_code;
   for(let i=0;i<count;i++){
     const requestID=randomUUID();
     const reserved=await db.rpc(null,'ai_quota_service',['reserve',{principal,supportCode,freeLimit:30,
+      billingEnvironment,
       memberLimit:30,requestID,bodyHash:'e'.repeat(64),attempt:randomUUID()}],'service_role');
     assert.equal(reserved.period.startsWith('member:'),true,JSON.stringify(reserved));
     assert.deepEqual(await db.rpc(null,'ai_quota_service',['finish',{principal,supportCode,freeLimit:30,
+      billingEnvironment,
       memberLimit:30,requestID,attempt:reserved.attempt,consume:true}],'service_role'),{ok:true});
   }
 }
@@ -100,6 +102,108 @@ test('billing service requires a device principal and denies unprivileged roles'
   for(const role of ['anon','authenticated']){
     await assert.rejects(db.rpc(session,'billing_service',['entitlement',{principal:d.principal}],role),/permission denied/);
   }
+});
+
+test('production entitlement does not grant a sandbox purchase on the same device',async()=>{
+  const d=await device();
+  const token=await claimToken(d);
+  const sandbox=await verify(d.principal,{transaction:'sandbox-only-'+randomUUID(),token});
+  assert.equal(sandbox.plan,'plus');
+
+  const supportCode=(await db.admin.query(
+    'select support_code from ai_private.principals where id=$1',[d.principal])).rows[0].support_code;
+  await db.admin.query('update ai_private.runtime set legacy_import_complete=true');
+  try {
+    const productionQuota=await db.rpc(null,'ai_quota_service',['status',{
+      principal:d.principal,supportCode,freeLimit:30,memberLimit:30,
+      billingEnvironment:'production'}],'service_role');
+    assert.equal(productionQuota.resetsAt,null);
+  } finally {
+    await db.admin.query('update ai_private.runtime set legacy_import_complete=false');
+  }
+
+  const production=await billingRpc('entitlement',{
+    principal:d.principal,billingEnvironment:'production'});
+  assert.equal(production.plan,'free');
+  assert.equal(production.aiQuota.limit,30);
+  assert.deepEqual(production.billingSources,[]);
+
+  const productionTransaction='production-'+randomUUID();
+  const bought=await verify(d.principal,{
+    transaction:productionTransaction,token,environment:'production'});
+  assert.equal(bought.plan,'plus');
+  assert.equal(bought.billingSources.length,1);
+  assert.equal(bought.billingSources[0].productId,PRODUCT_MONTHLY);
+  const reread=await billingRpc('entitlement',{
+    principal:d.principal,billingEnvironment:'production'});
+  assert.equal(reread.entitlementRevision,bought.entitlementRevision);
+  const reverified=await verify(d.principal,{
+    transaction:productionTransaction,token,environment:'production'});
+  assert.equal(reverified.entitlementRevision,bought.entitlementRevision+1);
+});
+
+test('a production verification cannot relabel a sandbox purchase chain',async()=>{
+  const d=await device();
+  const token=await claimToken(d);
+  const transaction='cross-environment-'+randomUUID();
+  assert.equal((await verify(d.principal,{transaction,token})).plan,'plus');
+  const production=await verify(d.principal,{transaction,token,environment:'production'});
+  assert.equal(production.code,'ENVIRONMENT_MISMATCH');
+  const chains=await db.admin.query(
+    'select environment from billing_private.store_purchases where purchase_key_hash=$1',
+    [keyHash(transaction)]);
+  assert.deepEqual(chains.rows.map(row=>row.environment),['sandbox']);
+});
+
+test('a dual-environment device charges the production chain owner',async()=>{
+  const sandboxOwner=await device();
+  const productionOwner=await device();
+  const member=await device();
+  const sandboxToken=await claimToken(sandboxOwner);
+  const productionToken=await claimToken(productionOwner);
+  const sandboxTransaction='sandbox-meter-'+randomUUID();
+  const productionTransaction='production-meter-'+randomUUID();
+  await verify(sandboxOwner.principal,{transaction:sandboxTransaction,token:sandboxToken});
+  await verify(productionOwner.principal,{transaction:productionTransaction,
+    token:productionToken,environment:'production'});
+  await verify(member.principal,{transaction:sandboxTransaction,token:sandboxToken});
+  await verify(member.principal,{transaction:productionTransaction,
+    token:productionToken,environment:'production'});
+
+  await db.admin.query('update ai_private.runtime set legacy_import_complete=true');
+  try {
+    await charge(member.principal,1,'production');
+  } finally {
+    await db.admin.query('update ai_private.runtime set legacy_import_complete=false');
+  }
+  const rows=(await db.admin.query(`select principal,used from ai_private.buckets
+    where period like 'member:%' and principal=any($1::text[])`,
+    [[sandboxOwner.principal,productionOwner.principal,member.principal]])).rows;
+  assert.deepEqual(rows.map(row=>[row.principal,row.used]),[[productionOwner.principal,1]],
+    JSON.stringify({sandboxOwner:sandboxOwner.principal,
+      productionOwner:productionOwner.principal,member:member.principal}));
+});
+
+test('production worker reads only production events and purchase chains',async()=>{
+  const seen={};
+  for(const environment of ['sandbox','production']){
+    const eventId=environment+'-'+randomUUID();
+    await billingRpc('event_receive',{provider:'apple',environment,
+      eventId,payloadHash:'a'.repeat(64),
+      replayMaterialCiphertext:'signed-notification'});
+    const d=await device();
+    await verify(d.principal,{transaction:environment+'-'+randomUUID(),
+      token:await claimToken(d),environment});
+    seen[environment]={eventId,principal:d.principal};
+  }
+  const pending=await billingRpc('event_pending',{billingEnvironment:'production'});
+  assert.ok(pending.events.some(event=>event.eventId===seen.production.eventId));
+  assert.ok(!pending.events.some(event=>event.eventId===seen.sandbox.eventId));
+  assert.ok(pending.events.every(event=>event.environment==='production'));
+  const reconcile=await billingRpc('reconcile_list',{billingEnvironment:'production'});
+  assert.ok(reconcile.chains.some(chain=>chain.principal===seen.production.principal));
+  assert.ok(!reconcile.chains.some(chain=>chain.principal===seen.sandbox.principal));
+  assert.ok(reconcile.chains.every(chain=>chain.environment==='production'));
 });
 
 test('apple verify returns ACCOUNT_TOKEN_UNKNOWN instead of raising on a bad token',async()=>{

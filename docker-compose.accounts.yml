@@ -59,6 +59,12 @@ services:
       interval: 30s
       timeout: 25s
       retries: 3
+  testflight-api:
+    extends:
+      service: time-fragment-api
+    environment:
+      APPLE_ENVIRONMENT: sandbox
+
   billing-worker:
     build:
       context: ./business_api
@@ -87,6 +93,11 @@ services:
       # Read-only: the worker runs webhook processing and reconcile, both of
       # which sign App Store Server API requests with the same key.
       - ./.secrets:/opt/model_server/.secrets:ro
+  testflight-billing-worker:
+    extends:
+      service: billing-worker
+    environment:
+      APPLE_ENVIRONMENT: sandbox
 
   # Opt-in one-off for the emergency rollback: writable legacy volume and only
   # the two credentials the reverse export needs. It never publishes a port.

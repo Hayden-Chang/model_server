@@ -62,6 +62,18 @@ def test_compose_keeps_private_services_unpublished_and_uses_internal_credential
     assert "SUPABASE_SERVICE_ROLE_KEY" not in base["business-api"]["environment"]
 
 
+def test_testflight_has_a_sandbox_only_api_and_worker():
+    overlay=yaml.safe_load((ROOT/"docker-compose.accounts.yml").read_text())["services"]
+    assert overlay["testflight-api"]["extends"]["service"]=="time-fragment-api"
+    assert overlay["testflight-billing-worker"]["extends"]["service"]=="billing-worker"
+    for service in ("testflight-api","testflight-billing-worker"):
+        assert overlay[service]["environment"]["APPLE_ENVIRONMENT"]=="sandbox"
+        assert "ports" not in overlay[service]
+    caddy=(ROOT/"Caddyfile.accounts").read_text()
+    assert "https://staging.api.keeline.xyz" in caddy
+    assert "reverse_proxy testflight-api:8000" in caddy
+
+
 @pytest.mark.skipif(not os.environ.get("CADDY_BINARY"),reason="Set CADDY_BINARY to the verified Caddy 2.11.4 executable")
 def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
     binary=os.environ["CADDY_BINARY"]
@@ -79,14 +91,18 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
         threading.Thread(target=instance.serve_forever,daemon=True).start()
         return instance
 
-    account,planner=server("account"),server("planner")
+    account,planner,testflight=server("account"),server("planner"),server("testflight")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1",0));port=listener.getsockname()[1]
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1",0));testflight_port=listener.getsockname()[1]
     config=(ROOT/"Caddyfile.accounts").read_text()
     config=config.replace("default_sni {$PUBLIC_DOMAIN}","admin off\n\tpersist_config off")
     config=config.replace("https://{$PUBLIC_DOMAIN}",f"http://127.0.0.1:{port}")
+    config=config.replace("https://staging.api.keeline.xyz",f"http://127.0.0.1:{testflight_port}")
     config="\n".join(line for line in config.splitlines() if not line.strip().startswith("tls "))
     config=config.replace("time-fragment-api:8000",f"127.0.0.1:{account.server_port}")
+    config=config.replace("testflight-api:8000",f"127.0.0.1:{testflight.server_port}")
     config=config.replace("business-api:8000",f"127.0.0.1:{planner.server_port}")
     path=tmp_path/"Caddyfile";path.write_text(config)
     with (tmp_path/"caddy.log").open("w") as log:
@@ -106,7 +122,14 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
                     assert client.get(route).text=="planner"
                 for route in ["/internal","/internal/time-fragment/plan","/internal//time-fragment/plan","/%69nternal/time-fragment/plan"]:
                     assert client.get(route).status_code==404
+            with httpx.Client(base_url=f"http://127.0.0.1:{testflight_port}",timeout=2,trust_env=False) as client:
+                for route in ["/api/auth/guest","/billing/entitlement","/webhooks/apple","/health/ready"]:
+                    response=client.get(route)
+                    assert response.text=="testflight"
+                    assert response.headers["X-Apple-Billing-Environment"]=="sandbox"
+                for route in ["/internal","/v1/pipelines/general-text-v1:run"]:
+                    assert client.get(route).status_code==404
         finally:
             process.terminate();process.wait(timeout=5)
-            account.shutdown();planner.shutdown()
-            account.server_close();planner.server_close()
+            account.shutdown();planner.shutdown();testflight.shutdown()
+            account.server_close();planner.server_close();testflight.server_close()
