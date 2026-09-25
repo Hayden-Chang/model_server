@@ -4,6 +4,8 @@
 # applied to the hosted Supabase project BEFORE this script runs.
 set -euo pipefail
 cd /opt/model_server
+test -s /etc/letsencrypt/live/staging.api.keeline.xyz/fullchain.pem
+test -s /etc/letsencrypt/live/staging.api.keeline.xyz/privkey.pem
 TS=$(date +%Y%m%d%H%M%S)
 BACKUP_DIR="/opt/model_server/rollback-backups/billing-$TS"
 mkdir -p "$BACKUP_DIR"
@@ -19,10 +21,14 @@ git show "$PREV_SHA":supabase/migrations/202609090008_ai_quota_safeupdate.sql \
 echo "backup: $BACKUP_DIR (pre-deploy SHA $PREV_SHA)"
 git pull --ff-only
 docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  build business-api time-fragment-api billing-worker
+  build business-api time-fragment-api billing-worker testflight-api testflight-billing-worker
+# Before production cutover the existing billing-worker still processes sandbox
+# events. Keep the TestFlight worker stopped until that worker switches to prod.
+docker compose -f docker-compose.yml -f docker-compose.accounts.yml up -d --wait testflight-api
 docker compose -f docker-compose.yml -f docker-compose.accounts.yml up -d \
   caddy time-fragment-api business-api billing-worker
 sleep 8
 curl -fsS https://api.keeline.xyz/health/live
 curl -fsS https://api.keeline.xyz/health/ready
-echo "DEPLOY OK — rollback: scripts/billing-rollback.sh $BACKUP_DIR"
+curl -fsS https://staging.api.keeline.xyz/health/ready
+echo "DEPLOY OK — backup: $BACKUP_DIR; see docs/account-api.md for environment cutover recovery"

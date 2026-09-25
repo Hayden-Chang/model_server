@@ -75,8 +75,9 @@ cd /opt/model_server
 sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml config
 sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml pull litellm
 sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml \
-  build caddy business-api time-fragment-api billing-worker
-sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml up -d
+  build caddy business-api time-fragment-api billing-worker testflight-api testflight-billing-worker
+sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml up -d \
+  caddy business-api litellm time-fragment-api billing-worker testflight-api
 sudo docker compose -f docker-compose.yml -f docker-compose.accounts.yml ps
 ```
 
@@ -90,8 +91,24 @@ overlay. `quota-rollback` is a one-off in the same overlay, gated behind the
 `rollback` profile, with a writable legacy volume and no published port; only the
 cutover rollback procedure in [account API](account-api.md) starts it.
 
+The same overlay serves `staging.api.keeline.xyz` through `testflight-api` and
+`testflight-billing-worker`. Both set `APPLE_ENVIRONMENT=sandbox` explicitly;
+`api.keeline.xyz` uses the release services and switches to `production` only
+after the environment-isolation migration and TestFlight entry are verified.
+The staging hostname's existing DNS and certificate are reused, so the legacy
+full staging stack must remain off. Update the sandbox Apple notification URL
+separately in App Store Connect. A beta archive uses
+`MODEL_SERVER_API_BASE=https://staging.api.keeline.xyz`; the App Store archive
+uses the project's `https://api.keeline.xyz` default. These are separate
+archives; never submit a sandbox-pointing archive as the release build.
+Before the public environment switch, the existing `billing-worker` still
+handles sandbox events; leave `testflight-billing-worker` stopped. Start the
+TestFlight worker when the public worker changes to production, so the two
+workers never poll the same sandbox queue.
+
 Every application service (`caddy`, `business-api`, `time-fragment-api`,
-`billing-worker`, and `quota-rollback`) is built on this host from the local build
+`billing-worker`, `testflight-api`, `testflight-billing-worker`, and
+`quota-rollback`) is built on this host from the local build
 context, and `caddy` also carries a local image tag,
 `model-server-caddy:2.11.4`. The only image pulled from a registry is `litellm`.
 `docker compose up -d` on its own therefore recreates containers on the previous

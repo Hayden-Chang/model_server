@@ -33,3 +33,34 @@ https://{$PUBLIC_DOMAIN} {
 		}
 	}
 }
+
+# TestFlight purchases are signed in Apple's sandbox environment. Keep this
+# hostname on a sandbox-only API even after the public service switches to
+# APPLE_ENVIRONMENT=production.
+https://staging.api.keeline.xyz {
+	tls /etc/letsencrypt/live/staging.api.keeline.xyz/fullchain.pem /etc/letsencrypt/live/staging.api.keeline.xyz/privkey.pem
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-Apple-Billing-Environment sandbox
+	}
+	@private path /internal /internal/*
+	handle @private {
+		respond 404
+	}
+	@testflight path /api/* /billing/* /webhooks/apple /health/*
+	handle @testflight {
+		reverse_proxy testflight-api:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 120s
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}

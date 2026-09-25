@@ -26,6 +26,40 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 | ~~`GET/POST /api/development/membership`~~ | — | **Not accepted by this service** (404): the development toggle exists only in the base `business-api` (`business_api/app/factory.py`, see [development-membership.md](development-membership.md)). This service's member allowance is the entitlement-driven Plus daily limit from `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` (default 30, `business_api/app/account_backend.py`); the base's 50/day is a fixed value of its SQLite quota store, not this service's limit. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
 
+The App Store release must use `APPLE_ENVIRONMENT=production`; development and
+TestFlight purchases use `sandbox`. Migration `202609240024` scopes entitlement
+aggregation and billing sources to the configured Apple environment. Migration
+`202609250025` additionally separates daily member counters by environment, even
+when both purchase chains have the same owner. Apply both migrations before
+deploying the matching API, then switch
+the release service's environment. A sandbox chain can remain in the database
+without granting Plus to the production service. A successful device refresh
+replaces any previously cached sandbox entitlement. Updated iOS builds namespace
+the cache by API endpoint and ignore the old unscoped cache. Older builds can
+still keep an unexpired local cache while offline; server changes cannot erase it. TestFlight archives must set
+`MODEL_SERVER_API_BASE=https://staging.api.keeline.xyz`; that hostname routes to
+`testflight-api`, and its companion `testflight-billing-worker` processes sandbox
+events. Both keep `APPLE_ENVIRONMENT=sandbox` after the public service switches
+to production.
+Start the TestFlight worker only when the existing worker switches to production;
+until then the existing worker handles sandbox events, so there is never a pair
+of sandbox pollers racing on the same event queue.
+The production archive keeps `https://api.keeline.xyz`. Configure Apple's
+sandbox Server Notifications V2 URL as
+`https://staging.api.keeline.xyz/webhooks/apple`; keep the production URL on
+`https://api.keeline.xyz/webhooks/apple`. Do not flip the variable alone: the
+older database functions aggregate purchases from both environments.
+For archive-based hosts and migration/cutover gates, use
+[testflight-billing-rollout.md](testflight-billing-rollout.md). The historical
+`billing-deploy.sh` assumes a live Git checkout and is unsuitable for these hosts.
+
+If the production cutover fails, restore the backed-up `.env` with
+`APPLE_ENVIRONMENT=sandbox`, stop `testflight-billing-worker`, and recreate
+`time-fragment-api` plus `billing-worker`. This restores the prior sandbox
+service while leaving the forward migration in place. Do not run the legacy
+`billing-rollback-device-principal.sh`: it reverses the older device-principal
+migrations, not this environment switch.
+
 The AI route is device-metered. Membership resolves by principal identity
 (`202609170017_device_principal_billing.sql`), an account session resolves to
 `account:<uuid>`, and every entitlement-writing action requires the device
