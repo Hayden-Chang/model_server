@@ -81,19 +81,21 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
         if not received.get("received", False):
             return {"received": False, "eventId": event_id}
 
+    transaction_token = str(transaction.get("appAccountToken") or "")
     try:
-        account = await backend.billing_event("account_by_token",
-            appAccountToken=str(transaction.get("appAccountToken") or ""))
+        if transaction_token:
+            account = await backend.billing_event("account_by_token",
+                appAccountToken=transaction_token)
+        else:
+            account = await backend.billing_event("account_by_purchase",
+                originalTransactionId=original_transaction_id,
+                environment=settings.apple_environment)
     except HTTPException as error:
         # billing_event() raises on every RPC code (pinned by
         # test_billing_api.test_billing_event_raises_on_every_rpc_code), so an
-        # unknown token arrives here and never as the dict handled below. The
-        # event row already exists, so this failure is recorded like every other
-        # post-receive one -- unmarked, last_error_code stays null and the event
-        # is undiagnosable in billing_events. Retry, not the terminal ack the
-        # branch below intends, is deliberate: the chain is still unbound, so
-        # claiming "processed" would retire the only pending marker for it. The
-        # alternative is an open product decision (see the P1 report).
+        # unknown token or unbound claimless chain arrives here, never as the
+        # dict handled below. The event row already exists, so mark the lookup
+        # failure for retry until the purchase chain can be bound.
         code = error.detail.get("code") if isinstance(error.detail, dict) else None
         if code != "ACCOUNT_TOKEN_UNKNOWN":
             raise
@@ -110,6 +112,7 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
             status="processed", lastErrorCode="ACCOUNT_TOKEN_UNKNOWN")
         return {"received": True, "bound": False, "eventId": event_id}
     actor_principal = str(account["principal"])
+    account_token = transaction_token or str(account["appAccountToken"])
 
     try:
         status_payload = await apple_client.subscription_status(original_transaction_id)
@@ -122,7 +125,7 @@ async def process_notification(*, backend, apple_client, settings, signed_payloa
             Actor(actor_principal, None), bindDevice=False,
             originalTransactionId=original_transaction_id,
             productId=str(transaction.get("productId") or ""),
-            appAccountToken=str(transaction.get("appAccountToken") or ""),
+            appAccountToken=account_token,
             environment=settings.apple_environment, storeStatus=store_status,
             expiresAt=expires_at,
             # Same ciphertext format as the purchase path: reconcile() reads this

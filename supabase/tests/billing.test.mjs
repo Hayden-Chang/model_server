@@ -246,13 +246,42 @@ test('apple verify returns ACCOUNT_TOKEN_UNKNOWN instead of raising on a bad tok
   const d=await device();
   const attempt=data=>billingRpc('apple_verify',{principal:d.principal,originalTransactionId:'bad-token',
     productId:PRODUCT_MONTHLY,environment:'sandbox',storeStatus:'active',...data});
-  // The receipt may carry no appAccountToken at all, and '' must not reach the
-  // ::uuid cast.
-  assert.equal((await attempt({})).code,'ACCOUNT_TOKEN_UNKNOWN');
-  assert.equal((await attempt({appAccountToken:''})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  // Workers must resolve a known purchase principal; malformed and unknown
+  // nonempty tokens must not fall through to device binding.
+  assert.equal((await attempt({bindDevice:false})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await attempt({appAccountToken:'',bindDevice:false})).code,'ACCOUNT_TOKEN_UNKNOWN');
   assert.equal((await attempt({appAccountToken:'not-a-uuid'})).code,'ACCOUNT_TOKEN_UNKNOWN');
   assert.equal((await attempt({appAccountToken:randomUUID()})).code,'ACCOUNT_TOKEN_UNKNOWN');
   assert.equal((await billingRpc('account_by_token',{appAccountToken:'not-a-uuid'})).code,'ACCOUNT_TOKEN_UNKNOWN');
+});
+
+test('claimless Apple offer code binds an authenticated device and enforces the chain device limit',async()=>{
+  const transaction='offer-'+randomUUID();
+  assert.equal((await billingRpc('account_by_purchase',{
+    originalTransactionId:transaction,environment:'sandbox'})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  const members=[];
+  for(let i=0;i<4;i++){
+    const d=await device();
+    const result=await verify(d.principal,{transaction,token:i===1?undefined:'',
+      expiresAt:'2099-12-01T00:00:00.000Z',bindDevice:true});
+    members.push({...d,result});
+  }
+  for(const member of members.slice(0,3)){
+    assert.equal(member.result.plan,'plus',JSON.stringify(member.result));
+    assert.equal((await billingRpc('entitlement',{principal:member.principal})).plan,'plus');
+  }
+  assert.equal(members[3].result.code,'DEVICE_LIMIT_REACHED');
+  const chain=await chainOf(transaction);
+  assert.equal(chain.length,1);
+  assert.equal(chain[0].principal,members[0].principal);
+  assert.equal(await activeDevices(chain[0].id),3);
+  const owner=await billingRpc('account_by_purchase',{
+    originalTransactionId:transaction,environment:'sandbox'});
+  assert.equal(owner.principal,members[0].principal);
+  assert.equal(/^[0-9a-f-]{36}$/.test(owner.appAccountToken),true);
+  assert.equal((await billingRpc('account_by_purchase',{
+    originalTransactionId:transaction,environment:'production'})).code,'ACCOUNT_TOKEN_UNKNOWN');
+  assert.equal((await billingRpc('entitlement',{principal:members[3].principal})).plan,'free');
 });
 
 test('claim registration is idempotent with a stable per-device token',async()=>{

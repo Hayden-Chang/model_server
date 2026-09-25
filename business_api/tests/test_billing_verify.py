@@ -124,7 +124,7 @@ def _make_client(certs, *, handler=None):
 
 def _verify(certs, backend, apple, *, body=None, environment="Sandbox", product=PRODUCT,
             app_account_token=None, original_transaction_id="123", claim_id=None,
-            ownership=None):
+            ownership=None, synchronize_current=False):
     body = body or type("Body", (), {})()
     if getattr(body, "signed_transaction", None) is None:
         body.signed_transaction = _jws_token(certs, environment=environment, product=product,
@@ -140,7 +140,8 @@ def _verify(certs, backend, apple, *, body=None, environment="Sandbox", product=
             return await verify_apple_purchase(
                 backend=backend, apple_client=apple, settings=configuration_ref[0],
                 actor=Actor(DEVICE_PRINCIPAL),
-                payload_body=body, pinned_roots=[certs.root_certificate])
+                payload_body=body, pinned_roots=[certs.root_certificate],
+                synchronize_current=synchronize_current)
         finally:
             if apple is not None and hasattr(apple, "aclose"):
                 pass
@@ -170,6 +171,24 @@ def test_verify_success_binds_and_returns_entitlement(certs, configuration):
     # The client purchase/restore path may join this device to the chain.
     assert data["bindDevice"] is True
     assert "sessionID" not in data and "requireSession" not in data
+    assert apple.calls == ["123"]
+
+
+@pytest.mark.parametrize("synchronize_current", [False, True])
+def test_offer_code_transaction_without_account_token_reaches_device_binding(certs, configuration, synchronize_current):
+    body = type("Body", (), {})()
+    body.signed_transaction = tsc._build_jws(
+        {"environment": "Sandbox", "productId": PRODUCT,
+         "originalTransactionId": "123"}, certs, certs.leaf_certificate)
+    body.product_id = PRODUCT
+    body.claim_id = None
+    apple, backend = FakeApple(), FakeBackend()
+    result = _verify(certs, backend, apple, body=body, synchronize_current=synchronize_current)
+    assert result["plan"] == "plus"
+    assert backend.calls[0][0] == ("apple_sync" if synchronize_current else "apple_verify")
+    assert backend.calls[0][2]["appAccountToken"] == ""
+    assert backend.calls[0][2]["bindDevice"] is True
+    assert backend.calls[0][2]["claimId"] is None
     assert apple.calls == ["123"]
 
 

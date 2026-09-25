@@ -119,3 +119,20 @@ verify B is free with free quota, relaunch, then switch back to A and restore.
 Verify a second device on A retains membership. Only then proceed to production.
 Do not roll back only the API after clients begin sending snapshots. Keep the
 selection migration so historical transactions cannot silently grant membership.
+
+
+## Offer-code compatibility (schema 27)
+
+Apply `202609250027_offer_code_claimless_verification.sql` after 026 and before
+starting the offer-code worker. It replaces only `billing_service_unscoped`;
+the public current-selection wrapper and environment wrapper remain unchanged.
+It can be reapplied and refuses pre-026 databases. Do not apply the unpublished
+024 offer-code draft or restore the old public `billing_service` definition.
+No purchase bindings, current selections or quota counters are rewritten.
+
+Read back `billing_environment_schema() = 27`. The release's TestFlight deploy
+script requires 27. Retain 027 when rolling back an application image, and
+preserve the current production/sandbox separation of the API and workers.
+Before releasing the offer-code client, validate a real Apple sandbox offer
+redemption, restore, a later transaction update and switching to an empty tester.
+A sandbox-account-switch test alone is not offer-code acceptance.

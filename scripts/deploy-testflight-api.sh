@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run on the server from a staged git archive, after migrations 024, 025 and 026.
+# Run on the server from a staged git archive, after migrations 024, 025, 026 and 027.
 # This stages the sandbox API only; production/worker cutover is a separate gate.
 set -euo pipefail
 if [[ $# -ne 1 || ! "$1" =~ ^[a-f0-9]{40}$ ]]; then
@@ -25,8 +25,8 @@ r=httpx.post(os.environ["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/billing_enviro
 r.raise_for_status()
 print(r.json())
 ')"
-if [[ "$SCHEMA_VERSION" != 26 ]]; then
-  echo "billing environment schema 26 is required before deployment" >&2
+if [[ "$SCHEMA_VERSION" != 27 ]]; then
+  echo "billing environment schema 27 is required before deployment" >&2
   exit 1
 fi
 if [[ ! -e .secrets ]]; then ln -s "$SERVER_ROOT/.secrets" .secrets; fi
