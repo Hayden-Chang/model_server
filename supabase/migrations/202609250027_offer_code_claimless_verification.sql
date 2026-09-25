@@ -1,19 +1,19 @@
--- Apple subscription offer codes redeemed through StoreKit's system sheet
--- have no appAccountToken. The business API has already verified the signed
--- transaction and Apple subscription status before calling apple_verify.
--- Allow an authenticated device verify to bind that chain by its verified
--- originalTransactionId, preserving the existing three-device limit.
--- Worker calls with bindDevice=false still require a known purchase token.
---
--- No rollback file: this migration only replaces a function body. Reapply
--- the definition from 202609170019 to revert it. A *_rollback.sql file would
--- also be applied as a forward migration by the test harness.
+-- Add offer-code admission to the inner ledger function only. The deployed
+-- environment (024) and current StoreKit selection (026) wrappers stay intact.
+-- No tables, selections, purchase bindings or quota counters are rewritten.
+begin;
+do $$
+begin
+  if to_regprocedure('public.billing_service_before_storekit(text,jsonb)') is null
+     or to_regprocedure('public.billing_service_unscoped(text,jsonb)') is null then
+    raise exception 'BILLING_STOREKIT_MIGRATION_026_REQUIRED';
+  end if;
+  if public.billing_environment_schema() not in (26,27) then
+    raise exception 'BILLING_STOREKIT_MIGRATION_026_REQUIRED';
+  end if;
+end $$;
 
--- ---------------------------------------------------------------------------
--- Body re-emitted from 202609170019; adds account_by_purchase and changes
--- apple_verify token admission for device binding.
--- ---------------------------------------------------------------------------
-create or replace function public.billing_service(p_action text, p_data jsonb) returns jsonb
+create or replace function public.billing_service_unscoped(p_action text, p_data jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
 declare
   actor text := p_data->>'principal';
@@ -283,5 +283,10 @@ begin
 
   raise exception 'BILLING_UNKNOWN_ACTION';
 end $$;
-revoke all on function public.billing_service(text,jsonb) from public,anon,authenticated;
-grant execute on function public.billing_service(text,jsonb) to service_role;
+revoke all on function public.billing_service_unscoped(text,jsonb)
+  from public,anon,authenticated,service_role;
+create or replace function public.billing_environment_schema() returns integer
+language sql set search_path='' as $$ select 27 $$;
+revoke all on function public.billing_environment_schema() from public,anon,authenticated;
+grant execute on function public.billing_environment_schema() to service_role;
+commit;

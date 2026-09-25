@@ -4,11 +4,13 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SHA = "a" * 40
 
 
-def deployment(tmp_path, schema="26"):
+def deployment(tmp_path, schema="27"):
     release = tmp_path / "release"
     server = tmp_path / "server"
     tools = tmp_path / "bin"
@@ -48,10 +50,11 @@ print('{}')
     return result, calls, server
 
 
-def test_missing_migration_blocks_before_build_or_container_changes(tmp_path):
-    result, calls, server = deployment(tmp_path, schema="25")
+@pytest.mark.parametrize("schema", ["25", "26"])
+def test_missing_migration_blocks_before_build_or_container_changes(tmp_path, schema):
+    result, calls, server = deployment(tmp_path, schema=schema)
     assert result.returncode != 0
-    assert "schema 26 is required" in result.stderr
+    assert "schema 27 is required" in result.stderr
     assert all(call[0] == "exec" for call in calls)
     assert not (server / "rollback-backups").exists()
 
