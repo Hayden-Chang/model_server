@@ -88,7 +88,7 @@ def subscription_state(status_payload: dict, original_transaction_id: str) -> tu
 
 
 async def verify_apple_purchase(*, backend, apple_client, settings, actor, payload_body,
-                                pinned_roots=None) -> dict:
+                                pinned_roots=None, synchronize_current=False) -> dict:
     try:
         transaction = verify_apple_jws(payload_body.signed_transaction, pinned_roots=pinned_roots)
     except JWSVerificationFailed as error:
@@ -143,4 +143,4 @@ async def verify_apple_purchase(*, backend, apple_client, settings, actor, paylo
                 # device to the chain (design §5.3).
                 bindDevice=True,
                 claimId=str(payload_body.claim_id) if payload_body.claim_id else None)
-    return await backend.billing("apple_verify", actor, **data)
+    return await backend.billing("apple_sync" if synchronize_current else "apple_verify", actor, **data)

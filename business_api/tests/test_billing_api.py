@@ -350,3 +350,22 @@ def test_billing_event_raises_on_every_rpc_code(configuration):
     error = asyncio.run(run())
     assert error.status_code == 404
     assert error.detail["code"] == "ACCOUNT_TOKEN_UNKNOWN"
+
+
+def test_current_storekit_empty_snapshot_uses_device_actor(configuration):
+    backend = BillingBackend()
+    with TestClient(create_account_api(configuration, backend=backend)) as client:
+        response = client.post('/billing/apple/sync', json={'transaction': None}, headers=device_headers())
+    assert response.status_code == 200
+    assert backend.calls == [('apple_sync', DEVICE_ACTOR, {})]
+    assert backend.account_calls == []
+
+
+def test_current_storekit_snapshot_requires_explicit_snapshot_and_device_auth(configuration):
+    backend = BillingBackend()
+    with TestClient(create_account_api(configuration, backend=backend)) as client:
+        assert client.post('/billing/apple/sync', json={'transaction': None}).status_code == 401
+        assert client.post('/billing/apple/sync', json={}, headers=device_headers()).status_code == 422
+        assert client.post('/billing/apple/sync', json={'transaction': None, 'environment':'production'},
+                           headers=device_headers()).status_code == 422
+    assert backend.calls == []
