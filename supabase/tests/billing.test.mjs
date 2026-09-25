@@ -184,6 +184,42 @@ test('a dual-environment device charges the production chain owner',async()=>{
       productionOwner:productionOwner.principal,member:member.principal}));
 });
 
+test('one purchase owner has independent sandbox and production daily quotas',async()=>{
+  const owner=await device();
+  const peer=await device();
+  const token=await claimToken(owner);
+  for(const environment of ['sandbox','production']){
+    const transaction=environment+'-same-owner-'+randomUUID();
+    await verify(owner.principal,{transaction,token,environment});
+    await verify(peer.principal,{transaction,token,environment});
+  }
+  const entitlement=(principal,billingEnvironment)=>billingRpc('entitlement',{principal,billingEnvironment});
+  await db.admin.query('update ai_private.runtime set legacy_import_complete=true');
+  try {
+    await charge(owner.principal,1,'sandbox');
+    assert.equal((await entitlement(owner.principal,'production')).aiQuota.used,0,
+      'A sandbox call must not consume the same owner production allowance');
+    assert.equal((await entitlement(peer.principal,'sandbox')).aiQuota.used,1,
+      'Restored devices still share the purchase owner allowance within one environment');
+    await charge(peer.principal,30,'production');
+    assert.equal((await entitlement(owner.principal,'production')).aiQuota.remaining,0);
+    assert.equal((await entitlement(owner.principal,'sandbox')).aiQuota.remaining,29);
+    await charge(peer.principal,1,'sandbox');
+    assert.equal((await entitlement(owner.principal,'sandbox')).aiQuota.used,2);
+    const supportCode=(await db.admin.query('select support_code from ai_private.principals where id=$1',[owner.principal])).rows[0].support_code;
+    const request={principal:owner.principal,supportCode,freeLimit:30,memberLimit:30,
+      requestID:randomUUID(),attempt:randomUUID(),bodyHash:'e'.repeat(64)};
+    const sandboxHold=await db.rpc(null,'ai_quota_service',['reserve',{...request,billingEnvironment:'sandbox'}],'service_role');
+    assert.equal(sandboxHold.used,3);
+    await db.rpc(null,'ai_quota_service',['finish',{...request,attempt:sandboxHold.attempt,
+      billingEnvironment:'sandbox',consume:false}],'service_role');
+    assert.equal((await entitlement(owner.principal,'sandbox')).aiQuota.used,2);
+    assert.equal((await entitlement(owner.principal,'production')).aiQuota.used,30);
+  } finally {
+    await db.admin.query('update ai_private.runtime set legacy_import_complete=false');
+  }
+});
+
 test('production worker reads only production events and purchase chains',async()=>{
   const seen={};
   for(const environment of ['sandbox','production']){
