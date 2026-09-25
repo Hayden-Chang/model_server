@@ -273,11 +273,45 @@ def test_billing_rpc_body_carries_the_device_principal_and_no_session(configurat
 
     assert asyncio.run(run()) == ENTITLEMENT_RESPONSE
     assert seen[0]["p_action"] == "entitlement"
-    assert seen[0]["p_data"] == {"principal": DEVICE}
+    assert seen[0]["p_data"] == {"principal": DEVICE, "billingEnvironment": "sandbox"}
     # The device principal has no Supabase session and the RPC no longer has a
     # session concept, so neither key may be sent at all (design §2.3).
     assert "sessionID" not in seen[0]["p_data"]
     assert "requireSession" not in seen[0]["p_data"]
+
+
+def test_production_environment_reaches_billing_and_ai_quota_rpc(configuration):
+    settings = configuration.model_copy(update={"apple_environment": "production"})
+    backend, seen = _rpc_backend(settings, [ENTITLEMENT_RESPONSE, {"limit": 30},
+                                         {"chains": []}])
+
+    async def run():
+        try:
+            await backend.billing("entitlement", DEVICE_ACTOR)
+            await backend.quota("status", DEVICE_ACTOR)
+            await backend.billing_event("reconcile_list")
+        finally:
+            await backend.close()
+
+    asyncio.run(run())
+    assert [call["p_data"]["billingEnvironment"] for call in seen] == [
+        "production", "production", "production"]
+
+
+def test_cross_environment_purchase_is_reported_as_invalid(configuration):
+    backend, _ = _rpc_backend(configuration, [{"code": "ENVIRONMENT_MISMATCH"}])
+
+    async def run():
+        try:
+            with pytest.raises(HTTPException) as error:
+                await backend.billing("apple_verify", DEVICE_ACTOR)
+            return error.value
+        finally:
+            await backend.close()
+
+    error = asyncio.run(run())
+    assert error.status_code == 422
+    assert error.detail["code"] == "ENVIRONMENT_MISMATCH"
 
 
 @pytest.mark.parametrize("code,expected", [("DEVICE_REQUIRED", 401),

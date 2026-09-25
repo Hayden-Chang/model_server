@@ -197,6 +197,7 @@ class AccountBackend:
 
     async def quota(self, action: str, actor: Actor | None = None,
                     diagnostic_request_id: str | None = None, **data) -> dict:
+        data["billingEnvironment"] = self.settings.apple_environment
         if actor:
             data.update(principal=actor.principal, sessionID=actor.session_id,
                         supportCode=support_code(actor.principal), freeLimit=self.settings.time_fragment_guest_quota_limit,
@@ -215,6 +216,7 @@ class AccountBackend:
         return result
 
     async def billing_event(self, action: str, **data) -> dict:
+        data["billingEnvironment"] = self.settings.apple_environment
         result = await self._rpc("billing_service", {"p_action": action, "p_data": data})
         code = result.pop("code", None)
         if code:
@@ -231,7 +233,8 @@ class AccountBackend:
         # A device principal has no Supabase session, and the RPC no longer has
         # a session concept: `sessionID`/`requireSession` must not be sent at
         # all (design §2.3).
-        data.update(principal=actor.principal)
+        data.update(principal=actor.principal,
+                    billingEnvironment=self.settings.apple_environment)
         result = await self._rpc("billing_service", {"p_action": action, "p_data": data},
                                  request_id=diagnostic_request_id)
         code = result.pop("code", None)
@@ -239,6 +242,7 @@ class AccountBackend:
             status = {"CLAIM_CONFLICT": 409, "CLAIM_NOT_FOUND": 404,
                       "ACCOUNT_TOKEN_UNKNOWN": 404, "DEVICE_REQUIRED": 401,
                       "DEVICE_LIMIT_REACHED": 409, "PRODUCT_INVALID": 422,
+                      "ENVIRONMENT_MISMATCH": 422,
                       "ACCOUNT_SERVICE_UNAVAILABLE": 503}.get(code, 409)
             raise failure(code, status, **result)
         return result

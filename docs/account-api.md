@@ -26,6 +26,18 @@ An AI result never writes a user's cloud state or applies a plan to the App.
 | ~~`GET/POST /api/development/membership`~~ | — | **Not accepted by this service** (404): the development toggle exists only in the base `business-api` (`business_api/app/factory.py`, see [development-membership.md](development-membership.md)). This service's member allowance is the entitlement-driven Plus daily limit from `TIME_FRAGMENT_MEMBER_QUOTA_LIMIT` (default 30, `business_api/app/account_backend.py`); the base's 50/day is a fixed value of its SQLite quota store, not this service's limit. |
 | `/admin/time-fragment/quotas/...` | admin key | Existing status/reset routes now use the Postgres ledger. Reset waits for active attempts to finish. |
 
+The App Store release must use `APPLE_ENVIRONMENT=production`; development and
+TestFlight purchases use `sandbox`. Migration `202609240024` scopes entitlement
+aggregation, billing sources, and the shared AI meter to the configured Apple
+environment. Apply that migration before deploying the matching API, then switch
+the release service's environment. A sandbox chain can remain in the database
+without granting Plus to the production service. A successful device refresh
+replaces any previously cached sandbox entitlement; an offline device may keep
+its unexpired local cache until it can refresh. The existing TestFlight client
+uses the same API host, so sandbox purchase testing needs a separately configured
+endpoint after the production switch. Do not flip the variable alone: the older
+database functions aggregate purchases from both environments.
+
 The AI route is device-metered. Membership resolves by principal identity
 (`202609170017_device_principal_billing.sql`), an account session resolves to
 `account:<uuid>`, and every entitlement-writing action requires the device
