@@ -1,7 +1,15 @@
-# Staging
+# Legacy staging stack
 
-The staging endpoint is `https://staging.api.keeline.xyz`. Its Compose project
-is `model-server-staging`, deployed separately under `/opt/model_server_staging`.
+`staging.api.keeline.xyz` is now reserved for the TestFlight sandbox account
+API in the production Compose project. The legacy full staging stack below is
+not running and must not be started on this hostname; it needs a different
+hostname and isolated capacity before reuse. The TestFlight sandbox API shares
+the production planning service and Supabase project, while its Apple purchase
+environment, billing API, and billing worker stay in sandbox. It is a purchase
+testing entry, not an isolated copy of all user data.
+
+The legacy staging endpoint used `https://staging.api.keeline.xyz`. Its Compose
+project was `model-server-staging`, deployed under `/opt/model_server_staging`.
 Run `docker compose --env-file .env -f docker-compose.staging.yml ...` from that
 directory. Set `STAGING_SOURCE_SHA` to the exact committed source being deployed.
 

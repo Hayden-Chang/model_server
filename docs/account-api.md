@@ -33,10 +33,25 @@ environment. Apply that migration before deploying the matching API, then switch
 the release service's environment. A sandbox chain can remain in the database
 without granting Plus to the production service. A successful device refresh
 replaces any previously cached sandbox entitlement; an offline device may keep
-its unexpired local cache until it can refresh. The existing TestFlight client
-uses the same API host, so sandbox purchase testing needs a separately configured
-endpoint after the production switch. Do not flip the variable alone: the older
-database functions aggregate purchases from both environments.
+its unexpired local cache until it can refresh. TestFlight archives must set
+`MODEL_SERVER_API_BASE=https://staging.api.keeline.xyz`; that hostname routes to
+`testflight-api`, and its companion `testflight-billing-worker` processes sandbox
+events. Both keep `APPLE_ENVIRONMENT=sandbox` after the public service switches
+to production.
+Start the TestFlight worker only when the existing worker switches to production;
+until then the existing worker handles sandbox events, so there is never a pair
+of sandbox pollers racing on the same event queue.
+The production archive keeps `https://api.keeline.xyz`. Configure Apple's
+sandbox Server Notifications V2 URL as
+`https://staging.api.keeline.xyz/webhooks/apple`; keep the production URL on
+`https://api.keeline.xyz/webhooks/apple`. Do not flip the variable alone: the
+older database functions aggregate purchases from both environments.
+If the production cutover fails, restore the backed-up `.env` with
+`APPLE_ENVIRONMENT=sandbox`, stop `testflight-billing-worker`, and recreate
+`time-fragment-api` plus `billing-worker`. This restores the prior sandbox
+service while leaving the forward migration in place. Do not run the legacy
+`billing-rollback-device-principal.sh`: it reverses the older device-principal
+migrations, not this environment switch.
 
 The AI route is device-metered. Membership resolves by principal identity
 (`202609170017_device_principal_billing.sql`), an account session resolves to
