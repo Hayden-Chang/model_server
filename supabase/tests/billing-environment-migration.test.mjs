@@ -62,3 +62,12 @@ test('environment quota migration refuses a destination collision without losing
     assert.equal((await db.admin.query('select sum(used)::int total from ai_private.buckets where principal=$1',[principal])).rows[0].total,9);
   }finally{await db.close();}
 });
+
+test('environment quota migration requires entitlement isolation before advertising readiness',async()=>{
+  const db=await database({through:'202609230023'});
+  try{
+    await assert.rejects(db.admin.query(migration),/BILLING_ENVIRONMENT_MIGRATION_024_REQUIRED/);
+    await db.admin.query('rollback');
+    assert.equal((await db.admin.query("select to_regprocedure('public.billing_environment_schema()') as probe")).rows[0].probe,null);
+  }finally{await db.close();}
+});

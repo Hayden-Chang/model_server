@@ -4,6 +4,10 @@
 begin;
 lock table ai_private.buckets in access exclusive mode;
 do $$ begin
+  if to_regprocedure('public.billing_service_unscoped(text,jsonb)') is null
+     or to_regprocedure('public.ai_quota_service_unscoped(text,jsonb)') is null then
+    raise exception 'BILLING_ENVIRONMENT_MIGRATION_024_REQUIRED';
+  end if;
   if exists (
     select 1 from ai_private.buckets b
     join billing_private.store_purchases sp on sp.principal=b.principal
