@@ -75,5 +75,6 @@ def test_content_mount_is_read_only_and_both_hosts_serve_the_same_catalog():
     for name, count in [("Caddyfile", 1), ("Caddyfile.accounts", 2)]:
         config = (ROOT / name).read_text()
         assert config.count("handle_path /puzzle-themes/*") == count
-        assert config.count('header Cache-Control "no-cache"') == count
+        assert config.count("@catalog not path /images/*") == count
+        assert config.count('header @catalog Cache-Control "no-cache"') == count
         assert config.count('header @images Cache-Control "public, max-age=31536000, immutable"') == count
