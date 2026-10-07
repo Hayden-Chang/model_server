@@ -301,3 +301,17 @@ artworks to validate HTTPS hot loading without adding test items to the app's
 production catalog. It is public test content, contains no user data, and is not
 referenced by `catalog.json`. Its `catalog.json` can be atomically updated using the
 same publisher with `--base-url .../puzzle-themes/verification`.
+
+
+### Optional thumbnails
+
+Remote images may include `thumbnailURL`, a versioned HTTPS JPEG/PNG URL under
+this same `/images/` directory. The publisher validates and uploads both files
+before atomically switching the catalog. Preview payloads are limited to 250 KB;
+prepare them at no more than 1024 pixels on either side (recommended 216 × 648
+for the existing portrait artwork). The client checks pixel dimensions and uses
+a separate preview cache with no selection/random eligibility. Full images still
+use the existing 30 MB limit. Existing catalogs without previews remain valid.
+Adding/changing a preview changes image metadata: increment `revision`, retain
+old full files, and use a new preview filename. The unchanged full image URL can
+be reused. No container restart is necessary for content-only publication.

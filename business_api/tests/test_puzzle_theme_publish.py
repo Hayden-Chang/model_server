@@ -78,3 +78,48 @@ def test_content_mount_is_read_only_and_both_hosts_serve_the_same_catalog():
         assert config.count("@catalog not path /images/*") == count
         assert config.count('header @catalog Cache-Control "no-cache"') == count
         assert config.count('header @images Cache-Control "public, max-age=31536000, immutable"') == count
+
+
+def test_previews_publish_before_catalog_and_preserve_old_versions(tmp_path):
+    source, target, themes = fixture(tmp_path)
+    preview = source / "images/a-preview-v1.jpg"
+    preview.write_bytes(b"\xff\xd8\xffpreview")
+    themes[0]["images"][0]["thumbnailURL"] = BASE + "/images/a-preview-v1.jpg"
+    write(source, themes)
+    assert publisher.publish(source, target, BASE, check=True) == (1, 2)
+    assert not target.exists()
+    assert publisher.publish(source, target, BASE) == (1, 2)
+    assert (target / "images/a-preview-v1.jpg").read_bytes() == preview.read_bytes()
+    assert json.loads((target / "catalog.json").read_bytes()) == themes
+    preview.write_bytes(b"\xff\xd8\xffchanged")
+    with pytest.raises(ValueError, match="immutable"):
+        publisher.publish(source, target, BASE)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "oversized", "http", "path", "bytes", "bundled"])
+def test_invalid_preview_preserves_previous_catalog(tmp_path, invalid):
+    source, target, themes = fixture(tmp_path)
+    publisher.publish(source, target, BASE)
+    original = (target / "catalog.json").read_bytes()
+    image = themes[0]["images"][0]
+    image.update(revision="2", thumbnailURL=BASE + "/images/preview-v2.jpg")
+    preview = source / "images/preview-v2.jpg"
+    preview.write_bytes(b"\xff\xd8\xffpreview")
+    if invalid == "missing":
+        preview.unlink()
+    elif invalid == "oversized":
+        preview.write_bytes(b"\xff\xd8\xff" + b"a" * 250_000)
+    elif invalid == "http":
+        image["thumbnailURL"] = image["thumbnailURL"].replace("https:", "http:")
+    elif invalid == "path":
+        image["thumbnailURL"] = BASE + "/images/../preview.jpg"
+    elif invalid == "bytes":
+        preview.write_bytes(b"bad")
+    else:
+        image.pop("resourceURL")
+        image["bundledArtworkID"] = "gallery-20260920-01"
+    write(source, themes)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        publisher.publish(source, target, BASE)
+    assert (target / "catalog.json").read_bytes() == original
+    assert not (target / "images/preview-v2.jpg").exists()
