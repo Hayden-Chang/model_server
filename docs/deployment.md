@@ -256,3 +256,48 @@ That path reverses the database only: the file's header states that the deploy
 code has to move with it, so the pre-deploy revision must still be restored
 separately. Keep `-v ON_ERROR_STOP=1`, or a failed transaction is reported as
 success.
+
+## PiecePlan puzzle themes
+
+`/puzzle-themes/*` is an anonymous, read-only Caddy file route on both API hosts.
+It mounts `/srv/pieceplan-themes` on the host at `/srv/puzzle-themes:ro`.
+The content directory is independent of source releases and billing/AI containers.
+Create it before recreating only Caddy to add the mount. Validate the candidate
+Caddyfile with the deployed Caddy image, keep copies of the previous Caddyfile and
+Compose file, then use the existing Compose project with `up -d --no-deps caddy`.
+If HTTPS health or route checks fail, restore those two files and recreate Caddy.
+Do not rebuild or restart API services for content updates.
+
+Prepare a directory containing `catalog.json` and referenced `images/*` files.
+The iOS catalog format is an array of themes (`id`, `title`, `subtitle`, `symbol`,
+optional timezone-qualified `startsAt`/`endsAt`, and `images`). Images have stable
+`id`, `revision`, `title`, and either a known `bundledArtworkID` or an HTTPS
+`resourceURL` under the publishing base URL's `images/` directory.
+
+Run on the content host, with one publisher at a time:
+
+```sh
+python3 scripts/publish-puzzle-themes.py /tmp/theme-upload /srv/pieceplan-themes \
+  --base-url https://api.keeline.xyz/puzzle-themes --check
+python3 scripts/publish-puzzle-themes.py /tmp/theme-upload /srv/pieceplan-themes \
+  --base-url https://api.keeline.xyz/puzzle-themes
+```
+
+Validation rejects missing files, oversized images/catalogs, invalid time ranges,
+unsafe filenames, duplicate/inconsistent IDs, and changed existing image bytes or
+current version metadata. It checks image signatures; the client also fully
+decodes images before they enter the random pool. Always use a new revision and
+filename when replacing pixels, including when reintroducing an old removed item.
+All files are validated before writing; images are published before the atomic
+catalog replacement. Old images are retained. Catalog responses use `no-cache`;
+versioned `/images/*` responses are immutable. The server directory is operational
+content, not a place for secrets, draft files, or backups. Upload staging and
+backups must remain outside this public directory. Directory listing is disabled.
+
+For the initial rollout, only the existing `classic` theme is published, retaining
+all fifteen bundled artwork IDs and their fragment entitlement behavior. The
+separate `/puzzle-themes/verification/` directory uses copies of four existing free
+artworks to validate HTTPS hot loading without adding test items to the app's
+production catalog. It is public test content, contains no user data, and is not
+referenced by `catalog.json`. Its `catalog.json` can be atomically updated using the
+same publisher with `--base-url .../puzzle-themes/verification`.
