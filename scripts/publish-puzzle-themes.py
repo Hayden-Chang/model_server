@@ -50,26 +50,31 @@ def publish(source: Path, destination: Path, base_url: str, *, check=False):
             resources[key] = image
             bundled = image.get("bundledArtworkID")
             if bundled:
-                if not re.fullmatch(r"gallery-20260920-(0[1-9]|1[0-5])", bundled) or image.get("resourceURL"):
+                if not re.fullmatch(r"gallery-20260920-(0[1-9]|1[0-5])", bundled) or image.get("resourceURL") or image.get("thumbnailURL"):
                     raise ValueError("invalid bundled image")
                 continue
-            url = image["resourceURL"]
-            prefix = base_url.rstrip("/") + "/images/"
-            if not url.startswith(prefix):
-                raise ValueError("image must belong to the content host /images directory")
-            name = url[len(prefix):]
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg)", name):
-                raise ValueError("invalid image filename")
-            path = source / "images" / name
-            if path.is_symlink():
-                raise ValueError("image symlinks are not supported")
-            blob = path.read_bytes()
-            if not blob or len(blob) > 30_000_000 or not (blob.startswith(b"\x89PNG\r\n\x1a\n") or blob.startswith(b"\xff\xd8\xff")):
-                raise ValueError("invalid or oversized image")
-            target = destination / "images" / name
-            if target.exists() and target.read_bytes() != blob:
-                raise ValueError("immutable image changed; use a new revision and filename")
-            files[name] = path
+            for field, limit in (("resourceURL", 30_000_000), ("thumbnailURL", 250_000)):
+                url = image.get(field)
+                if field == "thumbnailURL" and url is None:
+                    continue
+                if not isinstance(url, str):
+                    raise ValueError("missing image URL")
+                prefix = base_url.rstrip("/") + "/images/"
+                if not url.startswith(prefix):
+                    raise ValueError("image must belong to the content host /images directory")
+                name = url[len(prefix):]
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg)", name):
+                    raise ValueError("invalid image filename")
+                path = source / "images" / name
+                if path.is_symlink():
+                    raise ValueError("image symlinks are not supported")
+                blob = path.read_bytes()
+                if not blob or len(blob) > limit or not (blob.startswith(b"\x89PNG\r\n\x1a\n") or blob.startswith(b"\xff\xd8\xff")):
+                    raise ValueError("invalid or oversized image")
+                target = destination / "images" / name
+                if target.exists() and target.read_bytes() != blob:
+                    raise ValueError("immutable image changed; use a new revision and filename")
+                files[name] = path
     if check:
         return len(themes), len(files)
     destination.mkdir(parents=True, exist_ok=True)
