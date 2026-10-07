@@ -16,6 +16,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /srv/pieceplan-themes:/srv/puzzle-themes:ro
 
 
   business-api:
