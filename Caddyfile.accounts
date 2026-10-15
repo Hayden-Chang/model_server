@@ -24,6 +24,13 @@ https://{$PUBLIC_DOMAIN} {
 	handle @private {
 		respond 404
 	}
+	# Keep rental purchases outside the TimeFragment account and billing API.
+	handle /api/rent-room/* {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy rent-room-api:8000
+	}
 	@account path /api/* /billing/* /webhooks/apple /admin/time-fragment/*
 	handle @account {
 		reverse_proxy time-fragment-api:8000 {
