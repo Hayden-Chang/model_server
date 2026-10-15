@@ -229,6 +229,26 @@ def test_ledger_survives_restart_and_serializes_multiple_connections(tmp_path):
     reloaded.close()
 
 
+def test_secure_xml_notifications_accept_cdata_but_reject_entity_declarations(settings):
+    ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        event = ("<xml><Event><![CDATA[xpay_goods_deliver_notify]]></Event><OutTradeNo><![CDATA["
+                 + order["orderId"] + "]]></OutTradeNo></xml>").encode()
+        payload = push.encrypt(event)
+        params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
+        envelope = "<xml><Encrypt><![CDATA[" + payload["Encrypt"] + "]]></Encrypt></xml>"
+        response = client.post("/api/rent-room/wechat/notify", params=params, content=envelope,
+                               headers={"content-type": "application/xml"})
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/xml")
+        assert query(client, headers).json()["packs"] == 1
+        dangerous = '<!DOCTYPE xml [<!ENTITY injected "payload">]><xml><Encrypt>&injected;</Encrypt></xml>'
+        assert client.post("/api/rent-room/wechat/notify", params=params, content=dangerous).status_code == 403
+
+
 def test_caddy_routes_capacity_before_timefragment_accounts():
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]

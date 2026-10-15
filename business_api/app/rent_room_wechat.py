@@ -116,7 +116,7 @@ class SecurePush:
     def parse(body):
         if body.lstrip().startswith(b"{"):
             return json.loads(body), True
-        if b"<!" in body:
+        if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
             raise ValueError("Unsafe XML")
         def convert(node):
             return {child.tag: convert(child) for child in node} if len(node) else node.text or ""
