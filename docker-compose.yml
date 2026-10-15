@@ -56,6 +56,33 @@ services:
       retries: 5
       start_period: 10s
 
+  rent-room-api:
+    build:
+      context: ./business_api
+    command: [uvicorn, app.rent_room_main:app, --host, 0.0.0.0, --port, "8000"]
+    restart: unless-stopped
+    environment:
+      RENT_ROOM_APP_ID: ${RENT_ROOM_APP_ID:-wxf43c7f280c98efca}
+      RENT_ROOM_APP_SECRET: ${RENT_ROOM_APP_SECRET:-}
+      RENT_ROOM_OFFER_ID: ${RENT_ROOM_OFFER_ID:-}
+      RENT_ROOM_APP_KEY: ${RENT_ROOM_APP_KEY:-}
+      RENT_ROOM_TOKEN_SECRET: ${RENT_ROOM_TOKEN_SECRET:-}
+      RENT_ROOM_PUSH_TOKEN: ${RENT_ROOM_PUSH_TOKEN:-}
+      RENT_ROOM_PUSH_AES_KEY: ${RENT_ROOM_PUSH_AES_KEY:-}
+      RENT_ROOM_PAYMENTS_ENABLED: ${RENT_ROOM_PAYMENTS_ENABLED:-false}
+      RENT_ROOM_IOS_PAYMENTS_ENABLED: ${RENT_ROOM_IOS_PAYMENTS_ENABLED:-false}
+      RENT_ROOM_DB_PATH: /var/lib/rent-room/capacity.sqlite3
+    expose: ["8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - rent-room-capacity:/var/lib/rent-room
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   litellm:
     image: ghcr.io/berriai/litellm:v1.98.0
     restart: unless-stopped
@@ -76,3 +103,4 @@ services:
 
 volumes:
   model-server-usage:
+  rent-room-capacity:

@@ -91,7 +91,7 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
         threading.Thread(target=instance.serve_forever,daemon=True).start()
         return instance
 
-    account,planner,testflight=server("account"),server("planner"),server("testflight")
+    account,planner,testflight,rental=server("account"),server("planner"),server("testflight"),server("rental")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1",0));port=listener.getsockname()[1]
     with socket.socket() as listener:
@@ -104,6 +104,7 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
     config=config.replace("time-fragment-api:8000",f"127.0.0.1:{account.server_port}")
     config=config.replace("testflight-api:8000",f"127.0.0.1:{testflight.server_port}")
     config=config.replace("business-api:8000",f"127.0.0.1:{planner.server_port}")
+    config=config.replace("rent-room-api:8000",f"127.0.0.1:{rental.server_port}")
     path=tmp_path/"Caddyfile";path.write_text(config)
     with (tmp_path/"caddy.log").open("w") as log:
         process=subprocess.Popen([binary,"run","--config",str(path),"--adapter","caddyfile"],env=env,stdout=log,stderr=log)
@@ -120,6 +121,8 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
                     assert client.get(route).text=="account"
                 for route in ["/health/live","/v1/pipelines/general-text-v1:run","/admin/observability"]:
                     assert client.get(route).text=="planner"
+                for route in ["/api/rent-room/catalog","/api/rent-room/entitlements"]:
+                    assert client.get(route).text=="rental"
                 for route in ["/internal","/internal/time-fragment/plan","/internal//time-fragment/plan","/%69nternal/time-fragment/plan"]:
                     assert client.get(route).status_code==404
             with httpx.Client(base_url=f"http://127.0.0.1:{testflight_port}",timeout=2,trust_env=False) as client:
@@ -131,5 +134,5 @@ def test_real_caddy_routes_public_api_and_blocks_private_planning(tmp_path):
                     assert client.get(route).status_code==404
         finally:
             process.terminate();process.wait(timeout=5)
-            account.shutdown();planner.shutdown();testflight.shutdown()
-            account.server_close();planner.server_close();testflight.server_close()
+            account.shutdown();planner.shutdown();testflight.shutdown();rental.shutdown()
+            account.server_close();planner.server_close();testflight.server_close();rental.server_close()
