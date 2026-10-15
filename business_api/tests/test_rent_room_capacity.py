@@ -268,3 +268,35 @@ def test_optional_rental_service_cannot_block_existing_gateway_startup():
     assert "rent-room-api" not in compose["services"]["caddy"]["depends_on"]
     assert "ports" not in compose["services"]["rent-room-api"]
     assert compose["services"]["rent-room-api"]["volumes"] == ["rent-room-capacity:/var/lib/rent-room"]
+
+
+def test_shared_session_contract_works_with_payments_disabled_and_expires():
+    settings = RentRoomSettings(_env_file=None, app_secret="test-secret",
+        token_secret="independent-session-encryption-secret-for-test")
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        first = client.post("/api/rent-room/session", json={"code": "A"}).json()
+        second = client.post("/api/rent-room/session", json={"code": "A"}).json()
+        assert set(first) == {"account", "token", "packs", "limit"}
+        assert first["account"] == second["account"] == hashlib.sha256((settings.app_id + ":wx-A").encode()).hexdigest()
+        assert 32 <= len(first["token"]) <= 256 and first["token"] != second["token"]
+        assert first["packs"] == 0 and first["limit"] == 2
+        headers = {"Authorization": "Bearer " + first["token"]}
+        assert client.get("/api/rent-room/entitlements", headers=headers).json() == {"packs": 0, "limit": 2}
+        assert client.get("/api/rent-room/catalog").json()["available"] is False
+        assert checkout(client, headers).status_code == 503
+        assert client.post("/api/rent-room/session", json={"code": "A", "account": "forged"}).status_code == 422
+        ledger.db.execute("UPDATE rr_sessions SET expires=0")
+        ledger.db.commit()
+        assert client.get("/api/rent-room/entitlements", headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("upstream", [{"errcode": 40029}, {}, {"openid": "wx-A"}])
+def test_failed_wechat_login_never_issues_a_session(settings, upstream):
+    provider = WeChatVirtualPay(settings, httpx.MockTransport(lambda _: httpx.Response(200, json=upstream)))
+    ledger = RentRoomStore(":memory:")
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        response = client.post("/api/rent-room/session", json={"code": "invalid"})
+        assert response.status_code == 503
+        assert ledger.db.execute("SELECT count(*) FROM rr_sessions").fetchone()[0] == 0
+        assert "test-app-secret" not in response.text
