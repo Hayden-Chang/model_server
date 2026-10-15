@@ -9,8 +9,6 @@ services:
     depends_on:
       business-api:
         condition: service_healthy
-      rent-room-api:
-        condition: service_healthy
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
     ports:

@@ -238,3 +238,13 @@ def test_caddy_routes_capacity_before_timefragment_accounts():
         assert text.index("handle /api/rent-room/*") < text.index("reverse_proxy business-api:8000")
     account = (root / "Caddyfile.accounts").read_text()
     assert account.index("handle /api/rent-room/*") < account.index("@account path /api/*")
+
+
+def test_optional_rental_service_cannot_block_existing_gateway_startup():
+    from pathlib import Path
+    import yaml
+    root = Path(__file__).resolve().parents[2]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())
+    assert "rent-room-api" not in compose["services"]["caddy"]["depends_on"]
+    assert "ports" not in compose["services"]["rent-room-api"]
+    assert compose["services"]["rent-room-api"]["volumes"] == ["rent-room-capacity:/var/lib/rent-room"]

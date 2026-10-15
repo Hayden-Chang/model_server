@@ -14,7 +14,7 @@
 
 复制 `.env.example` 新增的 `RENT_ROOM_*` 项至服务器私有环境。`TOKEN_SECRET` 为独立的至少 32 字符随机密钥，不能复用微信 AppKey 或其他产品密钥。`PUSH_TOKEN` 和 43 字符 `PUSH_AES_KEY` 来自微信消息推送配置，采用安全模式。所有配置完成前保持 `RENT_ROOM_PAYMENTS_ENABLED=false`；iOS 另行开通并验证后设置 `RENT_ROOM_IOS_PAYMENTS_ENABLED=true`。不支持在现网混用沙箱凭据；支付 `env` 固定 0。
 
-Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 `/var/lib/rent-room/capacity.sqlite3`。部署新服务和 Caddy 前备份当前 Compose、Caddy 配置和数据卷，按用户授权操作；不要整体覆盖服务器 `.env` 或其他产品数据库。先验证关闭支付时 `/catalog` 返回不可购买，再配置回调并进行小额实单。配置和本地测试完成不代表已部署。
+Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 `/var/lib/rent-room/capacity.sqlite3`。Caddy 不依赖新增容量服务的健康状态，容量服务配置或启动失败只影响寻居对应路由。部署新服务和 Caddy 前备份当前 Compose、Caddy 配置和数据卷，按用户授权操作；不要整体覆盖服务器 `.env` 或其他产品数据库。先验证关闭支付时 `/catalog` 返回不可购买，再配置回调并进行小额实单。配置和本地测试完成不代表已部署。
 
 | API | 用途 |
 | --- | --- |
