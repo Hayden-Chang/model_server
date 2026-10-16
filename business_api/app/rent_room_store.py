@@ -108,6 +108,8 @@ class RentRoomStore:
             # Refunds are terminal. A delayed paid query cannot resurrect them.
             if not row or row["state"] == "refunded":
                 return
+            if wx_id and row["wx_id"] and wx_id != row["wx_id"]:
+                raise sqlite3.IntegrityError("Verified payment identity cannot change")
             if state in ("unpaid", "pending", "closed") and row["state"] == "paid":
                 self.checked(order_id)
                 return

@@ -558,3 +558,17 @@ def test_full_refund_query_recovers_a_missed_notification_and_late_events_are_id
         assert notify_refund(client, settings, order["orderId"]).status_code == 200
         provider.remote[order["orderId"]] = {"status": 2}
         assert query(client, headers).json()["packs"] == 0
+
+
+def test_stale_connections_cannot_replace_a_verified_platform_payment_identity(tmp_path):
+    path = str(tmp_path / "concurrent.sqlite3")
+    a, b = RentRoomStore(path), RentRoomStore(path)
+    order = a.create_order({"account": "A", "openid": "wx-A"}, "one-request")
+    stale = b.by_id(order["id"])
+    assert stale["wx_id"] is None
+    a.apply(order["id"], "paid", "platform-1")
+    with pytest.raises(sqlite3.IntegrityError):
+        b.apply(stale["id"], "paid", "platform-2")
+    assert a.by_id(order["id"])["wx_id"] == "platform-1"
+    assert a.packs("A") == 1
+    a.close(); b.close()
