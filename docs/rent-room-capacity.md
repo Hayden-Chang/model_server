@@ -48,3 +48,13 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 本轮线上catalog仍为旧190分商品且available=false。已根据用户提供的部署说明，在 `/opt/model_server/rent-room/private.env` 配置OfferID、现网AppKey和新生成的回调Token/AESKey，保留原AppSecret与Token Secret；文件权限0600。原配置和SQLite在线备份位于 `/opt/model_server/rent-room/backups/virtual-payment-config-20261016T043212Z`。只重建寻居独立容器加载配置，继续使用旧镜像 `rent-room-api:f186bee17c59`，健康检查通过，其他容器身份/镜像/启动时间未变。新业务代码尚未部署；微信后台配置和真实付款仍未完成。不得将客户端与服务端分开上线造成商品不一致。部署时仅更新rent-room-api；备份独立SQLite卷（使用SQLite备份接口或停止本服务后备份），保留现有环境文件及镜像以便回退，不重建其他服务。回调验签与URL检查可在关闭新购时完成，配置完成后只开放已联调的平台。
 
 验收顺序：关闭支付时真实wx.login成功；GET回调校验；安卓1.99元真单及后台订单一致；重复通知不重复加包；模拟通知遗漏后后台主动补发；退出/换机同微信账号恢复权益；成功全额退款回收10套、失败退款保留、重复退款不重复扣；新增/导入/归档恢复拦截，归档和删除释放有效占用。另核对退款单查询回包及iOS资格，未确认前保持iOS关闭。
+
+### 本轮定向测试与现场检查
+
+执行 `PYTHONPATH=business_api /private/tmp/rent-room-payment-python/bin/python -m pytest -q business_api/tests/test_rent_room_capacity.py`。该文件覆盖本次全部API、SQLite迁移、固定商品、后台补发、退款结果/金额/重复通知/环境与签名边界；未运行其他业务全套测试。日志位于本worktree的 `artifacts/`。
+
+修改前回归：漏通知后同账号登录返回limit2（预期12）；未确认付款的发货通知返回200（预期503）；显式非现网退款被接受并回收容量（预期拒绝）。原始失败分别保存为 `payment-regressions-before.log` 和 `refund-environment-before.log`。
+
+服务端配置自检：GET签名URL校验通过，AES未知事件探针通过，错误签名返回403；微信access_token可取得。对随机不存在订单的真实签名查询返回268490002，错误签名对照返回268490003，仅证明只读接口可达及签名检查可区分，不代表发生支付。所有查询均不创建订单或修改购买权益；密钥、OpenID和token不进入报告。
+
+尚未完成：微信后台回调保存、真实微信身份重登、1.99元实单、退款实单、漏失退款通知的可靠退款单查询以及iOS资格。新代码保持草稿，不将mock和端点自检当成正式收费验收。
