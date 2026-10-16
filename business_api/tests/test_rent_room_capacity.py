@@ -46,7 +46,7 @@ class FakeWeChat:
         result = self.remote.get(order["id"], {"status": 1})
         if isinstance(result, Exception):
             raise result
-        return {"order_id": order["id"], "order_type": 0, "paid_fee": 199,
+        return {"order_id": order["id"], "order_type": 0, "paid_fee": 199, "order_fee": 199, "env_type": 1,
                 "wx_order_id": "wx-order-" + order["id"], **result}
 
     async def delivered(self, order):
@@ -71,7 +71,7 @@ def query(client, headers, key="request-0001"):
 
 def notify_refund(client, settings, order_id, **fields):
     push = SecurePush(settings)
-    event = {"Event": "xpay_refund_notify", "MchOrderId": order_id,
+    event = {"Event": "xpay_refund_notify", "OpenId": "wx-A", "MchOrderId": order_id,
              "WxOrderId": "wx-order-" + order_id, "MchRefundId": "refund-" + order_id,
              "WxRefundId": "wx-refund-" + order_id, "RetCode": 0, "RefundFee": 199, **fields}
     payload = push.encrypt(json.dumps(event).encode())
@@ -212,7 +212,7 @@ def test_secure_notifications_verify_recipient_signature_and_replay_safely(setti
         headers = login(client)
         order = checkout(client, headers).json()
         provider.remote[order["orderId"]] = {"status": 2}
-        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OutTradeNo": order["orderId"]}).encode())
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
         params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
         for _ in range(2):
             response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
@@ -250,7 +250,7 @@ def test_secure_xml_notifications_accept_cdata_but_reject_entity_declarations(se
         headers = login(client)
         order = checkout(client, headers).json()
         provider.remote[order["orderId"]] = {"status": 2}
-        event = ("<xml><Event><![CDATA[xpay_goods_deliver_notify]]></Event><OutTradeNo><![CDATA["
+        event = ("<xml><OpenId>wx-A</OpenId><Env>0</Env><Event><![CDATA[xpay_goods_deliver_notify]]></Event><OutTradeNo><![CDATA["
                  + order["orderId"] + "]]></OutTradeNo></xml>").encode()
         payload = push.encrypt(event)
         params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
@@ -332,7 +332,7 @@ def test_delivery_notification_cannot_acknowledge_an_unconfirmed_payment(setting
     ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
     with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
         order = checkout(client, login(client)).json()
-        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OutTradeNo": order["orderId"]}).encode())
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
         params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
         response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
         assert response.status_code == 503
@@ -359,7 +359,7 @@ def test_migration_preserves_legacy_price_and_new_orders_use_199(tmp_path, setti
         account = hashlib.sha256((settings.app_id + ":wx-A").encode()).hexdigest()
         db.execute("INSERT INTO rr_orders(id,account,openid,request_id,created) VALUES (?,?,?,?,?)", ("old-order", account, "wx-A", "old-request", 1))
     ledger, provider = RentRoomStore(path), FakeWeChat(settings)
-    provider.remote["old-order"] = {"status": 2, "paid_fee": 190}
+    provider.remote["old-order"] = {"status": 2, "paid_fee": 190, "order_fee": 190}
     with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
         headers = login(client)
         assert query(client, headers, "old-request").json()["limit"] == 12
@@ -445,7 +445,7 @@ def test_verified_refunds_are_idempotent_and_ignore_stale_paid_queries(settings)
 
 @pytest.mark.parametrize("fields", [
     {"WxOrderId": "wrong-payment"}, {"OpenId": "wx-other"}, {"MchRefundId": ""},
-    {"WxRefundId": ""}, {"RetCode": None}, {"RefundFee": 200}, {"RefundFee": True}])
+    {"WxRefundId": ""}, {"OpenId": None}, {"RetCode": None}, {"RefundFee": 200}, {"RefundFee": True}])
 def test_invalid_authenticated_refunds_never_revoke_capacity(settings, fields):
     ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
     with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
@@ -503,3 +503,58 @@ def test_explicit_nonproduction_refund_events_are_rejected(settings, environment
         assert query(client, headers).json()["packs"] == 1
         assert notify_refund(client, settings, order["orderId"], **environment).status_code == 403
         assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_a_known_payment_identity_cannot_change_during_reconciliation(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0, "wx_order_id": "different-payment"}
+        assert query(client, headers).status_code == 503
+        assert ledger.by_id(order["orderId"])["wx_id"] == "wx-order-" + order["orderId"]
+
+
+@pytest.mark.parametrize("remote", [
+    {"status": 5, "left_fee": 0}, {"status": 8, "left_fee": 99},
+    {"status": 8}, {"status": 8, "left_fee": None},
+    {"status": 8, "left_fee": "0"}, {"status": 8, "left_fee": False}])
+def test_incomplete_partial_or_untyped_refunds_preserve_existing_capacity(settings, remote):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = remote
+        assert query(client, headers).json()["packs"] == 1
+
+
+@pytest.mark.parametrize("fields", [{"order_fee": 190}, {"paid_fee": 190}, {"env_type": 2}])
+def test_refund_query_rejects_wrong_snapshot_amount_or_environment(settings, fields):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0, **fields}
+        assert query(client, headers).status_code == 503
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_full_refund_query_recovers_a_missed_notification_and_late_events_are_idempotent(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["limit"] == 12
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0}
+        for _ in range(2):
+            assert query(client, headers).json() == {"status": "refunded", "packs": 0, "limit": 2}
+        assert notify_refund(client, settings, order["orderId"]).status_code == 200
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 0

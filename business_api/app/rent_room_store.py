@@ -129,7 +129,7 @@ class RentRoomStore:
             self.db.execute("BEGIN IMMEDIATE")
             order = self.by_id(order_id)
             if (not order or not event.get("WxOrderId") or event["WxOrderId"] != order["wx_id"]
-                    or event.get("OpenId", order["openid"]) != order["openid"] or not 0 < fee <= order["price"]):
+                    or event.get("OpenId") != order["openid"] or not 0 < fee <= order["price"]):
                 raise ValueError("Invalid refund payment")
             existing = self.db.execute("SELECT * FROM rr_refunds WHERE id=?", (refund_id,)).fetchone()
             if existing:

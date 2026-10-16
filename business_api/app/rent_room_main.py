@@ -94,12 +94,17 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         if order["state"] == "refunded":
             return "refunded"
         result = await wechat.query(order)
-        if result.get("order_id") != order["id"] or result.get("order_type") not in (0, 7):
+        if (result.get("order_id") != order["id"] or type(result.get("order_type")) is not int
+                or result["order_type"] not in (0, 7)):
             raise WeChatUnavailable("微信订单信息不一致，请稍后重试")
         status = result.get("status")
-        if status in (2, 4):
-            if result.get("paid_fee") != order["price"] or not result.get("wx_order_id"):
+        if status in (2, 4, 5, 8):
+            if (result.get("paid_fee") != order["price"] or result.get("order_fee") != order["price"]
+                    or type(result.get("env_type")) is not int or result["env_type"] != 1
+                    or not isinstance(result.get("wx_order_id"), str)
+                    or not result["wx_order_id"] or order["wx_id"] and result["wx_order_id"] != order["wx_id"]):
                 raise WeChatUnavailable("微信订单金额不一致，请稍后重试")
+        if status in (2, 4):
             try:
                 ledger.apply(order["id"], "paid", result["wx_order_id"])
             except sqlite3.IntegrityError as error:
@@ -108,12 +113,11 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 # Persist fulfillment before ACK; retrying never grants twice.
                 await wechat.delivered(order)
         elif status in (5, 8):
-            # Payment status alone does not identify a successful, full refund.
-            # Only authenticated final refund events update the refund ledger.
-            if result.get("paid_fee") != order["price"] or not result.get("wx_order_id"):
-                raise WeChatUnavailable("微信订单金额不一致，请稍后重试")
+            # 5 is merchant debit, 8 is user receipt. Only the latter plus a
+            # numeric zero remaining amount proves a full completed refund.
+            full = status == 8 and type(result.get("left_fee")) is int and result["left_fee"] == 0
             try:
-                ledger.apply(order["id"], order["state"], result["wx_order_id"])
+                ledger.apply(order["id"], "refunded" if full else order["state"], result["wx_order_id"])
             except sqlite3.IntegrityError as error:
                 raise WeChatUnavailable("该支付订单已关联其他记录，请联系支持") from error
         elif status == 6:
@@ -250,9 +254,14 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         kind = event.get("Event")
         if kind not in ("xpay_goods_deliver_notify", "xpay_refund_notify"):
             return Response("success")
-        order = ledger.by_id(event.get("OutTradeNo") or event.get("MchOrderId") or "")
+        trade_id = event.get("OutTradeNo") if kind == "xpay_goods_deliver_notify" else event.get("MchOrderId")
+        order = ledger.by_id(trade_id or "")
         if not order:
             raise HTTPException(404)
+        if event.get("OpenId") != order["openid"]:
+            raise HTTPException(409, detail="Notification identity does not match")
+        if kind == "xpay_goods_deliver_notify" and str(event.get("Env")) != "0":
+            raise HTTPException(403, detail="Missing production environment")
         async with account_locks[order["account"]]:
             # Payments require authoritative queries. Refunds require the
             # authenticated final result, refund IDs and original payment ID.
