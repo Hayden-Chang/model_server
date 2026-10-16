@@ -130,6 +130,54 @@ def test_order_idempotency_stacking_refund_and_stale_paid_results(settings):
         assert query(client, headers).json()["packs"] == 1
 
 
+@pytest.mark.parametrize("order_type", [0, 7])
+def test_delivery_in_progress_query_fulfills_once_and_acknowledges_delivery(settings, order_type):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        # Official status 3 means delivery in progress, after payment. The
+        # first live iOS purchase returned this state with both amounts=199.
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": order_type}
+        assert query(client, headers).json() == {"status": "paid", "packs": 1, "limit": 12}
+        assert provider.deliveries == [order["orderId"]]
+        assert query(client, headers).json() == {"status": "paid", "packs": 1, "limit": 12}
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_delivery_in_progress_ios_notification_returns_encrypted_ack_and_replays_once(settings):
+    ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        order = checkout(client, login(client)).json()
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": 7}
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
+        params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
+        for _ in range(2):
+            response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
+            assert response.status_code == 200
+            reply = response.json()
+            decrypted, is_json = push.decrypt(reply["Encrypt"], {
+                "timestamp": str(reply["TimeStamp"]), "nonce": reply["Nonce"], "msg_signature": reply["MsgSignature"]})
+            assert is_json and decrypted == {"ErrCode": 0, "ErrMsg": "success"}
+        row = ledger.by_id(order["orderId"])
+        assert row["state"] == "paid" and ledger.packs(row["account"]) == 1
+        assert provider.deliveries == []  # The callback's encrypted ACK completes delivery.
+
+
+@pytest.mark.parametrize("fields", [
+    {"paid_fee": 198}, {"order_fee": 198}, {"env_type": 2},
+    {"env_type": "1"}, {"wx_order_id": ""},
+])
+def test_delivery_in_progress_requires_verified_amount_environment_and_payment_id(settings, fields):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": 7, **fields}
+        assert query(client, headers).status_code == 503
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 0
+
+
 @pytest.mark.parametrize("remote", [
     {"status": 2, "paid_fee": 1}, {"status": 4, "wx_order_id": ""},
     {"status": 2, "order_id": "other-order"}, {"status": 2, "order_type": 1},
@@ -374,7 +422,8 @@ def test_migration_preserves_legacy_price_and_new_orders_use_199(tmp_path, setti
     reloaded.close()
 
 
-def test_background_reconciliation_fulfills_without_any_client_poll_or_callback(settings):
+@pytest.mark.parametrize("status,order_type", [(2, 0), (3, 7)])
+def test_background_reconciliation_fulfills_without_any_client_poll_or_callback(settings, status, order_type):
     ledger, provider, delivered = RentRoomStore(":memory:"), FakeWeChat(settings), threading.Event()
     original = provider.delivered
     async def delivery(order):
@@ -383,7 +432,7 @@ def test_background_reconciliation_fulfills_without_any_client_poll_or_callback(
     provider.delivered = delivery
     with TestClient(create_app(settings, provider=provider, store=ledger, reconcile_interval=0.02)) as client:
         order = checkout(client, login(client)).json()
-        provider.remote[order["orderId"]] = {"status": 2}
+        provider.remote[order["orderId"]] = {"status": status, "order_type": order_type}
         assert delivered.wait(2), "Background reconciler did not deliver"
         assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
 

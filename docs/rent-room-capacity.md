@@ -64,3 +64,9 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 2026-10-16通过服务器读取[微信查单原文](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_query_order)及[通知字段](https://developers.weixin.qq.com/miniprogram/dev/platform-capabilities/business-capabilities/virtual-payment.html)，取得比旧维护者说明更明确的退款阶段：5为商户扣款完成，8为用户收款完成；支付单left_fee为退款后剩余金额。请求env=0与响应env_type=1均指生产，不能混用编码。原文保存在本机 `/private/tmp/wechat-virtual-query-order.html` 及 `/private/tmp/wechat-virtual-payment-official.json`，不提交完整网页。
 
 据此补上漏退款通知时的原支付单全额回收，已知平台支付ID不允许被查询结果替换。发货通知必须具有匹配OpenId及生产Env；退款字段表没有Env，因此缺失不默认成沙箱或现网，靠生产支付查询和严格OpenId/WxOrderId关联，显式非生产Env仍拒绝。新增覆盖商户扣款未完成到用户收款、部分/缺失/字符串/布尔剩余金额、环境和金额不匹配、重复全额回收、迟到通知及支付结果。平台支付ID变更回归在修复前返回200（预期503），失败证据在 `artifacts/platform-identity-before.log`。
+
+### 首笔 iOS 实单的发货中状态修复
+
+首笔199分iOS实单的权威查单返回 `order_type=7,status=3,paid_fee=199,order_fee=199,env_type=1`，旧实现将状态3映射为pending，导致容量仍为2。当前[官方枚举](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_query_order)明确状态3为“订单发货中”。状态2、3、4均在核对原金额、支付单号、订单类型和生产环境后幂等授予容量；状态3继续完成发货确认，安全通知路径以加密成功应答确认。主动查询和后台补查使用[通知已发货完成接口](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_notify_provide_goods)补偿丢失或失败的通知。金额/环境/平台单号不合规则仍拒绝，退款终态仍不可恢复。此修复仅在后端，不需要更换已生成的小程序预览码。
+
+新增状态3普通/iOS查单、重复加包保护、加密通知重复应答、金额/环境/单号异常及后台补发回归；修改前定向检查9失败、1通过，失败原因为pending未发容量、通知503和未做状态3金额核验，保留 `artifacts/ios-delivery-in-progress-before.log`。修复后容量相关67项通过，日志为 `artifacts/ios-delivery-in-progress-after.log`。

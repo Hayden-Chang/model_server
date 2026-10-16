@@ -98,18 +98,19 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 or result["order_type"] not in (0, 7)):
             raise WeChatUnavailable("微信订单信息不一致，请稍后重试")
         status = result.get("status")
-        if status in (2, 4, 5, 8):
+        if status in (2, 3, 4, 5, 8):
             if (result.get("paid_fee") != order["price"] or result.get("order_fee") != order["price"]
                     or type(result.get("env_type")) is not int or result["env_type"] != 1
                     or not isinstance(result.get("wx_order_id"), str)
                     or not result["wx_order_id"] or order["wx_id"] and result["wx_order_id"] != order["wx_id"]):
                 raise WeChatUnavailable("微信订单金额不一致，请稍后重试")
-        if status in (2, 4):
+        # Status 3 is already paid and delivering, not an unconfirmed payment.
+        if status in (2, 3, 4):
             try:
                 ledger.apply(order["id"], "paid", result["wx_order_id"])
             except sqlite3.IntegrityError as error:
                 raise WeChatUnavailable("该支付订单已关联其他记录，请联系支持") from error
-            if status == 2 and acknowledge_delivery:
+            if status in (2, 3) and acknowledge_delivery:
                 # Persist fulfillment before ACK; retrying never grants twice.
                 await wechat.delivered(order)
         elif status in (5, 8):
@@ -124,8 +125,6 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
             ledger.apply(order["id"], "closed")
         elif status in (0, 1):
             ledger.apply(order["id"], "unpaid")
-        elif status == 3:
-            ledger.apply(order["id"], "pending")
         elif status != 7 or order["state"] != "paid":
             raise WeChatUnavailable("微信订单状态暂时无法确认，请稍后重试")
         else:
