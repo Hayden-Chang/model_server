@@ -70,3 +70,9 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 首笔199分iOS实单的权威查单返回 `order_type=7,status=3,paid_fee=199,order_fee=199,env_type=1`，旧实现将状态3映射为pending，导致容量仍为2。当前[官方枚举](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_query_order)明确状态3为“订单发货中”。状态2、3、4均在核对原金额、支付单号、订单类型和生产环境后幂等授予容量；状态3继续完成发货确认，安全通知路径以加密成功应答确认。主动查询和后台补查使用[通知已发货完成接口](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_notify_provide_goods)补偿丢失或失败的通知。金额/环境/平台单号不合规则仍拒绝，退款终态仍不可恢复。此修复仅在后端，不需要更换已生成的小程序预览码。
 
 新增状态3普通/iOS查单、重复加包保护、加密通知重复应答、金额/环境/单号异常及后台补发回归；修改前定向检查9失败、1通过，失败原因为pending未发容量、通知503和未做状态3金额核验，保留 `artifacts/ios-delivery-in-progress-before.log`。修复后容量相关67项通过，日志为 `artifacts/ios-delivery-in-progress-after.log`。
+
+### 已到账订单查询失败的恢复
+
+用户确认容量已为12，但同一原订单通过真实微信会话连续两次查询返回503。原服务没有记录上游具体错误码，不能据此确定原始错误码。微信接口返回40001、40014或42001时，现在使被拒绝的缓存access_token失效，获取新值后最多重试一次；并发请求共享刷新结果，业务错误不刷新令牌，也不无限重试。日志仅记录接口路径、错误码或异常类型，不记录令牌、签名、请求体和身份。维护时优先使用实际登录会话查询；另建provider获取access_token可能使运行服务缓存的旧值失效。
+
+令牌恢复回归在修改前5失败、1通过，修复后容量相关73项通过，分别见 `artifacts/token-recovery-before.log` 和 `artifacts/token-recovery-after.log`。此变更保留原订单和已确认权益，不手动增加容量或创建补偿购买。

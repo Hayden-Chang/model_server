@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import struct
 import time
@@ -10,6 +11,8 @@ from xml.etree import ElementTree as ET
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+logger = logging.getLogger(__name__)
 
 
 class WeChatUnavailable(Exception):
@@ -50,8 +53,10 @@ class WeChatVirtualPay:
             raise WeChatUnavailable("微信登录未完成，请重试")
         return data
 
-    async def _token(self):
+    async def _token(self, *, rejected=None):
         async with self.token_lock:
+            if rejected is not None and self.access_token == rejected:
+                self.token_expires = 0
             if time.time() >= self.token_expires:
                 data = await self._get("/cgi-bin/token", {
                     "grant_type": "client_credential", "appid": self.settings.app_id,
@@ -74,15 +79,24 @@ class WeChatVirtualPay:
     async def _post(self, path, order):
         body = compact({"openid": order["openid"], "env": 0, "order_id": order["id"]})
         try:
-            response = await self.http.post(path, params={"access_token": await self._token(),
-                "pay_sig": self.signature(path + "&" + body)}, content=body,
-                headers={"content-type": "application/json"})
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict) or data.get("errcode", 0) != 0:
-                raise WeChatUnavailable("微信订单暂时无法确认，请稍后重试")
-            return data
+            token = await self._token()
+            for attempt in range(2):
+                response = await self.http.post(path, params={"access_token": token,
+                    "pay_sig": self.signature(path + "&" + body)}, content=body,
+                    headers={"content-type": "application/json"})
+                response.raise_for_status()
+                data = response.json()
+                code = data.get("errcode", 0) if isinstance(data, dict) else None
+                if code in (40001, 40014, 42001) and attempt == 0:
+                    logger.warning("WeChat payment %s rejected token (%s); refreshing once", path, code)
+                    token = await self._token(rejected=token)
+                    continue
+                if code != 0:
+                    logger.warning("WeChat payment %s failed (%s)", path, code)
+                    raise WeChatUnavailable("微信订单暂时无法确认，请稍后重试")
+                return data
         except (httpx.HTTPError, ValueError, KeyError) as error:
+            logger.warning("WeChat payment %s failed (%s)", path, type(error).__name__)
             raise WeChatUnavailable("微信订单暂时无法确认，请稍后重试") from error
 
     async def query(self, order):

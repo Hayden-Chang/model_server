@@ -5,6 +5,7 @@ import hmac
 import json
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -251,6 +252,79 @@ def test_wechat_signatures_match_exact_bytes_and_query_authentication(settings):
         assert request.url.params["pay_sig"] == hmac.new(b"test-virtual-payment-key", b"/xpay/query_order&" + request.content, hashlib.sha256).hexdigest()
         assert request.url.params["access_token"] == "server-only-access-token"
         await provider.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error_code", [40001, 40014, 42001])
+def test_wechat_query_refreshes_a_rejected_cached_access_token_once(settings, error_code):
+    calls = []
+    def transport(request):
+        calls.append(request)
+        if request.url.path == "/cgi-bin/token":
+            return httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 7200})
+        if request.url.params["access_token"] == "stale-token":
+            return httpx.Response(200, json={"errcode": error_code})
+        return httpx.Response(200, json={"errcode": 0, "order": {"status": 4}})
+    async def run():
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            assert await provider.query({"id": "a" * 32, "openid": "wx-A"}) == {"status": 4}
+            queries = [r for r in calls if r.url.path == "/xpay/query_order"]
+            assert [r.url.params["access_token"] for r in queries] == ["stale-token", "fresh-token"]
+            assert queries[0].content == queries[1].content
+            assert queries[0].url.params["pay_sig"] == queries[1].url.params["pay_sig"]
+            assert sum(r.url.path == "/cgi-bin/token" for r in calls) == 1
+        finally:
+            await provider.close()
+    asyncio.run(run())
+
+
+def test_concurrent_wechat_queries_share_one_rejected_token_refresh(settings):
+    async def run():
+        both_rejected, rejected_count, refresh_count = asyncio.Event(), 0, 0
+        async def transport(request):
+            nonlocal rejected_count, refresh_count
+            if request.url.path == "/cgi-bin/token":
+                refresh_count += 1
+                return httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 7200})
+            if request.url.params["access_token"] == "stale-token":
+                rejected_count += 1
+                if rejected_count == 2:
+                    both_rejected.set()
+                await both_rejected.wait()
+                return httpx.Response(200, json={"errcode": 40001})
+            return httpx.Response(200, json={"order": {"status": 4}})
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            result = await asyncio.wait_for(asyncio.gather(*[
+                provider.query({"id": str(n) * 32, "openid": "wx-A"}) for n in (1, 2)]), 2)
+            assert result == [{"status": 4}, {"status": 4}]
+            assert refresh_count == 1
+        finally:
+            await provider.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error_code,expected_queries,expected_refreshes", [(268490003, 1, 0), (40001, 2, 1)])
+def test_wechat_query_never_retries_business_errors_or_loops_on_invalid_credentials(settings, error_code, expected_queries, expected_refreshes):
+    calls = []
+    def transport(request):
+        calls.append(request.url.path)
+        if request.url.path == "/cgi-bin/token":
+            return httpx.Response(200, json={"access_token": "still-rejected-token", "expires_in": 7200})
+        return httpx.Response(200, json={"errcode": error_code})
+    async def run():
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            with pytest.raises(WeChatUnavailable):
+                await provider.query({"id": "a" * 32, "openid": "wx-A"})
+            assert calls.count("/xpay/query_order") == expected_queries
+            assert calls.count("/cgi-bin/token") == expected_refreshes
+        finally:
+            await provider.close()
     asyncio.run(run())
 
 
