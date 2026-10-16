@@ -7,7 +7,7 @@ class RentRoomSettings(BaseSettings):
 
     app_id: str = "wxf43c7f280c98efca"
     app_secret: SecretStr | None = None
-    offer_id: str = ""
+    offer_id: str = "1450681249"
     app_key: SecretStr | None = None
     token_secret: SecretStr | None = Field(default=None, min_length=32)
     push_token: SecretStr | None = Field(default=None, min_length=8)

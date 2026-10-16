@@ -3,6 +3,9 @@ import base64
 import hashlib
 import hmac
 import json
+import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -44,7 +47,7 @@ class FakeWeChat:
         result = self.remote.get(order["id"], {"status": 1})
         if isinstance(result, Exception):
             raise result
-        return {"order_id": order["id"], "order_type": 0, "paid_fee": 190,
+        return {"order_id": order["id"], "order_type": 0, "paid_fee": 199, "order_fee": 199, "env_type": 1,
                 "wx_order_id": "wx-order-" + order["id"], **result}
 
     async def delivered(self, order):
@@ -59,18 +62,28 @@ def login(client, code="A"):
 
 def checkout(client, headers, key="request-0001", **extra):
     return client.post("/api/rent-room/orders", headers=headers,
-        json={"requestId": key, "productId": "house-capacity-10", **extra})
+        json={"requestId": key, "productId": "room_capacity_10", **extra})
 
 
 def query(client, headers, key="request-0001"):
     return client.get("/api/rent-room/orders/request/" + key, headers=headers)
 
 
+
+def notify_refund(client, settings, order_id, **fields):
+    push = SecurePush(settings)
+    event = {"Event": "xpay_refund_notify", "OpenId": "wx-A", "MchOrderId": order_id,
+             "WxOrderId": "wx-order-" + order_id, "MchRefundId": "refund-" + order_id,
+             "WxRefundId": "wx-refund-" + order_id, "RetCode": 0, "RefundFee": 199, **fields}
+    payload = push.encrypt(json.dumps(event).encode())
+    params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
+    return client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
+
 def test_disabled_catalog_and_checkout_fail_closed():
     with TestClient(create_app(RentRoomSettings(_env_file=None))) as client:
         catalog = client.get("/api/rent-room/catalog")
         assert catalog.json() == {"available": False, "iosAvailable": False,
-            "product": {"id": "house-capacity-10", "price": 190, "size": 10}}
+            "product": {"id": "room_capacity_10", "price": 199, "size": 10}}
         assert client.post("/api/rent-room/session", json={"code": "A"}).status_code == 503
         assert client.get("/health/live").status_code == 200
         assert catalog.headers["cache-control"] == "no-store"
@@ -112,10 +125,58 @@ def test_order_idempotency_stacking_refund_and_stale_paid_results(settings):
         second = checkout(client, headers, "request-0002").json()
         provider.remote[second["orderId"]] = {"status": 4}
         assert query(client, headers, "request-0002").json()["limit"] == 22
-        provider.remote[first["orderId"]] = {"status": 5}
+        notify_refund(client, settings, first["orderId"])
         assert query(client, headers).json()["limit"] == 12
         ledger.apply(first["orderId"], "paid", "late-payment")
         assert query(client, headers).json()["packs"] == 1
+
+
+@pytest.mark.parametrize("order_type", [0, 7])
+def test_delivery_in_progress_query_fulfills_once_and_acknowledges_delivery(settings, order_type):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        # Official status 3 means delivery in progress, after payment. The
+        # first live iOS purchase returned this state with both amounts=199.
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": order_type}
+        assert query(client, headers).json() == {"status": "paid", "packs": 1, "limit": 12}
+        assert provider.deliveries == [order["orderId"]]
+        assert query(client, headers).json() == {"status": "paid", "packs": 1, "limit": 12}
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_delivery_in_progress_ios_notification_returns_encrypted_ack_and_replays_once(settings):
+    ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        order = checkout(client, login(client)).json()
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": 7}
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
+        params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
+        for _ in range(2):
+            response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
+            assert response.status_code == 200
+            reply = response.json()
+            decrypted, is_json = push.decrypt(reply["Encrypt"], {
+                "timestamp": str(reply["TimeStamp"]), "nonce": reply["Nonce"], "msg_signature": reply["MsgSignature"]})
+            assert is_json and decrypted == {"ErrCode": 0, "ErrMsg": "success"}
+        row = ledger.by_id(order["orderId"])
+        assert row["state"] == "paid" and ledger.packs(row["account"]) == 1
+        assert provider.deliveries == []  # The callback's encrypted ACK completes delivery.
+
+
+@pytest.mark.parametrize("fields", [
+    {"paid_fee": 198}, {"order_fee": 198}, {"env_type": 2},
+    {"env_type": "1"}, {"wx_order_id": ""},
+])
+def test_delivery_in_progress_requires_verified_amount_environment_and_payment_id(settings, fields):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 3, "order_type": 7, **fields}
+        assert query(client, headers).status_code == 503
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 0
 
 
 @pytest.mark.parametrize("remote", [
@@ -164,7 +225,7 @@ def test_disabling_new_checkout_still_reconciles_existing_purchases_and_refunds(
         settings.payments_enabled = False
         assert client.get("/api/rent-room/catalog").json()["available"] is False
         assert checkout(client, headers, "request-0002").status_code == 503
-        provider.remote[order["orderId"]] = {"status": 5}
+        notify_refund(client, settings, order["orderId"])
         assert query(client, headers).json() == {"status": "refunded", "packs": 0, "limit": 2}
 
 
@@ -177,8 +238,11 @@ def test_wechat_signatures_match_exact_bytes_and_query_authentication(settings):
         return httpx.Response(200, json={"errcode": 0, "order": {"status": 1}})
     async def run():
         provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
-        order = {"id": "a" * 32, "openid": "wx-A"}
+        order = {"id": "a" * 32, "openid": "wx-A", "product_id": "room_capacity_10", "price": 199}
         payment = provider.payment(order, "session-key")
+        assert json.loads(payment["signData"]) == {"offerId": "12345", "buyQuantity": 1, "env": 0,
+            "currencyType": "CNY", "productId": "room_capacity_10", "goodsPrice": 199,
+            "outTradeNo": "a" * 32, "attach": "a" * 32}
         expected = hmac.new(b"test-virtual-payment-key", ("requestVirtualPayment&" + payment["signData"]).encode(), hashlib.sha256).hexdigest()
         assert payment["paySig"] == expected
         assert payment["signature"] == hmac.new(b"session-key", payment["signData"].encode(), hashlib.sha256).hexdigest()
@@ -191,13 +255,86 @@ def test_wechat_signatures_match_exact_bytes_and_query_authentication(settings):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("error_code", [40001, 40014, 42001])
+def test_wechat_query_refreshes_a_rejected_cached_access_token_once(settings, error_code):
+    calls = []
+    def transport(request):
+        calls.append(request)
+        if request.url.path == "/cgi-bin/token":
+            return httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 7200})
+        if request.url.params["access_token"] == "stale-token":
+            return httpx.Response(200, json={"errcode": error_code})
+        return httpx.Response(200, json={"errcode": 0, "order": {"status": 4}})
+    async def run():
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            assert await provider.query({"id": "a" * 32, "openid": "wx-A"}) == {"status": 4}
+            queries = [r for r in calls if r.url.path == "/xpay/query_order"]
+            assert [r.url.params["access_token"] for r in queries] == ["stale-token", "fresh-token"]
+            assert queries[0].content == queries[1].content
+            assert queries[0].url.params["pay_sig"] == queries[1].url.params["pay_sig"]
+            assert sum(r.url.path == "/cgi-bin/token" for r in calls) == 1
+        finally:
+            await provider.close()
+    asyncio.run(run())
+
+
+def test_concurrent_wechat_queries_share_one_rejected_token_refresh(settings):
+    async def run():
+        both_rejected, rejected_count, refresh_count = asyncio.Event(), 0, 0
+        async def transport(request):
+            nonlocal rejected_count, refresh_count
+            if request.url.path == "/cgi-bin/token":
+                refresh_count += 1
+                return httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 7200})
+            if request.url.params["access_token"] == "stale-token":
+                rejected_count += 1
+                if rejected_count == 2:
+                    both_rejected.set()
+                await both_rejected.wait()
+                return httpx.Response(200, json={"errcode": 40001})
+            return httpx.Response(200, json={"order": {"status": 4}})
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            result = await asyncio.wait_for(asyncio.gather(*[
+                provider.query({"id": str(n) * 32, "openid": "wx-A"}) for n in (1, 2)]), 2)
+            assert result == [{"status": 4}, {"status": 4}]
+            assert refresh_count == 1
+        finally:
+            await provider.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error_code,expected_queries,expected_refreshes", [(268490003, 1, 0), (40001, 2, 1)])
+def test_wechat_query_never_retries_business_errors_or_loops_on_invalid_credentials(settings, error_code, expected_queries, expected_refreshes):
+    calls = []
+    def transport(request):
+        calls.append(request.url.path)
+        if request.url.path == "/cgi-bin/token":
+            return httpx.Response(200, json={"access_token": "still-rejected-token", "expires_in": 7200})
+        return httpx.Response(200, json={"errcode": error_code})
+    async def run():
+        provider = WeChatVirtualPay(settings, httpx.MockTransport(transport))
+        provider.access_token, provider.token_expires = "stale-token", time.time() + 600
+        try:
+            with pytest.raises(WeChatUnavailable):
+                await provider.query({"id": "a" * 32, "openid": "wx-A"})
+            assert calls.count("/xpay/query_order") == expected_queries
+            assert calls.count("/cgi-bin/token") == expected_refreshes
+        finally:
+            await provider.close()
+    asyncio.run(run())
+
+
 def test_secure_notifications_verify_recipient_signature_and_replay_safely(settings):
     ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
     with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
         headers = login(client)
         order = checkout(client, headers).json()
         provider.remote[order["orderId"]] = {"status": 2}
-        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OutTradeNo": order["orderId"]}).encode())
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
         params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
         for _ in range(2):
             response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
@@ -235,7 +372,7 @@ def test_secure_xml_notifications_accept_cdata_but_reject_entity_declarations(se
         headers = login(client)
         order = checkout(client, headers).json()
         provider.remote[order["orderId"]] = {"status": 2}
-        event = ("<xml><Event><![CDATA[xpay_goods_deliver_notify]]></Event><OutTradeNo><![CDATA["
+        event = ("<xml><OpenId>wx-A</OpenId><Env>0</Env><Event><![CDATA[xpay_goods_deliver_notify]]></Event><OutTradeNo><![CDATA["
                  + order["orderId"] + "]]></OutTradeNo></xml>").encode()
         payload = push.encrypt(event)
         params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
@@ -300,3 +437,261 @@ def test_failed_wechat_login_never_issues_a_session(settings, upstream):
         assert response.status_code == 503
         assert ledger.db.execute("SELECT count(*) FROM rr_sessions").fetchone()[0] == 0
         assert "test-app-secret" not in response.text
+
+
+def test_login_reconciles_a_missed_payment_before_returning_capacity(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        restored = client.post("/api/rent-room/session", json={"code": "A"})
+        assert restored.json()["limit"] == 12
+        assert provider.deliveries == [order["orderId"]]
+
+
+def test_delivery_notification_cannot_acknowledge_an_unconfirmed_payment(settings):
+    ledger, provider, push = RentRoomStore(":memory:"), FakeWeChat(settings), SecurePush(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        order = checkout(client, login(client)).json()
+        payload = push.encrypt(json.dumps({"Event": "xpay_goods_deliver_notify", "OpenId": "wx-A", "Env": 0, "OutTradeNo": order["orderId"]}).encode())
+        params = {"timestamp": payload["TimeStamp"], "nonce": payload["Nonce"], "msg_signature": payload["MsgSignature"]}
+        response = client.post("/api/rent-room/wechat/notify", params=params, json={"Encrypt": payload["Encrypt"]})
+        assert response.status_code == 503
+        assert ledger.by_id(order["orderId"])["state"] == "unpaid"
+
+
+def test_catalog_defaults_and_orders_use_fixed_production_contract(settings):
+    assert RentRoomSettings(_env_file=None).offer_id == "1450681249"
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        assert client.post("/api/rent-room/orders", headers=headers, json={
+            "requestId": "wrong-product", "productId": "house-capacity-10"}).status_code == 422
+        order = checkout(client, headers).json()
+        row = ledger.by_id(order["orderId"])
+        assert (row["product_id"], row["price"], row["pack_size"]) == ("room_capacity_10", 199, 10)
+        assert checkout(client, headers).json()["payment"] == order["payment"]
+
+
+def test_migration_preserves_legacy_price_and_new_orders_use_199(tmp_path, settings):
+    path = str(tmp_path / "legacy.sqlite3")
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE rr_orders (id TEXT PRIMARY KEY, account TEXT NOT NULL, openid TEXT NOT NULL, request_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'unpaid', wx_id TEXT UNIQUE, created INTEGER NOT NULL, last_checked INTEGER NOT NULL DEFAULT 0, UNIQUE(account,request_id))")
+        account = hashlib.sha256((settings.app_id + ":wx-A").encode()).hexdigest()
+        db.execute("INSERT INTO rr_orders(id,account,openid,request_id,created) VALUES (?,?,?,?,?)", ("old-order", account, "wx-A", "old-request", 1))
+    ledger, provider = RentRoomStore(path), FakeWeChat(settings)
+    provider.remote["old-order"] = {"status": 2, "paid_fee": 190, "order_fee": 190}
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        assert query(client, headers, "old-request").json()["limit"] == 12
+        legacy = ledger.by_id("old-order")
+        assert legacy["price"] == 190 and legacy["product_id"] == "house-capacity-10"
+        assert json.loads(provider.payment(legacy, "key")["signData"])["goodsPrice"] == 190
+        new = checkout(client, headers).json()
+        assert json.loads(new["payment"]["signData"])["goodsPrice"] == 199
+    reloaded = RentRoomStore(path)
+    assert reloaded.packs(account) == 1
+    assert reloaded.by_id("old-order")["price"] == 190
+    reloaded.close()
+
+
+@pytest.mark.parametrize("status,order_type", [(2, 0), (3, 7)])
+def test_background_reconciliation_fulfills_without_any_client_poll_or_callback(settings, status, order_type):
+    ledger, provider, delivered = RentRoomStore(":memory:"), FakeWeChat(settings), threading.Event()
+    original = provider.delivered
+    async def delivery(order):
+        await original(order)
+        delivered.set()
+    provider.delivered = delivery
+    with TestClient(create_app(settings, provider=provider, store=ledger, reconcile_interval=0.02)) as client:
+        order = checkout(client, login(client)).json()
+        provider.remote[order["orderId"]] = {"status": status, "order_type": order_type}
+        assert delivered.wait(2), "Background reconciler did not deliver"
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_bounded_due_batches_visit_older_orders_and_throttle_stale_paid_results():
+    ledger = RentRoomStore(":memory:")
+    for n in range(14):
+        ledger.create_order({"account": str(n), "openid": "wx-" + str(n)}, "same-request")
+    first = ledger.orders(limit=10)
+    assert len(first) == 10
+    for order in first:
+        ledger.checked(order["id"])
+    second = ledger.orders(limit=10)
+    assert len(second) == 4 and not {o["id"] for o in first} & {o["id"] for o in second}
+    order = first[0]
+    ledger.apply(order["id"], "paid", "wx-paid")
+    ledger.db.execute("UPDATE rr_orders SET last_checked=0 WHERE id=?", (order["id"],))
+    ledger.db.commit()
+    ledger.apply(order["id"], "unpaid")
+    assert ledger.by_id(order["id"])["state"] == "paid"
+    assert ledger.by_id(order["id"])["last_checked"] > 0
+    ledger.close()
+
+
+def test_interrupted_queries_retry_soon_without_starving_unchecked_orders(monkeypatch):
+    clock = 1000000
+    monkeypatch.setattr("app.rent_room_store.time.time", lambda: clock)
+    ledger = RentRoomStore(":memory:")
+    first = ledger.create_order({"account": "A", "openid": "wx-A"}, "first-request")
+    second = ledger.create_order({"account": "B", "openid": "wx-B"}, "second-request")
+    ledger.checked(first["id"], retry_after=30)
+    assert [r["id"] for r in ledger.orders()] == [second["id"]]
+    clock += 31
+    assert [r["id"] for r in ledger.orders()] == [second["id"], first["id"]]
+    ledger.close()
+
+
+def test_secure_push_signature_matches_the_published_wechat_vectors():
+    push = object.__new__(SecurePush)
+    push.token = "AAAAA"  # Public documentation vector, not a configured token.
+    assert push.signature("1714036504", "1514711492") == "f464b24fc39322e44b38aa78f5edd27bd1441696"
+    assert push.signature("1714037059", "486452656") == "899cf89e464efb63f54ddac96b0a0a235f53aa78"
+
+
+def test_verified_refunds_are_idempotent_and_ignore_stale_paid_queries(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        for _ in range(2):
+            assert notify_refund(client, settings, order["orderId"]).status_code == 200
+        assert query(client, headers).json() == {"status": "refunded", "packs": 0, "limit": 2}
+        assert ledger.db.execute("SELECT count(*) FROM rr_refunds").fetchone()[0] == 1
+        restored = client.post("/api/rent-room/session", json={"code": "A"}).json()
+        assert restored["limit"] == 2
+
+
+@pytest.mark.parametrize("fields", [
+    {"WxOrderId": "wrong-payment"}, {"OpenId": "wx-other"}, {"MchRefundId": ""},
+    {"WxRefundId": ""}, {"OpenId": None}, {"RetCode": None}, {"RefundFee": 200}, {"RefundFee": True}])
+def test_invalid_authenticated_refunds_never_revoke_capacity(settings, fields):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        assert notify_refund(client, settings, order["orderId"], **fields).status_code == 409
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_failed_partial_and_cumulative_full_refunds(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        assert notify_refund(client, settings, order["orderId"], RetCode=1).status_code == 200
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+        for index, fee in enumerate((100, 99)):
+            assert notify_refund(client, settings, order["orderId"], MchRefundId=f"partial-{index}", WxRefundId=f"wx-partial-{index}", RefundFee=fee).status_code == 200
+            assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == (1 if index == 0 else 0)
+
+
+def test_refund_before_local_fulfillment_links_platform_payment_without_granting(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 5, "left_fee": 0}
+        assert notify_refund(client, settings, order["orderId"]).status_code == 200
+        assert query(client, headers).json()["status"] == "refunded"
+        assert provider.deliveries == []
+
+
+def test_payment_status_alone_does_not_guess_refund_amount(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = {"status": 5}
+        assert query(client, headers).json()["packs"] == 1
+
+
+@pytest.mark.parametrize("environment", [{"Env": 1}, {"env": 1}, {"Env": None}])
+def test_explicit_nonproduction_refund_events_are_rejected(settings, environment):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        assert notify_refund(client, settings, order["orderId"], **environment).status_code == 403
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_a_known_payment_identity_cannot_change_during_reconciliation(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0, "wx_order_id": "different-payment"}
+        assert query(client, headers).status_code == 503
+        assert ledger.by_id(order["orderId"])["wx_id"] == "wx-order-" + order["orderId"]
+
+
+@pytest.mark.parametrize("remote", [
+    {"status": 5, "left_fee": 0}, {"status": 8, "left_fee": 99},
+    {"status": 8}, {"status": 8, "left_fee": None},
+    {"status": 8, "left_fee": "0"}, {"status": 8, "left_fee": False}])
+def test_incomplete_partial_or_untyped_refunds_preserve_existing_capacity(settings, remote):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = remote
+        assert query(client, headers).json()["packs"] == 1
+
+
+@pytest.mark.parametrize("fields", [{"order_fee": 190}, {"paid_fee": 190}, {"env_type": 2}])
+def test_refund_query_rejects_wrong_snapshot_amount_or_environment(settings, fields):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 1
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0, **fields}
+        assert query(client, headers).status_code == 503
+        assert ledger.packs(ledger.by_id(order["orderId"])["account"]) == 1
+
+
+def test_full_refund_query_recovers_a_missed_notification_and_late_events_are_idempotent(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        headers = login(client)
+        order = checkout(client, headers).json()
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["limit"] == 12
+        provider.remote[order["orderId"]] = {"status": 8, "left_fee": 0}
+        for _ in range(2):
+            assert query(client, headers).json() == {"status": "refunded", "packs": 0, "limit": 2}
+        assert notify_refund(client, settings, order["orderId"]).status_code == 200
+        provider.remote[order["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["packs"] == 0
+
+
+def test_stale_connections_cannot_replace_a_verified_platform_payment_identity(tmp_path):
+    path = str(tmp_path / "concurrent.sqlite3")
+    a, b = RentRoomStore(path), RentRoomStore(path)
+    order = a.create_order({"account": "A", "openid": "wx-A"}, "one-request")
+    stale = b.by_id(order["id"])
+    assert stale["wx_id"] is None
+    a.apply(order["id"], "paid", "platform-1")
+    with pytest.raises(sqlite3.IntegrityError):
+        b.apply(stale["id"], "paid", "platform-2")
+    assert a.by_id(order["id"])["wx_id"] == "platform-1"
+    assert a.packs("A") == 1
+    a.close(); b.close()
