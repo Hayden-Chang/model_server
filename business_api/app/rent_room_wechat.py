@@ -65,7 +65,7 @@ class WeChatVirtualPay:
 
     def payment(self, order, session_key):
         data = compact({"offerId": self.settings.offer_id, "buyQuantity": 1, "env": 0,
-                        "currencyType": "CNY", "productId": "house-capacity-10", "goodsPrice": 190,
+                        "currencyType": "CNY", "productId": order["product_id"], "goodsPrice": order["price"],
                         "outTradeNo": order["id"], "attach": order["id"]})
         return {"mode": "short_series_goods", "signData": data,
                 "paySig": self.signature("requestVirtualPayment&" + data),

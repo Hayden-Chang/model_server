@@ -6,11 +6,13 @@
 
 `POST /api/rent-room/session` 是登录与容量的唯一身份入口，返回 `{account, token, packs, limit}`。`account` 固定为 SHA-256(AppID + ":" + OpenID)，供客户端本机目录隔离；`token` 是 2 小时的随机令牌，仅驻留客户端内存。后续权益和订单请求复用该令牌，401 后重新登录；支付关闭不影响账号登录或免费容量。客户端构建配置统一为 `WECHAT_API_URL=https://api.keeline.xyz/api/rent-room`。
 
-唯一商品 `house-capacity-10`：190 分，增加 10 套容量，免费 2 套。订单唯一键为微信身份与客户端请求键；平台 `wx_order_id` 也唯一。SQLite 的独立 `rent-room-capacity` 卷持久保存会话和订单；会话密钥加密保存，客户端只收到短期随机令牌。回调和查单重复执行不重复增加权益，已退款订单不能被迟到支付结果恢复。
+唯一新购商品 `room_capacity_10`：199 分，增加 10 套容量，免费 2 套。订单唯一键为微信身份与客户端请求键；平台 `wx_order_id` 也唯一。SQLite 的独立 `rent-room-capacity` 卷持久保存会话和订单；会话密钥加密保存，客户端只收到短期随机令牌。回调和查单重复执行不重复增加权益，已退款订单不能被迟到支付结果恢复。
 
-只有微信查单确认的支付单、正确金额及平台订单号才确认房源包。前端成功回调不发货。已确认付款先持久化，再通知微信发货；通知失败可重试。加密推送验签、解密并校验 AppID 后触发查单，通知正文不能直接授予或撤回权益。未识别的上游状态保留原记录并返回可重试错误。退款确认后减少容量，客户端保留超额房源。
+只有微信查单确认的支付单、正确金额及平台订单号才确认房源包。前端成功回调不发货。已确认付款先持久化，再通知微信发货；通知失败可重试。发货推送验签、解密并校验 AppID 后触发查单，前端或未经验证的通知不能授予权益。未识别的上游状态保留原记录并返回可重试错误。订单保存商品、金额和每包数量快照，旧行迁移为原商品 `house-capacity-10 / 190分 / 10套`，新单采用199分；不改历史金额。发货通知查单仍为未支付/处理中时返回可重试失败，避免丢失发货。
 
-查单触发于支付结果轮询、恢复购买、应用启动刷新及通知；普通权益刷新对同一订单设 5 分钟间隔，订单查询和通知强制查单。当前没有后台扫描进程，未送达通知由客户端下次恢复购买补查。部分退款、真实安全推送响应的微信验收、iOS 商品价位与商户开通状态尚需实际商户联调，不能从 Mock 测试推断通过。
+退款通知使用 `RetCode`、`MchRefundId`、`WxRefundId`、`RefundFee` 及原 `MchOrderId / WxOrderId` 校验，独立退款账本幂等记录。缺失结果、账号或平台单号不匹配、退款金额异常都拒绝；失败结果不扣权益；成功部分退款先累计，成功累计达到原支付全额才回收整个10套包。退款先于本地发货时先从微信核对平台支付标识，不补发已退权益。客户端保留超额房源。仅支付单status 5/8不证明全额退款，不自动扣容量；退款单查询ID映射仍须真实商户契约核实，因此漏失退款通知的查询回收暂不宣称完成。
+
+查单触发于支付结果轮询、重新登录、恢复购买、权益刷新和发货通知；服务另有每分钟后台补查，无需客户端在线。每轮按检查时间从旧到新最多 10 单，普通补查同单间隔 5 分钟；交互补查总预算 3 秒，后台单轮预算 45 秒，上游失败记录检查时间；交互预算超时改为30秒后重试，避免单笔阻塞后续订单。显式订单查询和发货通知强制查单。服务启动后首轮在一分钟执行，重启后由 SQLite 恢复待处理订单。真实安全推送、iOS 商品价位与商户状态须实际联调，Mock 不证明扣款成功。
 
 ## 配置和启用
 
@@ -36,3 +38,13 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 边缘配置影响测试：`test_account_routing.py` 的两个配置用例及 `test_real_caddy_routes_public_api_and_blocks_private_planning`；`test_edge_config.py`；`test_puzzle_theme_publish.py::test_content_mount_is_read_only_and_both_hosts_serve_the_same_catalog`。真实 Caddy 用例通过 `CADDY_BINARY` 指向校验过的 2.11.4 二进制，在临时本机端口验证四个目标服务及私有路由屏蔽。
 
 协议依据：[腾讯云开发支付参考](https://github.com/TencentCloudBase/skills/blob/main/skills/cloudbase-wechat-integration/references/virtual-payment.md)、[维护者对自建接入的说明](https://github.com/TencentCloudBase/CloudBase-AI-Toolkit/issues/1132)、[微信查单接口](https://developers.weixin.qq.com/miniprogram/dev/server/API/VirtualPayment/api_query_order)。签名、回调和退款的商户联调需再与微信后台现行契约核对。
+
+## 2026-10-16 联调配置与执行边界
+
+公开配置：AppID `wxf43c7f280c98efca`，OfferID `1450681249`，商品 `room_capacity_10`，199分、每包10套、免费2套。回调 URL 为 `https://api.keeline.xyz/api/rent-room/wechat/notify`，request 合法域名为 `https://api.keeline.xyz`。
+
+在服务器私有环境配置 `RENT_ROOM_APP_SECRET`、`RENT_ROOM_APP_KEY`、独立随机 `RENT_ROOM_TOKEN_SECRET`、消息推送 `RENT_ROOM_PUSH_TOKEN / RENT_ROOM_PUSH_AES_KEY`。密钥不写入仓库、小程序、命令输出或验证报告。消息推送选安全模式，与服务端Token/AESKey保持一致。完成配置和联调前保持两个支付开关为false。
+
+本轮线上catalog仍为旧190分商品且available=false。已根据用户提供的部署说明，在 `/opt/model_server/rent-room/private.env` 配置OfferID、现网AppKey和新生成的回调Token/AESKey，保留原AppSecret与Token Secret；文件权限0600。原配置和SQLite在线备份位于 `/opt/model_server/rent-room/backups/virtual-payment-config-20261016T043212Z`。只重建寻居独立容器加载配置，继续使用旧镜像 `rent-room-api:f186bee17c59`，健康检查通过，其他容器身份/镜像/启动时间未变。新业务代码尚未部署；微信后台配置和真实付款仍未完成。不得将客户端与服务端分开上线造成商品不一致。部署时仅更新rent-room-api；备份独立SQLite卷（使用SQLite备份接口或停止本服务后备份），保留现有环境文件及镜像以便回退，不重建其他服务。回调验签与URL检查可在关闭新购时完成，配置完成后只开放已联调的平台。
+
+验收顺序：关闭支付时真实wx.login成功；GET回调校验；安卓1.99元真单及后台订单一致；重复通知不重复加包；模拟通知遗漏后后台主动补发；退出/换机同微信账号恢复权益；成功全额退款回收10套、失败退款保留、重复退款不重复扣；新增/导入/归档恢复拦截，归档和删除释放有效占用。另核对退款单查询回包及iOS资格，未确认前保持iOS关闭。

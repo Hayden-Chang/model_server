@@ -1,21 +1,20 @@
 import asyncio
 import base64
 import hashlib
+import logging
 import sqlite3
 import time
 from collections import defaultdict, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rent_room_settings import RentRoomSettings
+from .rent_room_product import PRODUCT
 from .rent_room_store import RentRoomStore
 from .rent_room_wechat import SecurePush, WeChatUnavailable, WeChatVirtualPay, compact
-
-
-PRODUCT = {"id": "house-capacity-10", "price": 190, "size": 10}
 
 
 class LoginRequest(BaseModel):
@@ -26,11 +25,11 @@ class LoginRequest(BaseModel):
 class OrderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requestId: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
-    productId: str = Field(pattern=r"^house-capacity-10$")
+    productId: str = Field(pattern=r"^room_capacity_10$")
     platform: str = Field(default="unknown", pattern=r"^(ios|android|unknown)$")
 
 
-def create_app(settings=None, *, provider=None, store=None):
+def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60):
     settings = settings or RentRoomSettings()
     ledger = store or RentRoomStore(settings.db_path)
     wechat = provider or WeChatVirtualPay(settings)
@@ -42,9 +41,16 @@ def create_app(settings=None, *, provider=None, store=None):
 
     @asynccontextmanager
     async def lifespan(_):
-        yield
-        await wechat.close()
-        ledger.close()
+        worker = asyncio.create_task(reconcile_loop()) if settings.payment_configured else None
+        try:
+            yield
+        finally:
+            if worker:
+                worker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await worker
+            await wechat.close()
+            ledger.close()
 
     app = FastAPI(title="Rent-room Capacity API", lifespan=lifespan)
 
@@ -92,7 +98,7 @@ def create_app(settings=None, *, provider=None, store=None):
             raise WeChatUnavailable("微信订单信息不一致，请稍后重试")
         status = result.get("status")
         if status in (2, 4):
-            if result.get("paid_fee") != PRODUCT["price"] or not result.get("wx_order_id"):
+            if result.get("paid_fee") != order["price"] or not result.get("wx_order_id"):
                 raise WeChatUnavailable("微信订单金额不一致，请稍后重试")
             try:
                 ledger.apply(order["id"], "paid", result["wx_order_id"])
@@ -102,7 +108,14 @@ def create_app(settings=None, *, provider=None, store=None):
                 # Persist fulfillment before ACK; retrying never grants twice.
                 await wechat.delivered(order)
         elif status in (5, 8):
-            ledger.apply(order["id"], "refunded")
+            # Payment status alone does not identify a successful, full refund.
+            # Only authenticated final refund events update the refund ledger.
+            if result.get("paid_fee") != order["price"] or not result.get("wx_order_id"):
+                raise WeChatUnavailable("微信订单金额不一致，请稍后重试")
+            try:
+                ledger.apply(order["id"], order["state"], result["wx_order_id"])
+            except sqlite3.IntegrityError as error:
+                raise WeChatUnavailable("该支付订单已关联其他记录，请联系支持") from error
         elif status == 6:
             ledger.apply(order["id"], "closed")
         elif status in (0, 1):
@@ -111,7 +124,36 @@ def create_app(settings=None, *, provider=None, store=None):
             ledger.apply(order["id"], "pending")
         elif status != 7 or order["state"] != "paid":
             raise WeChatUnavailable("微信订单状态暂时无法确认，请稍后重试")
+        else:
+            ledger.checked(order["id"])
         return ledger.by_id(order["id"])["state"]
+
+    async def reconcile_due(account=None):
+        checking = None
+        try:
+            async with asyncio.timeout(3 if account else 45):
+                for candidate in ledger.orders(account, limit=10):
+                    async with account_locks[candidate["account"]]:
+                        order = ledger.by_id(candidate["id"])
+                        checking = order["id"]
+                        try:
+                            await reconcile(order)
+                        except WeChatUnavailable:
+                            # A failed upstream call must not starve later orders.
+                            ledger.checked(order["id"])
+                        checking = None
+        except TimeoutError:
+            if checking:
+                ledger.checked(checking, retry_after=30)
+
+    async def reconcile_loop():
+        while True:
+            await asyncio.sleep(reconcile_interval)
+            try:
+                await reconcile_due()
+            except Exception:
+                # Never log upstream exception text: it can contain credentials.
+                logging.getLogger(__name__).warning("Rent-room reconciliation batch failed; will retry")
 
     @app.get("/health/live")
     async def health():
@@ -140,21 +182,16 @@ def create_app(settings=None, *, provider=None, store=None):
         attempts.append(now)
         result = await wechat.login(body.code)
         account = hashlib.sha256((settings.app_id + ":" + result["openid"]).encode()).hexdigest()
+        if settings.payment_configured:
+            await reconcile_due(account)
         token = ledger.create_session(account, result["openid"], cipher.encrypt(result["session_key"].encode()).decode())
         return {"account": account, "token": token, **entitlement(account)}
 
     @app.get("/api/rent-room/entitlements")
     async def entitlements(session=Depends(current_session)):
-        async with account_locks[session["account"]]:
-            if settings.payment_configured:
-                for order in ledger.orders(session["account"]):
-                    try:
-                        await reconcile(order)
-                    except WeChatUnavailable:
-                        if order["state"] not in ("unpaid", "pending"):
-                            raise
-                        ledger.checked(order["id"])
-            return entitlement(session["account"])
+        if settings.payment_configured:
+            await reconcile_due(session["account"])
+        return entitlement(session["account"])
 
     @app.post("/api/rent-room/orders")
     async def create_order(body: OrderRequest, session=Depends(current_session)):
@@ -205,6 +242,9 @@ def create_app(settings=None, *, provider=None, store=None):
             event, _ = push.decrypt(envelope["Encrypt"], request.query_params)
             if not isinstance(event, dict):
                 raise ValueError("Invalid event")
+            for field in ("Env", "env"):
+                if field in event and str(event[field]) != "0":
+                    raise ValueError("Nonproduction notification")
         except Exception as error:
             raise HTTPException(403, detail="Invalid encrypted WeChat notification") from error
         kind = event.get("Event")
@@ -214,9 +254,19 @@ def create_app(settings=None, *, provider=None, store=None):
         if not order:
             raise HTTPException(404)
         async with account_locks[order["account"]]:
-            # Secure notifications trigger authoritative queries. Their body
-            # alone never grants capacity or treats a failed refund as success.
-            await reconcile(order, acknowledge_delivery=False)
+            # Payments require authoritative queries. Refunds require the
+            # authenticated final result, refund IDs and original payment ID.
+            if kind == "xpay_refund_notify":
+                if not order["wx_id"]:
+                    await reconcile(order, acknowledge_delivery=False)
+                try:
+                    ledger.refund(order["id"], event)
+                except (ValueError, sqlite3.IntegrityError) as error:
+                    raise HTTPException(409, detail="Refund does not match the payment") from error
+            else:
+                state = await reconcile(order, acknowledge_delivery=False)
+                if state not in ("paid", "refunded"):
+                    raise WeChatUnavailable("支付结果尚未确认，请稍后重试")
         plaintext = compact({"ErrCode": 0, "ErrMsg": "success"}).encode() if is_json else b"<xml><ErrCode>0</ErrCode><ErrMsg>success</ErrMsg></xml>"
         reply = push.encrypt(plaintext)
         if is_json:
