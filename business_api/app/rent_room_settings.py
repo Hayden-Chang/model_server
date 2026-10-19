@@ -15,8 +15,17 @@ class RentRoomSettings(BaseSettings):
     payments_enabled: bool = False
     ios_payments_enabled: bool = False
     db_path: str = ":memory:"
+    ios_bundle_id: str = ""
+    apple_login_enabled: bool = False
+    sms_login_enabled: bool = False
+    auth_identity_secret: SecretStr | None = Field(default=None, min_length=32)
+    sms_access_key_id: SecretStr | None = None
+    sms_access_key_secret: SecretStr | None = None
+    sms_sign_name: str = ""
+    sms_template_code: str = ""
+    sms_daily_limit: int = Field(default=1000, ge=1, le=100000)
 
-    @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", mode="before")
+    @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", "auth_identity_secret", "sms_access_key_id", "sms_access_key_secret", mode="before")
     @classmethod
     def empty_secrets_are_disabled(cls, value):
         return None if value == "" else value
@@ -24,6 +33,16 @@ class RentRoomSettings(BaseSettings):
     @property
     def login_ready(self) -> bool:
         return bool(self.app_id and self.app_secret and self.token_secret)
+
+    @property
+    def sms_ready(self) -> bool:
+        return bool(self.sms_login_enabled and self.token_secret and self.auth_identity_secret
+                    and self.sms_access_key_id and self.sms_access_key_secret
+                    and self.sms_sign_name and self.sms_template_code)
+
+    @property
+    def apple_ready(self) -> bool:
+        return bool(self.apple_login_enabled and self.token_secret and self.ios_bundle_id)
 
     @property
     def payment_configured(self) -> bool:
@@ -40,4 +59,10 @@ class RentRoomSettings(BaseSettings):
             raise ValueError("Rent-room payments require independent login, signing and secure push configuration")
         if self.token_secret and self.app_key and self.token_secret == self.app_key:
             raise ValueError("Rent-room session encryption and payment secrets must be independent")
+        if self.sms_login_enabled and not self.sms_ready:
+            raise ValueError("SMS login requires provider credentials, approved sign/template and independent identity secret")
+        if self.apple_login_enabled and not self.apple_ready:
+            raise ValueError("Apple login requires a session secret and the native bundle ID")
+        if self.auth_identity_secret and self.auth_identity_secret == self.token_secret:
+            raise ValueError("Identity hashing and session secrets must be independent")
         return self

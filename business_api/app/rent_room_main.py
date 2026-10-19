@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rent_room_settings import RentRoomSettings
+from .rent_room_native_auth import install_native_auth
 from .rent_room_product import PRODUCT
 from .rent_room_store import RentRoomStore
 from .rent_room_wechat import SecurePush, WeChatUnavailable, WeChatVirtualPay, compact
@@ -29,7 +30,7 @@ class OrderRequest(BaseModel):
     platform: str = Field(default="unknown", pattern=r"^(ios|android|unknown)$")
 
 
-def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60):
+def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60, sms=None, apple=None):
     settings = settings or RentRoomSettings()
     ledger = store or RentRoomStore(settings.db_path)
     wechat = provider or WeChatVirtualPay(settings)
@@ -49,6 +50,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 worker.cancel()
                 with suppress(asyncio.CancelledError):
                     await worker
+            await native_apple.close()
             await wechat.close()
             ledger.close()
 
@@ -75,13 +77,14 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                         status_code=503, media_type="application/json")
 
     async def current_session(authorization: str | None = Header(default=None)):
-        if not settings.login_ready:
+        if not settings.token_secret:
             raise unavailable()
         session = ledger.session(authorization[7:]) if authorization and authorization.startswith("Bearer ") else None
         if not session:
             raise HTTPException(401, detail={"code": "RENT_ROOM_UNAUTHORIZED", "message": "请重新登录微信后重试"})
         try:
-            cipher.decrypt(session["session_key"].encode())
+            if session["provider"] == "wechat":
+                cipher.decrypt(session["session_key"].encode())
         except InvalidToken as error:
             raise HTTPException(401, detail={"message": "微信登录已过期，请重试"}) from error
         return session
@@ -89,6 +92,8 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
     def entitlement(account):
         packs = ledger.packs(account)
         return {"packs": packs, "limit": 2 + 10 * packs}
+
+    native_apple = install_native_auth(app, settings, ledger, current_session, entitlement, sms=sms, apple=apple)
 
     async def reconcile(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":
@@ -200,6 +205,8 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
     async def create_order(body: OrderRequest, session=Depends(current_session)):
         if not settings.payment_ready or body.platform == "ios" and not settings.ios_payments_enabled:
             raise unavailable()
+        if session["provider"] != "wechat":
+            raise unavailable("请使用 iOS 应用内购买扩容")
         async with account_locks[session["account"]]:
             try:
                 order = ledger.create_order(session, body.requestId)

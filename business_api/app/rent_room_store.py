@@ -47,18 +47,21 @@ class RentRoomStore:
                                  ("pack_size", "INTEGER NOT NULL DEFAULT 10")):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE rr_orders ADD COLUMN {name} {definition}")
+        session_columns = {row[1] for row in self.db.execute("PRAGMA table_info(rr_sessions)")}
+        if "provider" not in session_columns:
+            self.db.execute("ALTER TABLE rr_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'wechat'")
         self.db.commit()
 
     def close(self):
         self.db.close()
 
-    def create_session(self, account, openid, encrypted_key):
+    def create_session(self, account, openid, encrypted_key, *, provider="wechat"):
         token = secrets.token_urlsafe(32)
         with self.lock, self.db:
             self.db.execute("DELETE FROM rr_sessions WHERE expires < ?", (int(time.time()),))
-            self.db.execute("INSERT INTO rr_sessions VALUES (?,?,?,?,?)", (
+            self.db.execute("INSERT INTO rr_sessions(token_hash,account,openid,session_key,expires,provider) VALUES (?,?,?,?,?,?)", (
                 hashlib.sha256(token.encode()).hexdigest(), account, openid,
-                encrypted_key, int(time.time()) + 7200))
+                encrypted_key, int(time.time()) + 7200, provider))
         return token
 
     def session(self, token):
