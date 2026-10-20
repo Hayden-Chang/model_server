@@ -24,6 +24,7 @@ from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipRespo
                         TimeFragmentQuotaStatusResponse, TimeFragmentQuotaResetAllResponse)
 from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
+from .duration_profiles import DurationProfileRequest, DurationProfileResponse
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 LOGGER = logging.getLogger(__name__)
@@ -276,6 +277,25 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
             raise
         await quota("finish", current, diagnostic_request_id=request.state.request_id,
                     requestID=payload.request_id, attempt=attempt, consume=response.proposal is not None)
+        return response
+
+    @app.post("/api/duration/profiles", response_model=DurationProfileResponse)
+    async def duration_profiles(payload: DurationProfileRequest, request: Request,
+                                current: Actor = Depends(billing_device)):
+        body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        attempt = str(uuid4())
+        await quota("reserve", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
+        try:
+            response = DurationProfileResponse.model_validate(
+                await backend.duration_profiles(current, body, attempt, request.state.request_id)
+            ).validate_for(payload)
+        except Exception:
+            await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                        requestID=payload.request_id, attempt=attempt, consume=False)
+            raise
+        await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, attempt=attempt, consume=True)
         return response
 
     @app.exception_handler(ValidationError)
