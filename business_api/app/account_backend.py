@@ -248,10 +248,16 @@ class AccountBackend:
         return result
 
     async def plan(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
+        return await self._inference(actor, payload, attempt, request_id, "/internal/time-fragment/plan")
+
+    async def duration_profiles(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
+        return await self._inference(actor, payload, attempt, request_id, "/internal/time-fragment/duration-profiles")
+
+    async def _inference(self, actor: Actor, payload: dict, attempt: str, request_id: str, route: str) -> dict:
         started, response = time.perf_counter(), None
         token = self.credentials.issue(actor.principal, payload, attempt)
         try:
-            response = await self.http.post(str(self.settings.planning_base_url).rstrip("/") + "/internal/time-fragment/plan",
+            response = await self.http.post(str(self.settings.planning_base_url).rstrip("/") + route,
                                             json=payload,
                                             headers={"Authorization": "Bearer " + token, "X-Request-ID": request_id},
                                             timeout=55)
@@ -261,5 +267,6 @@ class AccountBackend:
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
-            log_failure("planning", "internal_time_fragment_plan", error, started, 1, response, request_id)
+            operation = "internal_time_fragment_plan" if route.endswith("/plan") else "internal_duration_profiles"
+            log_failure("planning", operation, error, started, 1, response, request_id)
             raise failure("MODEL_GATEWAY_UNAVAILABLE", 503) from error

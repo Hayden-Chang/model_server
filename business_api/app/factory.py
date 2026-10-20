@@ -51,6 +51,7 @@ from .time_fragment_service import (
     execute_time_fragment_plan,
 )
 from .usage_store import InferenceCapture, UsageStore
+from .duration_profiles import DurationProfileRequest, DurationProfileResponse, extract_profiles
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -262,6 +263,39 @@ def create_app(
     ) -> dict[str, object]:
         quotas.set_membership(principal, payload.enabled)
         return quotas.membership_status(principal)
+
+    @app.post("/internal/time-fragment/duration-profiles", response_model=DurationProfileResponse)
+    async def internal_duration_profiles(
+        payload: DurationProfileRequest, request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> DurationProfileResponse:
+        if settings.planning_internal_secret is None:
+            raise HTTPException(503, detail={"code": "INTERNAL_PLANNING_DISABLED"})
+        body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        try:
+            claims = PlanningCredentials(settings.planning_internal_secret.get_secret_value()).verify(
+                (authorization or "").removeprefix("Bearer "), body)
+        except ValueError as error:
+            raise HTTPException(401, detail={"code": "UNAUTHORIZED"}) from error
+        tracker = TrackedModelClient(client)
+        started_at, started_clock = datetime.now(timezone.utc), time.perf_counter()
+        status_code = 200
+        try:
+            return await extract_profiles(tracker, payload)
+        except ModelGatewayUnavailable as error:
+            status_code = 503
+            raise HTTPException(503, detail={"code": "MODEL_GATEWAY_UNAVAILABLE"}) from error
+        except ModelGatewayResponseError as error:
+            status_code = 502
+            raise HTTPException(502, detail={"code": "MODEL_GATEWAY_ERROR"}) from error
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
+                route="/internal/time-fragment/duration-profiles", pipeline="time-fragment-duration-profile-v1",
+                started_at=started_at, started_clock=started_clock, status_code=status_code,
+                request_content=None, response_content=None, tracker=tracker)
 
     @app.post(
         "/api/plan/parse",
