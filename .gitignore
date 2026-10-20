@@ -6,3 +6,6 @@ __pycache__/
 *.py[cod]
 .DS_Store
 /caddy/caddy
+
+# Local evidence for the native StoreKit draft.
+/artifacts/ios-storekit-20261020/
