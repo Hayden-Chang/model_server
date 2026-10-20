@@ -52,6 +52,27 @@ def test_ungrounded_conditions_are_unknown_not_invented():
     assert result.items[0].profile.preparation is None
 
 
+@pytest.mark.parametrize("title,note,profile,evidence", [
+    ("专注开发30分钟", "",
+     {"kind": "development", "amount": None, "preparation": None, "familiarity": None},
+     {"kind": "开发", "amount": None, "preparation": None, "familiarity": None}),
+    ("花30分钟剪辑2分钟教程", "素材已齐，做过同类",
+     {"kind": "videoEditing", "amount": 2, "preparation": "ready", "familiarity": "familiar"},
+     {"kind": "剪辑", "amount": "2分钟", "preparation": "素材已齐", "familiarity": "做过同类"}),
+])
+def test_time_budget_does_not_publish_whole_task_comparison_traits(title, note, profile, evidence):
+    request = DurationProfileRequest(requestID="budget-profile", tasks=[
+        {"id": "budget", "title": title, "note": note}])
+    output = {"items": [{"id": "budget", "profile": {**profile, "scope": "timeBudget"},
+                         "evidence": evidence}]}
+    model = FakeModelClient([raw_output(json.dumps(output, ensure_ascii=False))])
+    result = asyncio.run(extract_profiles(model, request))
+    assert result.items[0].profile.model_dump() == {
+        "kind": "unknown", "amount": None, "preparation": None,
+        "familiarity": None, "scope": "timeBudget"}
+    assert len(model.calls) == 1
+
+
 @pytest.mark.parametrize("items", [[], [{"id": "other"}], extraction()["items"] * 2])
 def test_missing_duplicate_and_foreign_id_fail_closed(items):
     with pytest.raises(ModelGatewayResponseError):
