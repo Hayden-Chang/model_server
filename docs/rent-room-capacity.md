@@ -93,3 +93,6 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 默认关闭 `RENT_ROOM_STOREKIT_ENABLED`。需在服务端配置 `RENT_ROOM_IOS_BUNDLE_ID`、`RENT_ROOM_STOREKIT_PRODUCT_ID`、`RENT_ROOM_STOREKIT_ENVIRONMENT`（仅 Production / Sandbox）、Production必需的 `RENT_ROOM_STOREKIT_APP_APPLE_ID`、`RENT_ROOM_STOREKIT_KEY_ID / ISSUER_ID / KEY_PATH`，以及现有独立会话密钥。p8只通过服务端受限文件挂载/已有私有卷提供，不放入Git、App或日志。凭据配置齐全后可在关闭新购时继续补发和恢复；不接受 Xcode / LocalTesting 环境作为服务端权益。
 
 App Store Server Notifications V2 的 HTTPS 回调路径为 `/api/rent-room/ios/storekit/notifications`，先验证外层与内层签名，按服务端颁发的账号标识归属，再重新查询 Apple 权威记录。生产与沙箱应使用各自配置和账本环境。正式商品、服务密钥、回调配置、沙箱及真实购买/退款/换机尚未完成；此草稿未部署、未开放收费。
+
+
+验证源码 `6608d9ca3f017402c7d9708b41d588aa1beca3c3`：新StoreKit测试及受影响的原容量/原生认证文件共 **114 passed**（6.43秒）；官方 SDK 的外层通知及交易证书链/签名验证使用本地测试证书和HTTP替身，另覆盖重复、并发、跨账号、伪造商品/环境/数量、退款、乱序与退款撤销、失败后保留及数据库迁移。不是实际 Apple 服务或收费验收。首次隔离环境112项通过，既有Compose用例因缺少PyYAML未运行成功；补装依赖后该方法单独通过，再在固定源码上完整跑上述3个相关文件，114项全过。原始日志和来源见忽略目录 `artifacts/ios-storekit-20261020/`。未运行其他业务全套UT，未合并、部署或发布。
