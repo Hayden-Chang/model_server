@@ -89,6 +89,7 @@ PROFILE_PIPELINE = Pipeline(
         "For each non-null trait provide an exact supporting substring in evidence; unknown has null evidence. "
         "For meals amount/preparation/familiarity are null. scope=timeBudget when the task explicitly describes "
         "a session or effort budget instead of finishing a deliverable (e.g. 专注开发30分钟); otherwise wholeTask. "
+        "For timeBudget, kind is unknown and amount/preparation/familiarity are null. "
         "Examples: 剪辑2分钟教程, note素材已齐，做过同类 -> videoEditing,2,ready,familiar. "
         "开发XX功能 -> unknown,null,null,null. 吃午饭 -> meal,null,null,null. "
         "Preserve uncertainty instead of inventing any condition."
@@ -118,6 +119,8 @@ async def extract_profiles(client, request: DurationProfileRequest) -> DurationP
                 quote = getattr(item.evidence, field)
                 if not quote or quote not in text:
                     setattr(profile, field, "unknown" if field == "kind" else None)
+            if profile.scope == "timeBudget":
+                profile.kind = "unknown"
             if profile.kind in ("meal", "unknown"):
                 profile.amount = profile.preparation = profile.familiarity = None
             result.append(ProfileItem(id=item.id, profile=profile))
