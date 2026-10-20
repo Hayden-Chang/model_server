@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .rent_room_settings import RentRoomSettings
 from .rent_room_native_auth import install_native_auth
+from .rent_room_storekit import install_storekit
 from .rent_room_product import PRODUCT
 from .rent_room_store import RentRoomStore
 from .rent_room_wechat import SecurePush, WeChatUnavailable, WeChatVirtualPay, compact
@@ -30,7 +31,7 @@ class OrderRequest(BaseModel):
     platform: str = Field(default="unknown", pattern=r"^(ios|android|unknown)$")
 
 
-def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60, sms=None, apple=None):
+def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60, sms=None, apple=None, storekit=None):
     settings = settings or RentRoomSettings()
     ledger = store or RentRoomStore(settings.db_path)
     wechat = provider or WeChatVirtualPay(settings)
@@ -51,6 +52,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 with suppress(asyncio.CancelledError):
                     await worker
             await native_apple.close()
+            await native_storekit.close()
             await wechat.close()
             ledger.close()
 
@@ -90,10 +92,11 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return session
 
     def entitlement(account):
-        packs = ledger.packs(account)
+        packs = ledger.packs(account, settings.storekit_environment)
         return {"packs": packs, "limit": 2 + 10 * packs}
 
     native_apple = install_native_auth(app, settings, ledger, current_session, entitlement, sms=sms, apple=apple)
+    native_storekit = install_storekit(app, settings, ledger, current_session, provider=storekit)
 
     async def reconcile(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":

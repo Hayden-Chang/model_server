@@ -1,5 +1,6 @@
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
 
 
 class RentRoomSettings(BaseSettings):
@@ -24,10 +25,22 @@ class RentRoomSettings(BaseSettings):
     sms_sign_name: str = ""
     sms_template_code: str = ""
     sms_daily_limit: int = Field(default=1000, ge=1, le=100000)
+    storekit_enabled: bool = False
+    storekit_product_id: str = ""
+    storekit_environment: Literal["Production", "Sandbox"] = "Production"
+    storekit_app_apple_id: int | None = Field(default=None, gt=0)
+    storekit_key_id: str = ""
+    storekit_issuer_id: str = ""
+    storekit_key_path: str = ""
 
     @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", "auth_identity_secret", "sms_access_key_id", "sms_access_key_secret", mode="before")
     @classmethod
     def empty_secrets_are_disabled(cls, value):
+        return None if value == "" else value
+
+    @field_validator("storekit_app_apple_id", mode="before")
+    @classmethod
+    def empty_app_apple_id(cls, value):
         return None if value == "" else value
 
     @property
@@ -53,6 +66,12 @@ class RentRoomSettings(BaseSettings):
     def payment_ready(self) -> bool:
         return self.payments_enabled and self.payment_configured
 
+    @property
+    def storekit_configured(self) -> bool:
+        return bool(self.token_secret and self.ios_bundle_id and self.storekit_product_id
+                    and self.storekit_key_id and self.storekit_issuer_id and self.storekit_key_path
+                    and (self.storekit_environment == "Sandbox" or self.storekit_app_apple_id))
+
     @model_validator(mode="after")
     def validate_payment_config(self):
         if self.payments_enabled and not self.payment_ready:
@@ -65,4 +84,6 @@ class RentRoomSettings(BaseSettings):
             raise ValueError("Apple login requires a session secret and the native bundle ID")
         if self.auth_identity_secret and self.auth_identity_secret == self.token_secret:
             raise ValueError("Identity hashing and session secrets must be independent")
+        if self.storekit_enabled and not self.storekit_configured:
+            raise ValueError("StoreKit requires an independent bundle/product, Apple service credential and environment")
         return self

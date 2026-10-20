@@ -3,6 +3,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from .rent_room_product import PRODUCT
@@ -39,6 +40,33 @@ class RentRoomStore:
                 id TEXT PRIMARY KEY, wx_id TEXT UNIQUE NOT NULL, order_id TEXT NOT NULL,
                 fee INTEGER NOT NULL, ret_code INTEGER NOT NULL, created INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rr_apple_accounts (
+                account TEXT PRIMARY KEY, app_account_token TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rr_apple_transactions (
+                environment TEXT NOT NULL, id TEXT NOT NULL, account TEXT NOT NULL,
+                app_account_token TEXT NOT NULL, product_id TEXT NOT NULL,
+                state TEXT NOT NULL, signed_date INTEGER NOT NULL,
+                PRIMARY KEY(environment,id)
+            );
+            CREATE INDEX IF NOT EXISTS rr_apple_account ON rr_apple_transactions(account,environment);
+            CREATE TABLE IF NOT EXISTS rr_apple_events (
+                id TEXT PRIMARY KEY, environment TEXT NOT NULL, transaction_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rr_capacity_versions (
+                account TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TRIGGER IF NOT EXISTS rr_order_capacity_insert AFTER INSERT ON rr_orders
+            BEGIN
+                INSERT INTO rr_capacity_versions(account,revision) VALUES(NEW.account,1)
+                ON CONFLICT(account) DO UPDATE SET revision=revision+1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS rr_order_capacity_update AFTER UPDATE OF state ON rr_orders
+            WHEN OLD.state != NEW.state
+            BEGIN
+                INSERT INTO rr_capacity_versions(account,revision) VALUES(NEW.account,1)
+                ON CONFLICT(account) DO UPDATE SET revision=revision+1;
+            END;
         """)
         # Rows from the previous catalog retain their original 190-fen contract.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(rr_orders)")}
@@ -69,9 +97,56 @@ class RentRoomStore:
             return self.db.execute("SELECT * FROM rr_sessions WHERE token_hash=? AND expires>?", (
                 hashlib.sha256(token.encode()).hexdigest(), int(time.time()))).fetchone()
 
-    def packs(self, account):
+    def packs(self, account, apple_environment="Production"):
         with self.lock:
-            return self.db.execute("SELECT count(*) FROM rr_orders WHERE account=? AND state='paid'", (account,)).fetchone()[0]
+            wechat = self.db.execute("SELECT count(*) FROM rr_orders WHERE account=? AND state='paid'", (account,)).fetchone()[0]
+            apple = self.db.execute("SELECT count(*) FROM rr_apple_transactions WHERE account=? AND environment=? AND state='verified'", (account, apple_environment)).fetchone()[0]
+            return wechat + apple
+
+    def apple_token(self, account):
+        with self.lock, self.db:
+            self.db.execute("INSERT OR IGNORE INTO rr_apple_accounts VALUES (?,?)", (account, str(uuid.uuid4())))
+            return self.db.execute("SELECT app_account_token FROM rr_apple_accounts WHERE account=?", (account,)).fetchone()[0]
+
+    def apple_owner(self, token):
+        with self.lock:
+            row = self.db.execute("SELECT account FROM rr_apple_accounts WHERE app_account_token=?", (token,)).fetchone()
+            return row[0] if row else None
+
+    def apple_ids(self, account, environment):
+        with self.lock:
+            return [row[0] for row in self.db.execute("SELECT id FROM rr_apple_transactions WHERE account=? AND environment=? ORDER BY id", (account, environment))]
+
+    def apple_snapshot(self, account, environment):
+        with self.lock:
+            packs = self.packs(account, environment)
+            row = self.db.execute("SELECT revision FROM rr_capacity_versions WHERE account=?", (account,)).fetchone()
+            return {"account": account, "environment": environment, "packs": packs, "limit": 2 + 10 * packs,
+                    "revision": row[0] if row else 0}
+
+    def apply_apple(self, account, transaction, *, event_id=None):
+        """Accept only the provider's verified canonical transaction, atomically."""
+        key = (transaction["environment"], transaction["transactionId"])
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if self.apple_owner(transaction["appAccountToken"]) != account:
+                raise ValueError("Apple account binding mismatch")
+            row = self.db.execute("SELECT * FROM rr_apple_transactions WHERE environment=? AND id=?", key).fetchone()
+            if row and (row["account"], row["app_account_token"], row["product_id"]) != (account, transaction["appAccountToken"], transaction["productId"]):
+                raise ValueError("Apple transaction ownership cannot change")
+            state = "revoked" if transaction.get("revocationDate") is not None else "verified"
+            newer = not row or transaction["signedDate"] > row["signed_date"]
+            revoked_at_same_version = row and transaction["signedDate"] == row["signed_date"] and state == "revoked" and row["state"] != "revoked"
+            if newer or revoked_at_same_version:
+                self.db.execute("INSERT INTO rr_apple_transactions VALUES (?,?,?,?,?,?,?) ON CONFLICT(environment,id) DO UPDATE SET state=excluded.state,signed_date=excluded.signed_date", (*key, account, transaction["appAccountToken"], transaction["productId"], state, transaction["signedDate"]))
+                self.db.execute("INSERT INTO rr_capacity_versions VALUES (?,1) ON CONFLICT(account) DO UPDATE SET revision=revision+1", (account,))
+            if event_id:
+                old = self.db.execute("SELECT * FROM rr_apple_events WHERE id=?", (event_id,)).fetchone()
+                if old and (old["environment"], old["transaction_id"]) != key:
+                    raise ValueError("Notification identity mismatch")
+                self.db.execute("INSERT OR IGNORE INTO rr_apple_events VALUES (?,?,?)", (event_id, *key))
+            current = self.db.execute("SELECT state FROM rr_apple_transactions WHERE environment=? AND id=?", key).fetchone()[0]
+            return {"transactionId": key[1], "status": current, **self.apple_snapshot(account, key[0])}
 
     def order(self, account, request_id):
         with self.lock:
