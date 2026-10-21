@@ -54,11 +54,13 @@ async def verify():
     async def analyze(tasks, category, references=None):
         body = {"requestID": str(uuid.uuid4()), "operation": "score", "tasks": tasks,
                 "categories": [category], "references": references or []}
+        check = {"request": copy.deepcopy(body)}
+        report["checks"].append(check)
         if mode == "preflight":
             value = (await analyze_relative(tracker, RelativeRequest.model_validate(body))).model_dump(mode="json", by_alias=True)
         else:
             value = http("/api/duration/relative-analysis", body, authenticated=True)
-        report["checks"].append({"request": copy.deepcopy(body), "response": value})
+        check["response"] = value
         return value
 
     meal = {"id": "meal", "name": "吃饭", "definition": "进食一餐的日常活动"}

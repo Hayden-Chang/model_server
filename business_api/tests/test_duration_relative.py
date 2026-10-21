@@ -138,6 +138,13 @@ def test_routine_history_bootstraps_and_remains_comparable_without_time_fields()
     assert json.loads(model.calls[0][1]) == RelativeRequest.model_validate(body).model_dump(by_alias=True, exclude_none=True)
 
 
+def test_bootstrap_positive_score_requires_explicit_anchor_id():
+    body = payload(True); body["categories"] = [category(False)]
+    response = result(True); response["anchorTaskID"] = None; response["items"][0]["difficulty"] = 1
+    with pytest.raises(ValueError):
+        validated(body, response)
+
+
 @pytest.mark.parametrize("change", ["request", "operation", "missing", "duplicate", "foreign", "category", "anchor"])
 def test_invalid_identity_and_scale_fail_closed(change):
     response = result(True)
