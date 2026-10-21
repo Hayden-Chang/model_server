@@ -10,7 +10,9 @@ from app.account_api import create_account_api
 from app.account_backend import AccountBackend, Actor, failure
 from app.duration_relative import RelativeRequest, RelativeResponse, analyze_relative
 from app.factory import create_app
-from app.model_client import ModelGatewayResponseError
+from app.model_client import LiteLLMClient, ModelGatewayResponseError
+from app.duration_profiles import PROFILE_PIPELINE
+from app.pipelines import PIPELINES
 from app.planning_auth import PlanningCredentials
 from test_account_api import Backend, configuration, device_headers, account_headers, SECRET
 from test_time_fragment_api import FakeModelClient, raw_output, settings
@@ -196,10 +198,34 @@ def test_real_model_boundary_contains_text_and_saved_scores_but_no_local_time():
     value = asyncio.run(analyze_relative(model, request))
     assert value.items[0].difficulty == 1.5
     assert json.loads(model.calls[0][1]) == request.model_dump(by_alias=True, exclude_none=True)
-    assert model.calls[0][0].thinking_mode == "disabled"
+    assert model.calls[0][0].thinking_mode == "enabled"
+    assert model.calls[0][0].reasoning_effort == "high"
     bad = result(True); bad["anchorTaskID"] = "changed"
     model = FakeModelClient([raw_output(json.dumps(bad))])
     with pytest.raises(ModelGatewayResponseError): asyncio.run(analyze_relative(model, request))
+
+
+@pytest.mark.parametrize("score", [False, True], ids=["classify", "score"])
+def test_relative_operations_enable_high_effort_without_exposing_reasoning(monkeypatch, settings, score):
+    captured = {}
+
+    async def fake_post(self, url, **kwargs):
+        captured.update(kwargs["json"])
+        assert self.timeout.read == 45
+        return httpx.Response(200, json={"model": "primary-model", "choices": [{"message": {
+            "content": json.dumps(result(score), ensure_ascii=False),
+            "reasoning_content": "internal reasoning must stay private"}}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    value = asyncio.run(analyze_relative(LiteLLMClient(settings), RelativeRequest.model_validate(payload(score))))
+    assert captured["thinking"] == {"type": "enabled"}
+    assert captured["reasoning_effort"] == "high"
+    assert captured["model"] == "primary-model"
+    assert captured["max_tokens"] == 6000
+    assert json.loads(captured["messages"][-1]["content"])["operation"] == ("score" if score else "classify")
+    assert "internal reasoning" not in value.model_dump_json()
+    assert PIPELINES["time-fragment-plan-v2"].thinking_mode == "disabled"
+    assert PROFILE_PIPELINE.thinking_mode == "disabled"
 
 
 class RelativeBackend(Backend):

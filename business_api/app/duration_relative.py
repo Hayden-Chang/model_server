@@ -207,7 +207,7 @@ RELATIVE_PIPELINE = Pipeline(
         "Always echo existing anchorTaskID when present. Output JSON only."
     ),
     temperature=0, max_tokens=6000, response_schema=RelativeResponse.model_json_schema(),
-    thinking_mode="disabled", timeout_seconds=45,
+    thinking_mode="enabled", reasoning_effort="high", timeout_seconds=45,
 )
 
 
