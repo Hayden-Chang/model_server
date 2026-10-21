@@ -86,9 +86,12 @@ async def preflight():
     report["practiceCategory"] = new[piano]
     response = await analyze(request("score", [task("budget-30", "专注开发30分钟"), task("budget-60", "专注开发60分钟")], [dev_category()], ui_references()))
     assert all(x["difficulty"] is None and x["references"] == [] for x in response["items"]), "effort budget incorrectly produced difficulty or comparable references"
+    category = dev_category(); category.pop("anchor")
+    response = await analyze(request("score", [task("budget-30", "专注开发30分钟"), task("budget-60", "专注开发60分钟")], [category], []))
+    assert response["anchorTaskID"] is None and all(x["difficulty"] is None and x["references"] == [] for x in response["items"]), "effort budget incorrectly established a new anchor"
     report["modelCallCount"] = len(tracker.calls)
     report["modelCalls"] = [{"pipeline": c.pipeline, "providerModel": c.provider_model, "totalTokens": c.usage.total_tokens if c.usage else None, "errorType": c.error_type} for c in tracker.calls]
-    assert len(tracker.calls) == 2
+    assert len(tracker.calls) == 3
 
 
 def public():
@@ -96,7 +99,7 @@ def public():
     assert call("/health/live")["status"] == "ok"
     assert call("/health/ready")["status"] == "ready"
     route = "/api/duration/relative-analysis"
-    body = request("score", [task("saved", "实现六个设置项的 SwiftUI 静态设置页面", "无网络、持久化或其他业务逻辑。", difficulty=1.75), task("new-page", "实现一个 SwiftUI 静态设置页面", "三个设置项：名称、开关、说明；无网络、持久化或其他业务逻辑。")], [dev_category()], ui_references())
+    body = request("score", [task("saved", "实现六个设置项的 SwiftUI 静态设置页面", "无网络、持久化或其他业务逻辑。", difficulty=1.75), task("new-page", "限时30分钟实现一个 SwiftUI 静态设置页面", "三个设置项：名称、开关、说明；无网络、持久化或其他业务逻辑。")], [dev_category()], ui_references())
     call(route, body, expected=401)
     token = call("/api/auth/guest", {"device_id": "relative-difficulty-deployment-probe"}, capture=False)["access_token"]
     before = call("/api/account/quota", auth=True)
