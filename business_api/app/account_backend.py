@@ -253,6 +253,9 @@ class AccountBackend:
     async def duration_profiles(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
         return await self._inference(actor, payload, attempt, request_id, "/internal/time-fragment/duration-profiles")
 
+    async def relative_duration(self, actor: Actor, payload: dict, attempt: str, request_id: str) -> dict:
+        return await self._inference(actor, payload, attempt, request_id, "/internal/time-fragment/relative-analysis")
+
     async def _inference(self, actor: Actor, payload: dict, attempt: str, request_id: str, route: str) -> dict:
         started, response = time.perf_counter(), None
         token = self.credentials.issue(actor.principal, payload, attempt)
@@ -267,6 +270,7 @@ class AccountBackend:
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
-            operation = "internal_time_fragment_plan" if route.endswith("/plan") else "internal_duration_profiles"
+            operation = {"/plan": "internal_time_fragment_plan", "/duration-profiles": "internal_duration_profiles",
+                         "/relative-analysis": "internal_duration_relative_analysis"}["/" + route.rsplit("/", 1)[-1]]
             log_failure("planning", operation, error, started, 1, response, request_id)
             raise failure("MODEL_GATEWAY_UNAVAILABLE", 503) from error

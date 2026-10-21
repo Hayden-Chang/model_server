@@ -25,6 +25,7 @@ from .contracts import (DevelopmentMembershipRequest, DevelopmentMembershipRespo
 from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
 from .duration_profiles import DurationProfileRequest, DurationProfileResponse
+from .duration_relative import RelativeRequest, RelativeResponse
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 LOGGER = logging.getLogger(__name__)
@@ -289,6 +290,25 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         try:
             response = DurationProfileResponse.model_validate(
                 await backend.duration_profiles(current, body, attempt, request.state.request_id)
+            ).validate_for(payload)
+        except Exception:
+            await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                        requestID=payload.request_id, attempt=attempt, consume=False)
+            raise
+        await quota("finish", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, attempt=attempt, consume=True)
+        return response
+
+    @app.post("/api/duration/relative-analysis", response_model=RelativeResponse)
+    async def relative_duration(payload: RelativeRequest, request: Request,
+                                current: Actor = Depends(billing_device)):
+        body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        attempt = str(uuid4())
+        await quota("reserve", current, diagnostic_request_id=request.state.request_id,
+                    requestID=payload.request_id, bodyHash=body_hash(body), attempt=attempt)
+        try:
+            response = RelativeResponse.model_validate(
+                await backend.relative_duration(current, body, attempt, request.state.request_id)
             ).validate_for(payload)
         except Exception:
             await quota("finish", current, diagnostic_request_id=request.state.request_id,
