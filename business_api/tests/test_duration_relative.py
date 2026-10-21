@@ -1,0 +1,223 @@
+import asyncio
+import json
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import SecretStr, ValidationError
+
+from app.account_api import create_account_api
+from app.account_backend import AccountBackend, Actor, failure
+from app.duration_relative import RelativeRequest, RelativeResponse, analyze_relative
+from app.factory import create_app
+from app.model_client import ModelGatewayResponseError
+from app.planning_auth import PlanningCredentials
+from test_account_api import Backend, configuration, device_headers, account_headers, SECRET
+from test_time_fragment_api import FakeModelClient, raw_output, settings
+
+
+def text(id="a"):
+    return {"id": id, "title": "写需要查资料的口播稿", "note": "查证产品资料"}
+
+
+def category(anchor=True):
+    value = {"id": "script", "name": "口播文案", "definition": "短视频口播脚本"}
+    if anchor:
+        value["anchor"] = {**text("baseline"), "difficulty": 1}
+    return value
+
+
+def payload(score=False):
+    return {"requestID": "relative-1", "operation": "score" if score else "classify",
+            "tasks": [text()], "categories": [category()] if score else []}
+
+
+def result(score=False):
+    return {"requestID": "relative-1", "operation": "score" if score else "classify",
+            "categories": [] if score else [category(False)],
+            "anchorTaskID": "baseline" if score else None,
+            "items": [{"id": "a", "categoryID": "script", "difficulty": 1.5 if score else None,
+                       "reason": "沿用已有尺度" if score else "同为口播脚本", "references": []}]}
+
+
+def validated(body, response):
+    return RelativeResponse.model_validate(response).validate_for(RelativeRequest.model_validate(body))
+
+
+def test_dynamic_category_reuse_new_definition_and_unclassified():
+    body = payload()
+    assert validated(body, result()).categories[0].id == "script"
+    body["categories"] = [category()]
+    response = result(); response["categories"] = []
+    assert validated(body, response).items[0].category_id == "script"
+    response["items"][0]["categoryID"] = None
+    assert validated(body, response).items[0].category_id is None
+    response["categories"] = [category(False)]
+    with pytest.raises(ValueError):
+        validated(body, response)
+
+
+def test_score_preserves_saved_difficulty_anchor_and_newest_reference_order():
+    body = payload(True); body["tasks"][0]["difficulty"] = 1.5
+    body["references"] = [{**text(id), "categoryID": "script", "difficulty": difficulty}
+                          for id, difficulty in [("recent", 2), ("old", 0.5)]]
+    response = result(True)
+    response["items"][0]["references"] = [{"id": "old", "reason": "可比"}, {"id": "recent", "reason": "可比"}]
+    assert [ref.id for ref in validated(body, response).items[0].references] == ["recent", "old"]
+    response["items"][0]["difficulty"] = 2
+    with pytest.raises(ValueError):
+        validated(body, response)
+    response = result(True); response["anchorTaskID"] = "a"
+    with pytest.raises(ValueError):
+        validated(body, response)
+
+
+def test_bootstrap_requires_one_explicit_target_anchor_and_allows_abstention():
+    body = payload(True); body["categories"] = [category(False)]
+    response = result(True); response["anchorTaskID"] = "a"; response["items"][0]["difficulty"] = 1
+    assert validated(body, response).anchor_task_id == "a"
+    response["items"][0]["difficulty"] = 1.5
+    with pytest.raises(ValueError):
+        validated(body, response)
+    response["anchorTaskID"] = None; response["items"][0]["difficulty"] = None
+    assert validated(body, response).items[0].difficulty is None
+
+
+@pytest.mark.parametrize("change", ["request", "operation", "missing", "duplicate", "foreign", "category", "anchor"])
+def test_invalid_identity_and_scale_fail_closed(change):
+    response = result(True)
+    if change == "request": response["requestID"] = "other"
+    if change == "operation": response["operation"] = "classify"
+    if change == "missing": response["items"] = []
+    if change == "duplicate": response["items"] *= 2
+    if change == "foreign": response["items"][0]["id"] = "other"
+    if change == "category": response["items"][0]["categoryID"] = "other"
+    if change == "anchor": response["anchorTaskID"] = "other"
+    with pytest.raises(ValueError): validated(payload(True), response)
+
+
+@pytest.mark.parametrize("difficulty", [0, -1, True, "1.5", float("nan"), float("inf")])
+def test_invalid_difficulty_rejected(difficulty):
+    response = result(True); response["items"][0]["difficulty"] = difficulty
+    with pytest.raises(ValueError): validated(payload(True), response)
+
+
+@pytest.mark.parametrize("ids", [["foreign"], ["r", "r"], ["r"] * 6])
+def test_foreign_repeated_or_excessive_references_rejected(ids):
+    body = payload(True); body["references"] = [{**text("r"), "categoryID": "script", "difficulty": 2}]
+    response = result(True); response["items"][0]["references"] = [{"id": id, "reason": "可比"} for id in ids]
+    with pytest.raises(ValueError): validated(body, response)
+
+
+@pytest.mark.parametrize("where", ["task", "category", "anchor", "reference", "example"])
+def test_nested_time_fields_are_rejected(where):
+    body = payload(True)
+    body["references"] = [{**text("r"), "categoryID": "script", "difficulty": 2}]
+    body["categories"][0]["examples"] = [text("e")]
+    target = {"task": body["tasks"][0], "category": body["categories"][0],
+              "anchor": body["categories"][0]["anchor"], "reference": body["references"][0],
+              "example": body["categories"][0]["examples"][0]}[where]
+    target["actualMinutes"] = 60
+    with pytest.raises(ValidationError): RelativeRequest.model_validate(body)
+
+
+def test_input_size_covers_catalog_examples_and_history_and_rejects_cross_category():
+    body = payload(True); body["references"] = [{**text("r"), "categoryID": "other", "difficulty": 1}]
+    with pytest.raises(ValidationError): RelativeRequest.model_validate(body)
+    body = payload(); body["categories"] = [{**category(False), "id": str(i), "definition": "字" * 1000} for i in range(24)]
+    with pytest.raises(ValidationError): RelativeRequest.model_validate(body)
+
+
+def test_real_model_boundary_contains_text_and_saved_scores_but_no_local_time():
+    request = RelativeRequest.model_validate(payload(True))
+    model = FakeModelClient([raw_output(json.dumps(result(True), ensure_ascii=False))])
+    value = asyncio.run(analyze_relative(model, request))
+    assert value.items[0].difficulty == 1.5
+    assert json.loads(model.calls[0][1]) == request.model_dump(by_alias=True, exclude_none=True)
+    assert model.calls[0][0].thinking_mode == "disabled"
+    bad = result(True); bad["anchorTaskID"] = "changed"
+    model = FakeModelClient([raw_output(json.dumps(bad))])
+    with pytest.raises(ModelGatewayResponseError): asyncio.run(analyze_relative(model, request))
+
+
+class RelativeBackend(Backend):
+    async def relative_duration(self, actor, data, attempt, request_id):
+        self.calls.append(("relative", actor, data, attempt, request_id))
+        return self.response
+
+
+def test_device_only_and_quota_denial_do_not_call_model(configuration):
+    backend = RelativeBackend(result())
+    with TestClient(create_account_api(configuration, backend)) as client:
+        assert client.post("/api/duration/relative-analysis", headers=account_headers(), json=payload()).status_code == 401
+        assert backend.calls == []
+        headers = device_headers(client, backend); backend.quota_error = failure("AI_QUOTA_EXHAUSTED", 429)
+        assert client.post("/api/duration/relative-analysis", headers=headers, json=payload()).status_code == 429
+        assert [call[0] for call in backend.calls] == ["reserve"]
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_quota_finishes_once_and_invalid_response_refunds(configuration, valid):
+    response = result(); response["requestID"] = "relative-1" if valid else "wrong"
+    backend = RelativeBackend(response)
+    with TestClient(create_account_api(configuration, backend)) as client:
+        response = client.post("/api/duration/relative-analysis", headers=device_headers(client, backend), json=payload())
+    assert response.status_code == (200 if valid else 502)
+    assert [call[0] for call in backend.calls] == ["reserve", "relative", "finish"]
+    assert backend.calls[-1][2]["consume"] is valid
+
+
+def test_internal_signature_and_extractor_boundary(settings):
+    model = FakeModelClient([raw_output(json.dumps(result(), ensure_ascii=False))])
+    app = create_app(settings.model_copy(update={"planning_internal_secret": SecretStr(SECRET), "planning_internal_only": True}), model)
+    body = RelativeRequest.model_validate(payload()).model_dump(mode="json", by_alias=True, exclude_none=True)
+    with TestClient(app) as client:
+        route = "/internal/time-fragment/relative-analysis"
+        assert client.post(route, json=body).status_code == 401
+        assert model.calls == []
+        token = PlanningCredentials(SECRET).issue("device:test", body, "attempt")
+        response = client.post(route, json=body, headers={"Authorization": "Bearer " + token})
+        assert response.status_code == 200
+        assert response.json()["items"][0]["categoryID"] == "script"
+
+
+def test_proxy_signs_exact_payload_and_preserves_trace(configuration):
+    def receive(request):
+        body = json.loads(request.content)
+        assert body == payload()
+        claims = PlanningCredentials(SECRET).verify(request.headers["Authorization"].removeprefix("Bearer "), body)
+        assert claims["sub"] == "device:test"
+        assert request.url.path == "/internal/time-fragment/relative-analysis"
+        assert request.headers["X-Request-ID"] == "trace"
+        return httpx.Response(200, json=result())
+    async def run():
+        backend = AccountBackend(configuration, httpx.MockTransport(receive))
+        try: return await backend.relative_duration(Actor("device:test"), payload(), "attempt", "trace")
+        finally: await backend.close()
+    assert asyncio.run(run()) == result()
+
+
+def test_anchor_identity_cannot_be_rescored_or_conflict_with_references():
+    body = payload(True); body["tasks"] = [text("baseline")]
+    response = result(True); response["items"][0]["id"] = "baseline"
+    with pytest.raises(ValueError): validated(body, response)
+    body = payload(True); body["references"] = [{**text("baseline"), "categoryID": "script", "difficulty": 2}]
+    with pytest.raises(ValueError): RelativeRequest.model_validate(body)
+    body["categories"] = [category(False)]
+    with pytest.raises(ValueError): RelativeRequest.model_validate(body)
+
+
+def test_edited_anchor_task_uses_new_text_but_preserves_original_baseline():
+    body = payload(True)
+    body["tasks"] = [{**text("baseline"), "title": "新增多个资料源交叉查证的口播稿"}]
+    response = result(True)
+    response["items"][0].update(id="baseline", difficulty=2)
+    assert validated(body, response).items[0].difficulty == 2
+    assert body["categories"][0]["anchor"]["difficulty"] == 1
+    body["tasks"][0]["difficulty"] = 2
+    assert validated(body, response).items[0].difficulty == 2
+    body["tasks"][0] = {**text("baseline"), "difficulty": 2}
+    with pytest.raises(ValueError): RelativeRequest.model_validate(body)
+    body = payload(True)
+    body["references"] = [{**text("baseline"), "title": "修改后重新完成的口播稿", "categoryID": "script", "difficulty": 2}]
+    assert RelativeRequest.model_validate(body).references[0].difficulty == 2
