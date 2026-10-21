@@ -75,7 +75,7 @@ async def verify():
             value = (await analyze_relative(tracker, RelativeRequest.model_validate(body))).model_dump(mode="json", by_alias=True)
         else:
             value = http("/api/duration/relative-analysis", body, authenticated=True)
-        check["response"] = value
+        check["response"] = copy.deepcopy(value)
         return value
 
     history = task("meal-history", "吃饭")
