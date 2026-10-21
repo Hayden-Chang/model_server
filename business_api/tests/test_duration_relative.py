@@ -57,6 +57,34 @@ def test_dynamic_category_reuse_new_definition_and_unclassified():
         validated(body, response)
 
 
+@pytest.mark.parametrize("count", [1, 2])
+def test_classification_discards_generated_examples_but_keeps_request_examples(count):
+    body = payload()
+    body["tasks"] = [text(str(i)) for i in range(count)]
+    body["categories"] = [{"id": "meal", "name": "用餐", "definition": "日常吃饭",
+                           "examples": [{"id": "lunch", "title": "吃午饭", "note": ""}]}]
+    response = result()
+    response["categories"][0]["examples"] = [body["tasks"][0]]
+    response["items"] = [{**result()["items"][0], "id": task["id"]} for task in body["tasks"]]
+    request = RelativeRequest.model_validate(body)
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    value = asyncio.run(analyze_relative(model, request))
+    assert value.categories[0].examples == []
+    assert value.categories[0].anchor is None
+    assert {item.id for item in value.items} == {task["id"] for task in body["tasks"]}
+    assert all(item.category_id == "script" for item in value.items)
+    assert json.loads(model.calls[0][1])["categories"][0]["examples"] == body["categories"][0]["examples"]
+    assert len(model.calls) == 1
+
+
+def test_classification_generated_examples_do_not_allow_a_generated_anchor():
+    response = result()
+    response["categories"][0].update(examples=[text()], anchor={**text(), "difficulty": 1})
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    with pytest.raises(ModelGatewayResponseError):
+        asyncio.run(analyze_relative(model, RelativeRequest.model_validate(payload())))
+
+
 def test_score_preserves_saved_difficulty_anchor_and_newest_reference_order():
     body = payload(True); body["tasks"][0]["difficulty"] = 1.5
     body["references"] = [{**text(id), "categoryID": "script", "difficulty": difficulty}

@@ -170,6 +170,7 @@ RELATIVE_PIPELINE = Pipeline(
         "For example, with only a writing category, '跑步训练5公里' needs a new running category and "
         "'修补衬衫袖口' needs a new clothing-repair category, while '处理一下' remains unclassified. "
         "Return only newly created categories in categories; never repeat or change known definitions. "
+        "Classification creates only category id/name/definition; keep each new category's examples=[] and anchor=null. "
         "Do not require amount, preparation, familiarity or scope fields. "
         "score: all tasks and references share one category. The existing anchor is permanent and equals 1. "
         "Before scoring an unscored target, identify the actual work described: a deliverable, concrete subtasks, "
@@ -202,6 +203,11 @@ RELATIVE_PIPELINE = Pipeline(
 async def analyze_relative(client, request: RelativeRequest) -> RelativeResponse:
     output = await client.complete(RELATIVE_PIPELINE, request.model_dump_json(by_alias=True, exclude_none=True))
     try:
-        return RelativeResponse.model_validate_json(output.content).validate_for(request)
+        response = RelativeResponse.model_validate_json(output.content)
+        if request.operation == "classify":
+            # The app builds category examples from persisted task bindings.
+            for category in response.categories:
+                category.examples = []
+        return response.validate_for(request)
     except (ValueError, KeyError, TypeError) as error:
         raise ModelGatewayResponseError("invalid relative duration response") from error
