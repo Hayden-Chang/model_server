@@ -171,6 +171,8 @@ RELATIVE_PIPELINE = Pipeline(
         "'修补衬衫袖口' needs a new clothing-repair category, while '处理一下' remains unclassified. "
         "Return only newly created categories in categories; never repeat or change known definitions. "
         "Classification creates only category id/name/definition; keep each new category's examples=[] and anchor=null. "
+        "For classify, every item's difficulty and the top-level anchorTaskID MUST be null, even if known "
+        "input categories contain saved anchors. Do not apply scoring instructions to classification. "
         "Do not require amount, preparation, familiarity or scope fields. "
         "score: all tasks and references share one category. The existing anchor is permanent and equals 1. "
         "Before scoring an unscored target, identify the actual work described: a deliverable, concrete subtasks, "
@@ -204,7 +206,7 @@ RELATIVE_PIPELINE = Pipeline(
         "COMPARABLE historical references in supplied order (newest first), with a short comparison reason. "
         "Same category does not by itself mean comparable. No suitable history means an empty references list, "
         "not an invented estimate. Give a concise Chinese scoring/classification reason for every item. "
-        "Always echo existing anchorTaskID when present. Output JSON only."
+        "For score only, always echo existing anchorTaskID when present. Output JSON only."
     ),
     temperature=0, max_tokens=6000, response_schema=RelativeResponse.model_json_schema(),
     thinking_mode="enabled", reasoning_effort="high", timeout_seconds=45,

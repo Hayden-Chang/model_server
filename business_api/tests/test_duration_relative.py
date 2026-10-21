@@ -87,6 +87,18 @@ def test_classification_generated_examples_do_not_allow_a_generated_anchor():
         asyncio.run(analyze_relative(model, RelativeRequest.model_validate(payload())))
 
 
+def test_classification_with_persisted_anchor_keeps_scoring_fields_empty():
+    body = payload(); body["categories"] = [category()]
+    response = result(); response["categories"] = []
+    value = validated(body, response)
+    assert value.anchor_task_id is None and value.items[0].difficulty is None
+    assert value.items[0].category_id == "script"
+    assert value.items[0].references == []
+    response["anchorTaskID"] = "baseline"
+    with pytest.raises(ValueError):
+        validated(body, response)
+
+
 def test_score_preserves_saved_difficulty_anchor_and_newest_reference_order():
     body = payload(True); body["tasks"][0]["difficulty"] = 1.5
     body["references"] = [{**text(id), "categoryID": "script", "difficulty": difficulty}
