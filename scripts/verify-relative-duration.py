@@ -3,7 +3,7 @@
 Usage: python verify-relative-duration.py preflight|public
 Preflight uses the runtime model settings and prints a synthetic-only report. Save it
 as preflight.json beside this script before public mode; public uses one fixed
-synthetic device, two successful requests and negative auth/input checks.
+synthetic device, three successful requests and negative auth/input checks.
 Credentials stay in memory. Neither mode retries a semantic failure.
 """
 import asyncio
@@ -36,6 +36,12 @@ def request(operation, tasks, categories, references=None):
 
 def dev_category():
     return {"id": "software", "name": "软件开发", "definition": "开发软件，包括界面交付和技术问题排查", "anchor": task("dev-anchor", "实现一个 SwiftUI 静态设置页面", "三个设置项：名称、开关、说明；无网络、持久化或其他业务逻辑。", difficulty=1)}
+
+
+def script_category():
+    return {"id": "script", "name": "口播文案", "definition": "为短视频撰写口播脚本",
+            "anchor": task("script-anchor", "写短视频口播文案", difficulty=1),
+            "examples": [task("script-example", "写短视频口播文案")]}
 
 
 def ui_references():
@@ -75,7 +81,7 @@ async def preflight():
         value = response.model_dump(mode="json", by_alias=True)
         report["checks"].append({"input": body, "response": value, "elapsedSeconds": round(time.monotonic()-started, 3)})
         return value
-    script = {"id": "script", "name": "口播文案", "definition": "为短视频撰写口播脚本"}
+    script = script_category()
     body = request("classify", [task("script-synonym", "写短视频口播文案"), task("piano", "练习钢琴C大调双手音阶"), task("vague", "处理一下")], [script])
     response = await analyze(body); items = {x["id"]: x for x in response["items"]}
     assert items["script-synonym"]["categoryID"] == "script", "synonym did not reuse existing category"
@@ -83,6 +89,7 @@ async def preflight():
     new = {x["id"]: x for x in response["categories"]}
     piano = items["piano"]["categoryID"]
     assert piano in new and piano != "script", "new practice category missing"
+    assert all(not category["examples"] and category["anchor"] is None for category in new.values())
     report["practiceCategory"] = new[piano]
     response = await analyze(request("score", [task("budget-30", "专注开发30分钟"), task("budget-60", "专注开发60分钟")], [dev_category()], ui_references()))
     assert all(x["difficulty"] is None and x["references"] == [] for x in response["items"]), "effort budget incorrectly produced difficulty or comparable references"
@@ -107,6 +114,15 @@ def public():
     call(route, invalid, auth=True, expected=422)
     after_invalid = call("/api/account/quota", auth=True)
     assert after_invalid["used"] == before["used"], "invalid time-field input consumed quota"
+    classification = request("classify", [task("game-1", "打游戏"), task("game-2", "打游戏"), task("meal", "吃饭")], [script_category()])
+    response = call(route, classification, auth=True)
+    categories = {category["id"]: category for category in response["categories"]}
+    classified = {item["id"]: item for item in response["items"]}
+    assert all(item["categoryID"] in categories and item["difficulty"] is None for item in classified.values())
+    assert classified["game-1"]["categoryID"] == classified["game-2"]["categoryID"] != classified["meal"]["categoryID"]
+    assert all(not category["examples"] and category["anchor"] is None for category in categories.values())
+    after_classify = call("/api/account/quota", auth=True)
+    assert after_classify["used"] == before["used"] + 1, "classification did not consume exactly one quota"
     response = call(route, body, auth=True); values = {x["id"]: x for x in response["items"]}
     assert response["anchorTaskID"] == "dev-anchor", "fixed anchor changed"
     assert values["saved"]["difficulty"] == 1.75, "persisted difficulty changed"
@@ -116,15 +132,15 @@ def public():
     assert 1 <= len(selected) <= 5 and selected == ["ui-6", "ui-5", "ui-4", "ui-3", "ui-2", "ui-1"][:len(selected)], "did not select newest genuinely comparable references"
     report["selectedReferences"] = selected
     after_one = call("/api/account/quota", auth=True)
-    assert after_one["used"] == before["used"] + 1, "one successful model call did not consume exactly one quota"
+    assert after_one["used"] == before["used"] + 2, "classification and score did not consume exactly two quotas"
     category = json.loads((root / "preflight.json").read_text())["practiceCategory"]
     bootstrap = request("score", [task("practice-anchor", "练习钢琴C大调双手一个八度音阶", "慢速连奏，完成规定音阶练习")], [category], [])
     response = call(route, bootstrap, auth=True)
     assert response["anchorTaskID"] == "practice-anchor" and response["items"][0]["difficulty"] == 1 and response["items"][0]["references"] == [], "history-free category did not establish exactly one text anchor"
     after_two = call("/api/account/quota", auth=True)
-    assert after_two["used"] == before["used"] + 2, "two successful requests consumed unexpected quota"
-    report["quotaDelta"] = 2
-    report["publicModelRequests"] = 2
+    assert after_two["used"] == before["used"] + 3, "three successful requests consumed unexpected quota"
+    report["quotaDelta"] = 3
+    report["publicModelRequests"] = 3
 
 
 try:
