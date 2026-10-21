@@ -111,6 +111,33 @@ def test_bootstrap_requires_one_explicit_target_anchor_and_allows_abstention():
     assert validated(body, response).items[0].difficulty is None
 
 
+def test_routine_history_bootstraps_and_remains_comparable_without_time_fields():
+    meal = {"id": "meal", "name": "吃饭", "definition": "进食一餐的日常活动"}
+    history = {"id": "history", "title": "吃饭", "note": ""}
+    body = {"requestID": "routine-history", "operation": "score", "tasks": [history], "categories": [meal]}
+    response = {"requestID": body["requestID"], "operation": "score", "categories": [], "anchorTaskID": "history",
+                "items": [{"id": "history", "categoryID": "meal", "difficulty": 1,
+                           "reason": "一次日常用餐作为基准", "references": []}]}
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    saved = asyncio.run(analyze_relative(model, RelativeRequest.model_validate(body)))
+    assert saved.anchor_task_id == "history"
+    assert saved.items[0].difficulty == 1
+    assert json.loads(model.calls[0][1]) == RelativeRequest.model_validate(body).model_dump(by_alias=True, exclude_none=True)
+
+    body = {"requestID": "routine-current", "operation": "score",
+            "tasks": [{"id": "current", "title": "吃饭", "note": ""}],
+            "categories": [{**meal, "anchor": {**history, "difficulty": saved.items[0].difficulty}}],
+            "references": [{**history, "categoryID": "meal", "difficulty": saved.items[0].difficulty}]}
+    response = {**response, "requestID": body["requestID"], "items": [
+        {"id": "current", "categoryID": "meal", "difficulty": 1, "reason": "同为一次日常用餐",
+         "references": [{"id": "history", "reason": "相同活动与范围"}]}]}
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    value = asyncio.run(analyze_relative(model, RelativeRequest.model_validate(body)))
+    assert value.items[0].difficulty == 1
+    assert [reference.id for reference in value.items[0].references] == ["history"]
+    assert json.loads(model.calls[0][1]) == RelativeRequest.model_validate(body).model_dump(by_alias=True, exclude_none=True)
+
+
 @pytest.mark.parametrize("change", ["request", "operation", "missing", "duplicate", "foreign", "category", "anchor"])
 def test_invalid_identity_and_scale_fail_closed(change):
     response = result(True)
