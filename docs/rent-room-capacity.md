@@ -82,3 +82,17 @@ Compose 默认不发布新端口，仅 Caddy 公网 443；数据库在独立卷 
 用户已在iPhone确认首笔¥1.99购买到账显示1/12、错误提示消失，退出重新登录后仍为1/12。部署6fb4abe后，真实微信会话连续两次原订单查询均为HTTP200、paid、1包、总容量12；应用auth服务退出重登也恢复12，未创建新订单或调用支付。
 
 用户明确授权验证后合并前后端PR，并暂缓退款及容量回收的实单测试。**退款回收实单未验收**，自动化退款用例不替代实单。换机和Android实单同样未验收；合入代码不代表新增部署、上传正式版或平台审核发布。
+
+
+### 原生 iOS StoreKit 扩容（草稿，2026-10-20）
+
+原生 iOS 使用独立 StoreKit 消耗型商品，每笔已验证交易增加10套；两套免费容量规则保持不变。此通道与微信虚拟支付开关、签名和订单表独立。`/api/rent-room/ios/storekit/context` 返回当前账号稳定的 appAccountToken、商品可用状态及带版本的容量；`verify` 仅接收交易编号，服务端向 Apple Get Transaction Info 查询并用官方 Python SDK 3.1.0 验证签名、证书链、Bundle ID、商品、环境、消耗型、购买归属、数量和账号标识后落账。客户端回调不能直接授予容量。
+
+交易表以环境与交易编号唯一，通知 UUID 去重，同一交易账号不可更换。重复确认只返回既有结果；退款回收容量，旧签名版本和迟到通知不能恢复已撤销权益，新版本权威记录支持退款撤销。容量版本涵盖微信与 Apple 账本变化。`restore` 与 context 对已知交易重新查询 Apple；服务暂时失败时保留已确认账本，不将失败当成0包。客户端必须等服务端落账并保存本机缓存后才 finish，因而 iOS17 的未完成交易和服务端已知编号可以补偿；iOS18+额外启用已完成消耗型历史。恢复权益不等于房源云同步，须使用购买时的寻居账号。
+
+默认关闭 `RENT_ROOM_STOREKIT_ENABLED`。需在服务端配置 `RENT_ROOM_IOS_BUNDLE_ID`、`RENT_ROOM_STOREKIT_PRODUCT_ID`、`RENT_ROOM_STOREKIT_ENVIRONMENT`（仅 Production / Sandbox）、Production必需的 `RENT_ROOM_STOREKIT_APP_APPLE_ID`、`RENT_ROOM_STOREKIT_KEY_ID / ISSUER_ID / KEY_PATH`，以及现有独立会话密钥。p8只通过服务端受限文件挂载/已有私有卷提供，不放入Git、App或日志。凭据配置齐全后可在关闭新购时继续补发和恢复；不接受 Xcode / LocalTesting 环境作为服务端权益。
+
+App Store Server Notifications V2 的 HTTPS 回调路径为 `/api/rent-room/ios/storekit/notifications`，先验证外层与内层签名，按服务端颁发的账号标识归属，再重新查询 Apple 权威记录。生产与沙箱应使用各自配置和账本环境。正式商品、服务密钥、回调配置、沙箱及真实购买/退款/换机尚未完成；此草稿未部署、未开放收费。
+
+
+验证源码 `6608d9ca3f017402c7d9708b41d588aa1beca3c3`：新StoreKit测试及受影响的原容量/原生认证文件共 **114 passed**（6.43秒）；官方 SDK 的外层通知及交易证书链/签名验证使用本地测试证书和HTTP替身，另覆盖重复、并发、跨账号、伪造商品/环境/数量、退款、乱序与退款撤销、失败后保留及数据库迁移。不是实际 Apple 服务或收费验收。首次隔离环境112项通过，既有Compose用例因缺少PyYAML未运行成功；补装依赖后该方法单独通过，再在固定源码上完整跑上述3个相关文件，114项全过。原始日志和来源见忽略目录 `artifacts/ios-storekit-20261020/`。未运行其他业务全套UT，未合并、部署或发布。
