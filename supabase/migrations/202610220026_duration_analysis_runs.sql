@@ -28,6 +28,19 @@ create table ai_private.duration_steps (
   primary key(principal,environment,run_id,key),
   foreign key(principal,environment,run_id) references ai_private.duration_runs on delete cascade
 );
+-- Keep transport command receipts even after a lease is replaced or work fails.
+create table ai_private.duration_commands (
+  environment text not null,
+  attempt uuid not null,
+  principal text not null,
+  run_id text not null,
+  kind text not null check(kind in ('claim','retry')),
+  key text,
+  primary key(environment,attempt),
+  foreign key(principal,environment,run_id) references ai_private.duration_runs on delete cascade
+);
+alter table ai_private.duration_commands enable row level security;
+revoke all on ai_private.duration_commands from public,anon,authenticated;
 alter table ai_private.duration_runs enable row level security;
 alter table ai_private.duration_steps enable row level security;
 revoke all on ai_private.duration_runs,ai_private.duration_steps from public,anon,authenticated;
@@ -85,13 +98,27 @@ create function public.duration_analysis_run_service(p_action text,p_data jsonb)
 language plpgsql security definer set search_path='' as $$
 declare
   actor text:=p_data->>'principal'; env text:=p_data->>'billingEnvironment'; run_key text:=p_data->>'runID';
-  r ai_private.duration_runs; s ai_private.duration_steps; step jsonb; q jsonb; qdata jsonb;
+  r ai_private.duration_runs; s ai_private.duration_steps; command ai_private.duration_commands; step jsonb; q jsonb; qdata jsonb;
   attempt_id uuid:=(p_data->>'attempt')::uuid;
 begin
   if env not in ('sandbox','production') or env is null then raise exception 'BILLING_INVALID_ENVIRONMENT'; end if;
   if p_action='claim' then
     -- Service-only queue. Lock run before step; every process shares this limit.
     delete from ai_private.duration_runs where created_at < clock_timestamp()-interval '30 days';
+    perform pg_advisory_xact_lock(hashtextextended('duration-claim:' || env || ':' || attempt_id::text,0));
+    select * into command from ai_private.duration_commands where environment=env and attempt=attempt_id;
+    if found then
+      if command.kind<>'claim' then return '{}'::jsonb; end if;
+      select * into strict r from ai_private.duration_runs where principal=command.principal
+        and environment=env and id=command.run_id for update;
+      select * into strict s from ai_private.duration_steps where principal=r.principal
+        and environment=env and run_id=r.id and key=command.key;
+      if s.state<>'running' or s.attempt is distinct from attempt_id or s.lease_until<=clock_timestamp() then
+        return '{}'::jsonb;
+      end if;
+      return jsonb_build_object('principal',r.principal,'billingEnvironment',r.environment,'runID',r.id,
+        'key',s.key,'input',s.input,'runInput',r.input,'classification',r.classification,'inputHash',s.input_hash,'attempt',attempt_id);
+    end if;
     select runs.* into r from ai_private.duration_runs runs
       where runs.environment=env and runs.state in ('queued','running')
         and (select count(*) from ai_private.duration_steps x where x.principal=runs.principal
@@ -120,6 +147,8 @@ begin
       and environment=r.environment and run_id=r.id
       and (state='queued' or state='running' and lease_until<=clock_timestamp())
       order by key for update limit 1;
+    insert into ai_private.duration_commands(environment,attempt,principal,run_id,kind,key)
+      values(env,attempt_id,r.principal,r.id,'claim',s.key);
     update ai_private.duration_steps set state='running',attempt=attempt_id,
       lease_until=clock_timestamp()+interval '120 seconds',error=null
       where principal=s.principal and environment=s.environment and run_id=s.run_id and key=s.key;
@@ -148,6 +177,15 @@ begin
   else
     if not found then return jsonb_build_object('code','ANALYSIS_RUN_NOT_FOUND'); end if;
     if p_action='retry' then
+      select * into command from ai_private.duration_commands where environment=env and attempt=attempt_id;
+      if found then
+        if command.kind<>'retry' or command.principal<>actor or command.run_id<>run_key then
+          return jsonb_build_object('code','ANALYSIS_STALE_ATTEMPT');
+        end if;
+        return ai_private.duration_status(r);
+      end if;
+      insert into ai_private.duration_commands(environment,attempt,principal,run_id,kind)
+        values(env,attempt_id,actor,run_key,'retry');
       if r.state not in ('partial','failed') then return ai_private.duration_status(r); end if;
       if r.points='refunded' then
         q:=public.ai_quota_service('reserve',r.quota_data || jsonb_build_object('attempt',attempt_id));

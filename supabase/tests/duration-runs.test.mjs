@@ -29,6 +29,7 @@ test('start reserves once, immutable replay and private status are isolated',asy
   for(const role of ['anon','authenticated']){
     await assert.rejects(db.rpc(null,'duration_analysis_run_service',['get',p],role),/permission denied/);
     await assert.rejects(db.call(null,'select * from ai_private.duration_runs',[],role),/permission denied/);
+    await assert.rejects(db.call(null,'select * from ai_private.duration_commands',[],role),/permission denied/);
   }
 });
 
@@ -125,4 +126,36 @@ test('queue consumers cannot claim another billing environment',async()=>{
   const p=identity();await start(p);
   assert.deepEqual(await rpc('claim',{billingEnvironment:'production',attempt:randomUUID()}),{});
   assert.ok((await claim()).key);
+});
+
+
+test('lost claim response replays only its original live lease and never consumes another job',async()=>{
+  const p=identity();await start(p,[step('a'),step('b')]);
+  const data={billingEnvironment:'sandbox',attempt:randomUUID()};
+  const first=await rpc('claim',data);const replay=await rpc('claim',data);
+  assert.deepEqual(replay,first);
+  const concurrent=await Promise.all(Array.from({length:8},()=>rpc('claim',data)));
+  assert.ok(concurrent.every(value=>JSON.stringify(value)===JSON.stringify(first)));
+  assert.equal((await rpc('get',p)).steps.filter(x=>x.status==='running').length,1);
+  await db.admin.query("update ai_private.duration_steps set lease_until=now()-interval '1 second' where attempt=$1",[data.attempt]);
+  const recovered=await claim();assert.equal(recovered.key,first.key);
+  assert.deepEqual(await rpc('claim',data),{},'expired claim cannot acquire another job after replacement');
+  assert.equal((await finish(first)).code,'ANALYSIS_STALE_ATTEMPT');
+  await finish(recovered);
+  assert.deepEqual(await rpc('claim',data),{},'settled claim cannot acquire another job');
+  const next=await claim();assert.equal(next.key,'b');await finish(next);
+  assert.equal((await quota('status',p)).used,1);
+});
+
+test('lost retry response cannot requeue work that already failed again',async()=>{
+  const p=identity();await start(p);await rpc('fail',await claim());
+  const data={...p,attempt:randomUUID()};
+  await rpc('retry',data);await rpc('fail',await claim());
+  assert.equal((await quota('status',p)).used,0);
+  const replay=await rpc('retry',data);
+  assert.equal(replay.status,'failed');assert.equal(replay.steps[0].status,'failed');
+  assert.equal((await quota('status',p)).used,0);
+  assert.deepEqual(await claim(),{});
+  await rpc('retry',{...p,attempt:randomUUID()});await finish(await claim());
+  assert.equal((await quota('status',p)).used,1);
 });
