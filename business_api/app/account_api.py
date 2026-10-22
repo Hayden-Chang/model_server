@@ -1,5 +1,6 @@
 """Public DayMosaic API. Identity/quota are resolved before private planning."""
 
+import asyncio
 import json
 import logging
 import secrets
@@ -26,6 +27,8 @@ from .guest_auth import GuestTokenCodec, GuestTokenError
 from .planning_auth import body_hash
 from .duration_profiles import DurationProfileRequest, DurationProfileResponse
 from .duration_relative import RelativeRequest, RelativeResponse
+from .duration_dynamic import AnalysisRunRequest
+from .duration_runs import DurationRuns
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 LOGGER = logging.getLogger(__name__)
@@ -99,8 +102,9 @@ class BillingSyncRequest(BaseModel):
     transaction: BillingVerifyRequest | None
 
 
-def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
+def create_account_api(settings: AccountAPISettings, backend=None, *, run_workers=True) -> FastAPI:
     backend = backend or AccountBackend(settings)
+    duration_runs = DurationRuns(backend)
     apple_client = None
     apple_key_p8 = resolve_apple_key_p8(settings)
     if apple_key_p8 is not None:
@@ -111,7 +115,13 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
     tokens = GuestTokenCodec(settings.time_fragment_token_secret.get_secret_value(), settings.time_fragment_token_ttl_seconds)
     @asynccontextmanager
     async def lifespan(_):
-        yield
+        worker = asyncio.create_task(duration_runs.worker()) if run_workers and isinstance(backend, AccountBackend) else None
+        try:
+            yield
+        finally:
+            if worker:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
         await backend.close()
         if apple_client is not None:
             await apple_client.aclose()
@@ -298,6 +308,18 @@ def create_account_api(settings: AccountAPISettings, backend=None) -> FastAPI:
         await quota("finish", current, diagnostic_request_id=request.state.request_id,
                     requestID=payload.request_id, attempt=attempt, consume=True)
         return response
+
+    @app.post("/api/duration/analysis-runs", status_code=202)
+    async def start_duration_run(payload: AnalysisRunRequest, current: Actor = Depends(billing_device)):
+        return await duration_runs.start(current, payload)
+
+    @app.get("/api/duration/analysis-runs/{run_id}")
+    async def duration_run_status(run_id: str, current: Actor = Depends(billing_device)):
+        return await duration_runs.status(current, run_id)
+
+    @app.post("/api/duration/analysis-runs/{run_id}/retry", status_code=202)
+    async def retry_duration_run(run_id: str, current: Actor = Depends(billing_device)):
+        return await duration_runs.status(current, run_id, retry=True)
 
     @app.post("/api/duration/relative-analysis", response_model=RelativeResponse)
     async def relative_duration(payload: RelativeRequest, request: Request,

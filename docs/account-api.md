@@ -358,3 +358,43 @@ Local PostgreSQL role tests prove SQL authorization, not the hosted JWT verifier
 production cutover requires separate hosted Auth/HTTP verification. App account UI,
 cloud-sync integration, Apple/Google purchase validation, paid memberships, and
 inbox placement remain separate work.
+
+## Durable dynamic duration analysis
+
+`POST /api/duration/analysis-runs` accepts a stable `runID`, category definitions,
+current task text/bindings, and completed history text/minutes/completion instants.
+It returns 202 promptly. `GET /api/duration/analysis-runs/{runID}` replays saved
+classification and category results. `POST .../{runID}/retry` queues failed steps
+only; all three routes require the existing device guest token.
+
+The App bootstraps classification from its latest 30 days when no categories
+exist. New unclassified history is included thereafter. The server checkpoints
+classification pages (at most 128 tasks each) using the accumulated catalog, then
+scores each current category jointly with its latest five completed records.
+Pages are internal implementation steps in the same run, not separately billed
+public requests. Current tasks and those historical tasks receive finite positive
+scores on one batch scale, even with sparse text; absence of comparable history
+only prevents a historical duration suggestion. The App computes the average
+minutes per unit difficulty and rounds the result upward to 15 minutes locally.
+The old fixed-anchor `/api/duration/relative-analysis` contract is unchanged.
+The new internal pipeline retains thinking=enabled and reasoning_effort=high.
+
+Migration `202610220026_duration_analysis_runs.sql` must be applied before
+activating the new routes. Its service-role-only RPC owns immutable inputs,
+step leases, attempt fencing, cached results and quota settlement. A run reserves
+at most one net point; the first usable category result and its debit commit
+atomically. All-failed runs refund; same-run retries preserve successful results
+and never add another consumed point. A pure cache hit consumes zero. Cache reuse
+requires a complete server-owned result with the same category/input/rule hash,
+identity and environment. Local-only full cache reuse does not call start at all.
+A restart recovers queued/expired steps; up to 20 categories may be active per run
+across API processes, with remaining categories queued. Internal calls have a
+55-second transport limit within 120-second leases. Quota holds are renewed in
+the existing ledger lock order. A provider response lost before its database
+checkpoint may be recomputed after lease recovery, without an extra point.
+
+Unlike the legacy planner's redacted receipt, this opt-in feature stores its
+frozen input and results privately for at most 30 days (purged by the queue).
+Do not expose the service RPC or private tables to anon/authenticated roles.
+Deploy the migration and both API services together; do not run a new App against
+an old backend. This change does not itself authorize deployment.
