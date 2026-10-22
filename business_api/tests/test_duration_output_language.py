@@ -1,10 +1,23 @@
+import asyncio
+from copy import deepcopy
+
+import pytest
+from pydantic import ValidationError
+
+from app.duration_dynamic import (AnalysisRunRequest, DynamicStepRequest, analyze_dynamic,
+    category_steps, classification_step, fingerprint, validate_dynamic_result)
+from app.duration_runs import DurationRuns
+from app.model_client import ModelGatewayResponseError
+from test_duration_dynamic import joint, output
+from test_time_fragment_api import FakeModelClient, raw_output, settings
+
 import json
 
 import httpx
 from fastapi.testclient import TestClient
 
 from app.account_api import create_account_api
-from app.account_backend import AccountBackend
+from app.account_backend import AccountBackend, Actor
 from test_account_api import configuration
 from test_duration_dynamic import body
 from test_time_fragment_api import guest_headers
@@ -33,18 +46,6 @@ def test_public_run_accepts_english_language_and_checkpoints_it(configuration):
         assert data["input"]["language"] == "en"
         assert data["steps"][0]["input"]["language"] == "en"
 
-import asyncio
-from copy import deepcopy
-
-import pytest
-from pydantic import ValidationError
-
-from app.duration_dynamic import (AnalysisRunRequest, DynamicStepRequest, analyze_dynamic,
-    category_steps, classification_step, fingerprint, validate_dynamic_result)
-from app.duration_runs import DurationRuns
-from app.model_client import ModelGatewayResponseError
-from test_duration_dynamic import joint, output
-from test_time_fragment_api import FakeModelClient, raw_output, settings
 
 
 def english_output():
@@ -203,7 +204,6 @@ def test_legacy_start_hash_keeps_null_category_ids_and_omits_new_language(config
             assert "categoryID" in sent["input"]["currentTasks"][0]
             assert "language" not in sent["steps"][0]["input"]
             return {"status": "running"}
-    from app.account_backend import Actor
     asyncio.run(DurationRuns(Backend()).start(Actor("guest_" + "a" * 24), AnalysisRunRequest.model_validate(payload)))
 
 
