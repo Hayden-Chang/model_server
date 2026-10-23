@@ -6,10 +6,11 @@ import sqlite3
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, suppress
+from typing import Literal
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .rent_room_settings import RentRoomSettings
 from .rent_room_product import PRODUCT
@@ -29,6 +30,22 @@ class OrderRequest(BaseModel):
     platform: str = Field(default="unknown", pattern=r"^(ios|android|unknown)$")
 
 
+class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requestId: str = Field(pattern=r"^[A-Za-z0-9_-]{16,64}$")
+    ease: Literal["方便", "一般", "不方便"] | None = None
+    checklist: Literal["合理", "一般", "不合理"] | None = None
+    functionality: Literal["目前正常", "遇到问题"] | None = None
+    message: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def nonempty(self):
+        self.message = self.message.strip()
+        if not any((self.ease, self.checklist, self.functionality, self.message)):
+            raise ValueError("请至少填写一项反馈")
+        return self
+
+
 def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60):
     settings = settings or RentRoomSettings()
     ledger = store or RentRoomStore(settings.db_path)
@@ -38,6 +55,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
     push = SecurePush(settings) if settings.push_token and settings.push_aes_key else None
     account_locks = defaultdict(asyncio.Lock)
     login_limits = defaultdict(deque)
+    feedback_limits = defaultdict(deque)
 
     @asynccontextmanager
     async def lifespan(_):
@@ -86,9 +104,11 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
             raise HTTPException(401, detail={"message": "微信登录已过期，请重试"}) from error
         return session
 
-    def entitlement(account):
+    def entitlement(account, request):
         packs = ledger.packs(account)
-        return {"packs": packs, "limit": 2 + 10 * packs}
+        # Legacy clients validate the historical two-free-slot response strictly.
+        free = 1 if request.headers.get("x-rent-room-capacity-version") == "1" else 2
+        return {"packs": packs, "limit": free + 10 * packs}
 
     async def reconcile(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":
@@ -167,6 +187,26 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return {"available": settings.payment_ready, "iosAvailable": settings.payment_ready and settings.ios_payments_enabled,
                 "product": PRODUCT}
 
+    @app.post("/api/rent-room/feedback", status_code=201)
+    async def feedback(body: FeedbackRequest, request: Request):
+        # First-use feedback also works before login. Do not collect house
+        # content, WeChat identity, or an arbitrary client-supplied account ID.
+        now = time.monotonic()
+        address = request.headers.get("x-forwarded-for", "").split(",")[-1].strip() or (request.client.host if request.client else "unknown")
+        if address not in feedback_limits and len(feedback_limits) >= 10000:
+            feedback_limits.clear()
+        attempts = feedback_limits[address]
+        while attempts and attempts[0] < now - 300:
+            attempts.popleft()
+        if len(attempts) >= 20:
+            raise HTTPException(429, detail={"message": "提交过于频繁，请稍后重试"})
+        attempts.append(now)
+        try:
+            receipt = ledger.save_feedback(body.requestId, compact(body.model_dump(exclude={"requestId"})))
+        except ValueError as error:
+            raise HTTPException(409, detail={"message": "反馈内容已变化，请重新提交"}) from error
+        return {"receipt": receipt}
+
     @app.post("/api/rent-room/session")
     async def login(body: LoginRequest, request: Request):
         if not settings.login_ready:
@@ -188,16 +228,16 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         if settings.payment_configured:
             await reconcile_due(account)
         token = ledger.create_session(account, result["openid"], cipher.encrypt(result["session_key"].encode()).decode())
-        return {"account": account, "token": token, **entitlement(account)}
+        return {"account": account, "token": token, **entitlement(account, request)}
 
     @app.get("/api/rent-room/entitlements")
-    async def entitlements(session=Depends(current_session)):
+    async def entitlements(request: Request, session=Depends(current_session)):
         if settings.payment_configured:
             await reconcile_due(session["account"])
-        return entitlement(session["account"])
+        return entitlement(session["account"], request)
 
     @app.post("/api/rent-room/orders")
-    async def create_order(body: OrderRequest, session=Depends(current_session)):
+    async def create_order(body: OrderRequest, request: Request, session=Depends(current_session)):
         if not settings.payment_ready or body.platform == "ios" and not settings.ios_payments_enabled:
             raise unavailable()
         async with account_locks[session["account"]]:
@@ -205,21 +245,21 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 order = ledger.create_order(session, body.requestId)
             except ValueError as error:
                 raise HTTPException(429, detail={"message": str(error)}) from error
-            response = {"orderId": order["id"], "status": order["state"], **entitlement(session["account"])}
+            response = {"orderId": order["id"], "status": order["state"], **entitlement(session["account"], request)}
             if order["state"] == "unpaid":
                 response["payment"] = wechat.payment(order, cipher.decrypt(session["session_key"].encode()).decode())
             return response
 
     @app.get("/api/rent-room/orders/request/{request_id}")
-    async def order_status(request_id: str, session=Depends(current_session)):
+    async def order_status(request_id: str, request: Request, session=Depends(current_session)):
         async with account_locks[session["account"]]:
             order = ledger.order(session["account"], request_id)
             if not order:
-                return {"status": "missing", **entitlement(session["account"])}
+                return {"status": "missing", **entitlement(session["account"], request)}
             if not settings.payment_configured:
                 raise unavailable("购买记录暂时无法确认，请稍后重试")
             state = await reconcile(order)
-            return {"status": state, **entitlement(session["account"])}
+            return {"status": state, **entitlement(session["account"], request)}
 
     @app.get("/api/rent-room/wechat/notify")
     async def verify_push(request: Request):

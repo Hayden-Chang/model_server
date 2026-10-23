@@ -39,6 +39,9 @@ class RentRoomStore:
                 id TEXT PRIMARY KEY, wx_id TEXT UNIQUE NOT NULL, order_id TEXT NOT NULL,
                 fee INTEGER NOT NULL, ret_code INTEGER NOT NULL, created INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rr_feedback (
+                request_id TEXT PRIMARY KEY, body TEXT NOT NULL, created INTEGER NOT NULL
+            );
         """)
         # Rows from the previous catalog retain their original 190-fen contract.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(rr_orders)")}
@@ -51,6 +54,16 @@ class RentRoomStore:
 
     def close(self):
         self.db.close()
+
+    def save_feedback(self, request_id, body):
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            existing = self.db.execute("SELECT body FROM rr_feedback WHERE request_id=?", (request_id,)).fetchone()
+            if existing and existing["body"] != body:
+                raise ValueError("Feedback idempotency conflict")
+            if not existing:
+                self.db.execute("INSERT INTO rr_feedback VALUES (?,?,?)", (request_id, body, int(time.time())))
+        return request_id
 
     def create_session(self, account, openid, encrypted_key):
         token = secrets.token_urlsafe(32)
