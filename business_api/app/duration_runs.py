@@ -27,6 +27,8 @@ class DurationRuns:
 
     async def start(self, actor, request: AnalysisRunRequest):
         body = request.model_dump(mode="json", by_alias=True)
+        if request.language is None:
+            body.pop("language", None)  # Preserve the hash of pre-language requests on replay.
         classification = classification_step(request)
         steps = ([{"key": "__classify__", "input": classification, "inputHash": fingerprint(classification)}]
                  if classification else category_steps(request))
@@ -46,7 +48,7 @@ class DurationRuns:
         try:
             payload = DynamicStepRequest.model_validate(claim["input"])
             result = await self.backend._inference(Actor(claim["principal"]),
-                payload.model_dump(mode="json", by_alias=True), claim["attempt"], claim["runID"],
+                payload.model_dump(mode="json", by_alias=True, exclude_none=True), claim["attempt"], claim["runID"],
                 "/internal/time-fragment/dynamic-duration")
             result = validate_dynamic_result(payload, result)
             steps = []
@@ -61,7 +63,9 @@ class DurationRuns:
                     steps = category_steps(original, result)
             else:
                 result = dict(result, rulesVersion=1, categoryID=claim["key"], inputHash=claim["inputHash"],
-                    scaleID=claim["runID"] + ":" + claim["key"], category=claim["input"]["categories"][0],
+                    scaleID=claim["runID"] + ":" + claim["key"], language=payload.language or "zh-Hans",
+                    category=result.get("category") or claim["input"]["categories"][0],
+                    categoryInput=claim["input"]["categories"][0],
                     currentTasks=claim["input"]["currentTasks"], historyTasks=claim["input"]["historyTasks"])
         except asyncio.CancelledError:
             raise  # Leave the lease recoverable; never mark cancellation as success.

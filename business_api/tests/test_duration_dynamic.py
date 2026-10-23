@@ -104,7 +104,7 @@ def test_recent_five_and_minutes_are_in_snapshot_fingerprint_without_twenty_tota
 
 
 def test_internal_dynamic_route_requires_body_bound_auth_and_keeps_private_inputs(settings):
-    payload=joint().model_dump(mode="json",by_alias=True)
+    payload=joint().model_dump(mode="json",by_alias=True,exclude_none=True)
     client=FakeModelClient([raw_output(json.dumps(output(),ensure_ascii=False))])
     config=settings.model_copy(update={"planning_internal_secret":SecretStr(SECRET),"planning_internal_only":True})
     app=create_app(config,client)

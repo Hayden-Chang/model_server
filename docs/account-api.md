@@ -363,6 +363,14 @@ inbox placement remain separate work.
 
 `POST /api/duration/analysis-runs` accepts a stable `runID`, category definitions,
 current task text/bindings, and completed history text/minutes/completion instants.
+The optional `language` is `en` or `zh-Hans`; omitted legacy requests use Simplified
+Chinese. It applies to generated category display names/definitions, baseline and
+scoring explanations, and reference reasons. Original task titles/notes and category
+IDs stay unchanged. Joint results carry localized `category` display metadata plus
+immutable `categoryInput`, and snapshots record their `language`. Language participates
+in run/step hashes so cached results cannot cross languages. Legacy inputs retain
+their original hash shape when the field is absent. English generated fields containing
+Chinese text are rejected rather than cached as a successful English result.
 It returns 202 promptly. `GET /api/duration/analysis-runs/{runID}` replays saved
 classification and category results. `POST .../{runID}/retry` queues failed steps
 only; all three routes require the existing device guest token.
