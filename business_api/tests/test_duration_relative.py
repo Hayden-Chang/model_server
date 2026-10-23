@@ -10,7 +10,9 @@ from app.account_api import create_account_api
 from app.account_backend import AccountBackend, Actor, failure
 from app.duration_relative import RelativeRequest, RelativeResponse, analyze_relative
 from app.factory import create_app
-from app.model_client import ModelGatewayResponseError
+from app.model_client import LiteLLMClient, ModelGatewayResponseError
+from app.duration_profiles import PROFILE_PIPELINE
+from app.pipelines import PIPELINES
 from app.planning_auth import PlanningCredentials
 from test_account_api import Backend, configuration, device_headers, account_headers, SECRET
 from test_time_fragment_api import FakeModelClient, raw_output, settings
@@ -85,6 +87,18 @@ def test_classification_generated_examples_do_not_allow_a_generated_anchor():
         asyncio.run(analyze_relative(model, RelativeRequest.model_validate(payload())))
 
 
+def test_classification_with_persisted_anchor_keeps_scoring_fields_empty():
+    body = payload(); body["categories"] = [category()]
+    response = result(); response["categories"] = []
+    value = validated(body, response)
+    assert value.anchor_task_id is None and value.items[0].difficulty is None
+    assert value.items[0].category_id == "script"
+    assert value.items[0].references == []
+    response["anchorTaskID"] = "baseline"
+    with pytest.raises(ValueError):
+        validated(body, response)
+
+
 def test_score_preserves_saved_difficulty_anchor_and_newest_reference_order():
     body = payload(True); body["tasks"][0]["difficulty"] = 1.5
     body["references"] = [{**text(id), "categoryID": "script", "difficulty": difficulty}
@@ -109,6 +123,40 @@ def test_bootstrap_requires_one_explicit_target_anchor_and_allows_abstention():
         validated(body, response)
     response["anchorTaskID"] = None; response["items"][0]["difficulty"] = None
     assert validated(body, response).items[0].difficulty is None
+
+
+def test_routine_history_bootstraps_and_remains_comparable_without_time_fields():
+    meal = {"id": "meal", "name": "吃饭", "definition": "进食一餐的日常活动"}
+    history = {"id": "history", "title": "吃饭", "note": ""}
+    body = {"requestID": "routine-history", "operation": "score", "tasks": [history], "categories": [meal]}
+    response = {"requestID": body["requestID"], "operation": "score", "categories": [], "anchorTaskID": "history",
+                "items": [{"id": "history", "categoryID": "meal", "difficulty": 1,
+                           "reason": "一次日常用餐作为基准", "references": []}]}
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    saved = asyncio.run(analyze_relative(model, RelativeRequest.model_validate(body)))
+    assert saved.anchor_task_id == "history"
+    assert saved.items[0].difficulty == 1
+    assert json.loads(model.calls[0][1]) == RelativeRequest.model_validate(body).model_dump(by_alias=True, exclude_none=True)
+
+    body = {"requestID": "routine-current", "operation": "score",
+            "tasks": [{"id": "current", "title": "吃饭", "note": ""}],
+            "categories": [{**meal, "anchor": {**history, "difficulty": saved.items[0].difficulty}}],
+            "references": [{**history, "categoryID": "meal", "difficulty": saved.items[0].difficulty}]}
+    response = {**response, "requestID": body["requestID"], "items": [
+        {"id": "current", "categoryID": "meal", "difficulty": 1, "reason": "同为一次日常用餐",
+         "references": [{"id": "history", "reason": "相同活动与范围"}]}]}
+    model = FakeModelClient([raw_output(json.dumps(response, ensure_ascii=False))])
+    value = asyncio.run(analyze_relative(model, RelativeRequest.model_validate(body)))
+    assert value.items[0].difficulty == 1
+    assert [reference.id for reference in value.items[0].references] == ["history"]
+    assert json.loads(model.calls[0][1]) == RelativeRequest.model_validate(body).model_dump(by_alias=True, exclude_none=True)
+
+
+def test_bootstrap_positive_score_requires_explicit_anchor_id():
+    body = payload(True); body["categories"] = [category(False)]
+    response = result(True); response["anchorTaskID"] = None; response["items"][0]["difficulty"] = 1
+    with pytest.raises(ValueError):
+        validated(body, response)
 
 
 @pytest.mark.parametrize("change", ["request", "operation", "missing", "duplicate", "foreign", "category", "anchor"])
@@ -162,10 +210,34 @@ def test_real_model_boundary_contains_text_and_saved_scores_but_no_local_time():
     value = asyncio.run(analyze_relative(model, request))
     assert value.items[0].difficulty == 1.5
     assert json.loads(model.calls[0][1]) == request.model_dump(by_alias=True, exclude_none=True)
-    assert model.calls[0][0].thinking_mode == "disabled"
+    assert model.calls[0][0].thinking_mode == "enabled"
+    assert model.calls[0][0].reasoning_effort == "high"
     bad = result(True); bad["anchorTaskID"] = "changed"
     model = FakeModelClient([raw_output(json.dumps(bad))])
     with pytest.raises(ModelGatewayResponseError): asyncio.run(analyze_relative(model, request))
+
+
+@pytest.mark.parametrize("score", [False, True], ids=["classify", "score"])
+def test_relative_operations_enable_high_effort_without_exposing_reasoning(monkeypatch, settings, score):
+    captured = {}
+
+    async def fake_post(self, url, **kwargs):
+        captured.update(kwargs["json"])
+        assert self.timeout.read == 45
+        return httpx.Response(200, json={"model": "primary-model", "choices": [{"message": {
+            "content": json.dumps(result(score), ensure_ascii=False),
+            "reasoning_content": "internal reasoning must stay private"}}]})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    value = asyncio.run(analyze_relative(LiteLLMClient(settings), RelativeRequest.model_validate(payload(score))))
+    assert captured["thinking"] == {"type": "enabled"}
+    assert captured["reasoning_effort"] == "high"
+    assert captured["model"] == "primary-model"
+    assert captured["max_tokens"] == 6000
+    assert json.loads(captured["messages"][-1]["content"])["operation"] == ("score" if score else "classify")
+    assert "internal reasoning" not in value.model_dump_json()
+    assert PIPELINES["time-fragment-plan-v2"].thinking_mode == "disabled"
+    assert PROFILE_PIPELINE.thinking_mode == "disabled"
 
 
 class RelativeBackend(Backend):
