@@ -18,7 +18,7 @@ LOGGER = logging.getLogger(__name__)
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 SAFE_ERROR_CODES = frozenset({
     "ACCOUNT_SERVICE_UNAVAILABLE", "ACCOUNT_TOKEN_UNKNOWN", "ACCOUNT_UNAVAILABLE",
-    "AI_ACCOUNT_REQUIRED",
+    "AI_ACCOUNT_REQUIRED", "ANALYSIS_RUN_NOT_FOUND", "ANALYSIS_STALE_ATTEMPT",
     "AI_DAILY_QUOTA_EXHAUSTED", "AI_QUOTA_EXHAUSTED", "AI_REQUEST_ALREADY_COMPLETED",
     "AI_REQUEST_ID_CONFLICT", "AI_REQUEST_IN_PROGRESS", "DEVELOPMENT_MEMBERSHIP_DISABLED",
     "DEVICE_LIMIT_REACHED", "DEVICE_REQUIRED", "EARLIEST_START_REQUIRED",
@@ -271,6 +271,7 @@ class AccountBackend:
             return response.json()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
             operation = {"/plan": "internal_time_fragment_plan", "/duration-profiles": "internal_duration_profiles",
-                         "/relative-analysis": "internal_duration_relative_analysis"}["/" + route.rsplit("/", 1)[-1]]
+                         "/relative-analysis": "internal_duration_relative_analysis",
+                         "/dynamic-duration": "internal_dynamic_duration"}["/" + route.rsplit("/", 1)[-1]]
             log_failure("planning", operation, error, started, 1, response, request_id)
             raise failure("MODEL_GATEWAY_UNAVAILABLE", 503) from error

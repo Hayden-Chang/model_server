@@ -53,6 +53,7 @@ from .time_fragment_service import (
 from .usage_store import InferenceCapture, UsageStore
 from .duration_profiles import DurationProfileRequest, DurationProfileResponse, extract_profiles
 from .duration_relative import RelativeRequest, RelativeResponse, analyze_relative
+from .duration_dynamic import DynamicStepRequest, analyze_dynamic
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -328,6 +329,39 @@ def create_app(
         finally:
             persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
                 route="/internal/time-fragment/relative-analysis", pipeline="time-fragment-relative-duration-v1",
+                started_at=started_at, started_clock=started_clock, status_code=status_code,
+                request_content=None, response_content=None, tracker=tracker)
+
+    @app.post("/internal/time-fragment/dynamic-duration", response_model=dict)
+    async def internal_dynamic_duration(
+        payload: DynamicStepRequest, request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        if settings.planning_internal_secret is None:
+            raise HTTPException(503, detail={"code": "INTERNAL_PLANNING_DISABLED"})
+        body = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+        try:
+            claims = PlanningCredentials(settings.planning_internal_secret.get_secret_value()).verify(
+                (authorization or "").removeprefix("Bearer "), body)
+        except ValueError as error:
+            raise HTTPException(401, detail={"code": "UNAUTHORIZED"}) from error
+        tracker = TrackedModelClient(client)
+        started_at, started_clock = datetime.now(timezone.utc), time.perf_counter()
+        status_code = 200
+        try:
+            return await analyze_dynamic(tracker, payload)
+        except ModelGatewayUnavailable as error:
+            status_code = 503
+            raise HTTPException(503, detail={"code": "MODEL_GATEWAY_UNAVAILABLE"}) from error
+        except ModelGatewayResponseError as error:
+            status_code = 502
+            raise HTTPException(502, detail={"code": "MODEL_GATEWAY_ERROR"}) from error
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            persist_inference(request_id=request.state.request_id, device_key=claims["sub"],
+                route="/internal/time-fragment/dynamic-duration", pipeline="time-fragment-dynamic-duration-v1",
                 started_at=started_at, started_clock=started_clock, status_code=status_code,
                 request_content=None, response_content=None, tracker=tracker)
 
