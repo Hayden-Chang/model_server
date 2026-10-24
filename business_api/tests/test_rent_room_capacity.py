@@ -695,3 +695,26 @@ def test_stale_connections_cannot_replace_a_verified_platform_payment_identity(t
     assert a.by_id(order["id"])["wx_id"] == "platform-1"
     assert a.packs("A") == 1
     a.close(); b.close()
+
+
+def test_one_free_capacity_protocol_preserves_legacy_login_contract(settings):
+    ledger, provider = RentRoomStore(":memory:"), FakeWeChat(settings)
+    with TestClient(create_app(settings, provider=provider, store=ledger)) as client:
+        legacy = client.post("/api/rent-room/session", json={"code": "test-code"})
+        assert legacy.status_code == 200
+        assert legacy.json()["limit"] == 2
+        client.headers["x-rent-room-capacity-version"] = "1"
+        modern = client.post("/api/rent-room/session", json={"code": "test-code"})
+        assert modern.status_code == 200
+        assert modern.json()["limit"] == 1
+        headers = {"Authorization": "Bearer " + modern.json()["token"]}
+        assert client.get("/api/rent-room/entitlements", headers=headers).json()["limit"] == 1
+        first = checkout(client, headers).json()
+        assert first["limit"] == 1
+        provider.remote[first["orderId"]] = {"status": 2}
+        assert query(client, headers).json()["limit"] == 11
+        second = checkout(client, headers, "request-0002").json()
+        provider.remote[second["orderId"]] = {"status": 2}
+        assert query(client, headers, "request-0002").json()["limit"] == 21
+        del client.headers["x-rent-room-capacity-version"]
+        assert client.get("/api/rent-room/entitlements", headers=headers).json()["limit"] == 22
