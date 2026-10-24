@@ -14,6 +14,7 @@ class RentRoomSettings(BaseSettings):
     push_aes_key: SecretStr | None = Field(default=None, min_length=43, max_length=43)
     payments_enabled: bool = False
     ios_payments_enabled: bool = False
+    free_capacity: int = Field(default=1, ge=0, le=9007199254740991)
     db_path: str = ":memory:"
 
     @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", mode="before")

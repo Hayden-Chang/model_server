@@ -71,6 +71,7 @@ services:
       RENT_ROOM_PUSH_AES_KEY: ${RENT_ROOM_PUSH_AES_KEY:-}
       RENT_ROOM_PAYMENTS_ENABLED: ${RENT_ROOM_PAYMENTS_ENABLED:-false}
       RENT_ROOM_IOS_PAYMENTS_ENABLED: ${RENT_ROOM_IOS_PAYMENTS_ENABLED:-false}
+      RENT_ROOM_FREE_CAPACITY: ${RENT_ROOM_FREE_CAPACITY:-1}
       RENT_ROOM_DB_PATH: /var/lib/rent-room/capacity.sqlite3
     expose: ["8000"]
     read_only: true

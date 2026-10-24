@@ -104,11 +104,17 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
             raise HTTPException(401, detail={"message": "微信登录已过期，请重试"}) from error
         return session
 
+    def capacity_policy(request):
+        if request.headers.get("x-rent-room-capacity-version") == "2":
+            return {"capacity": {"version": 2, "freeLimit": settings.free_capacity}}
+        return {}
+
     def entitlement(account, request):
         packs = ledger.packs(account)
         # Legacy clients validate the historical two-free-slot response strictly.
-        free = 1 if request.headers.get("x-rent-room-capacity-version") == "1" else 2
-        return {"packs": packs, "limit": free + 10 * packs}
+        version = request.headers.get("x-rent-room-capacity-version")
+        free = settings.free_capacity if version == "2" else (1 if version == "1" else 2)
+        return {"packs": packs, "limit": free + 10 * packs, **capacity_policy(request)}
 
     async def reconcile(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":
@@ -183,9 +189,9 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return {"status": "ok"}
 
     @app.get("/api/rent-room/catalog")
-    async def catalog():
+    async def catalog(request: Request):
         return {"available": settings.payment_ready, "iosAvailable": settings.payment_ready and settings.ios_payments_enabled,
-                "product": PRODUCT}
+                "product": PRODUCT, **capacity_policy(request)}
 
     @app.post("/api/rent-room/feedback", status_code=201)
     async def feedback(body: FeedbackRequest, request: Request):
