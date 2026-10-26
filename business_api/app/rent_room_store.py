@@ -28,6 +28,9 @@ class RentRoomStore:
                 token_hash TEXT PRIMARY KEY, account TEXT NOT NULL,
                 openid TEXT NOT NULL, session_key TEXT NOT NULL, expires INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rr_session_providers (
+                token_hash TEXT PRIMARY KEY, provider TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS rr_orders (
                 id TEXT PRIMARY KEY, account TEXT NOT NULL, openid TEXT NOT NULL,
                 request_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'unpaid',
@@ -65,18 +68,23 @@ class RentRoomStore:
                 self.db.execute("INSERT INTO rr_feedback VALUES (?,?,?)", (request_id, body, int(time.time())))
         return request_id
 
-    def create_session(self, account, openid, encrypted_key):
+    def create_session(self, account, openid, encrypted_key, *, provider="wechat"):
+        if provider not in ("wechat", "apple"):
+            raise ValueError("Unsupported session provider")
         token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.lock, self.db:
             self.db.execute("DELETE FROM rr_sessions WHERE expires < ?", (int(time.time()),))
+            self.db.execute("DELETE FROM rr_session_providers WHERE token_hash NOT IN (SELECT token_hash FROM rr_sessions)")
             self.db.execute("INSERT INTO rr_sessions VALUES (?,?,?,?,?)", (
-                hashlib.sha256(token.encode()).hexdigest(), account, openid,
-                encrypted_key, int(time.time()) + 7200))
+                token_hash, account, openid, encrypted_key, int(time.time()) + 7200))
+            if provider != "wechat":
+                self.db.execute("INSERT INTO rr_session_providers VALUES (?,?)", (token_hash, provider))
         return token
 
     def session(self, token):
         with self.lock:
-            return self.db.execute("SELECT * FROM rr_sessions WHERE token_hash=? AND expires>?", (
+            return self.db.execute("SELECT s.*,coalesce(p.provider,'wechat') AS provider FROM rr_sessions s LEFT JOIN rr_session_providers p USING(token_hash) WHERE s.token_hash=? AND expires>?", (
                 hashlib.sha256(token.encode()).hexdigest(), int(time.time()))).fetchone()
 
     def packs(self, account):
