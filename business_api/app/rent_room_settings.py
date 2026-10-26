@@ -16,6 +16,8 @@ class RentRoomSettings(BaseSettings):
     ios_payments_enabled: bool = False
     free_capacity: int = Field(default=1, ge=0, le=9007199254740991)
     db_path: str = ":memory:"
+    ios_bundle_id: str = ""
+    apple_login_enabled: bool = False
 
     @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", mode="before")
     @classmethod
@@ -25,6 +27,10 @@ class RentRoomSettings(BaseSettings):
     @property
     def login_ready(self) -> bool:
         return bool(self.app_id and self.app_secret and self.token_secret)
+
+    @property
+    def apple_ready(self) -> bool:
+        return bool(self.apple_login_enabled and self.token_secret and self.ios_bundle_id.strip())
 
     @property
     def payment_configured(self) -> bool:
@@ -37,6 +43,8 @@ class RentRoomSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_payment_config(self):
+        if self.apple_login_enabled and not self.apple_ready:
+            raise ValueError("Apple login requires a session secret and the exact native bundle ID")
         if self.payments_enabled and not self.payment_ready:
             raise ValueError("Rent-room payments require independent login, signing and secure push configuration")
         if self.token_secret and self.app_key and self.token_secret == self.app_key:
