@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .rent_room_purchases import install_purchases
 from .rent_room_settings import RentRoomSettings
 from .rent_room_apple_auth import install_apple_auth
 from .rent_room_product import PRODUCT
@@ -47,7 +48,7 @@ class FeedbackRequest(BaseModel):
         return self
 
 
-def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60, apple=None):
+def create_app(settings=None, *, provider=None, store=None, reconcile_interval=60, apple=None, purchases=None):
     settings = settings or RentRoomSettings()
     ledger = store or RentRoomStore(settings.db_path)
     wechat = provider or WeChatVirtualPay(settings)
@@ -68,6 +69,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 worker.cancel()
                 with suppress(asyncio.CancelledError):
                     await worker
+            await native_purchases.close()
             await apple_identity.close()
             await wechat.close()
             ledger.close()
@@ -120,6 +122,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return {"packs": packs, "limit": free + 10 * packs, **capacity_policy(request)}
 
     apple_identity = install_apple_auth(app, settings, ledger, current_session, entitlement, apple=apple)
+    native_purchases = install_purchases(app, settings, provider=purchases)
 
     async def reconcile(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":

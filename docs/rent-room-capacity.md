@@ -107,3 +107,21 @@ v2 的公开 `GET /catalog` 即使登录和支付关闭也返回免费规则；`
 新版客户端缓存最后成功规则以支持离线，首次无缓存使用 1 套；收到无元数据的旧后端响应时允许历史总容量而保留本地规则。配置调低仅限制本机新增/恢复/导入净增长，已有超额房源仍可编辑；服务端没有房源数据，不能靠调整配置删除已有记录。应先部署兼容后端再发布客户端，旧版继续返回历史免费套数。
 
 验证：`test_rent_room_capacity_policy.py` 修改前 8 项按业务断言失败，修复后新增用例及原容量/反馈接口共 85 项通过。覆盖免费 0/1/4/20、三版协议、配置6套且关闭登录/支付、下单/到账与旧版权益、非法配置。首轮原后台补发用例一次超时，单独诊断的两个参数及最终定向运行通过；保留首轮记录，不宣称该超时已定位。Mock 不证明真实微信登录、付款或生产配置生效。证据在本 worktree `artifacts/capacity-policy/`。
+
+## 原生 iOS 免登录扩容（2026-10-30，待部署）
+
+原生端使用 Apple 签名的 `AppTransaction`，不再注册、创建 App 会话或依赖微信/Apple 登录 token。新的 `/api/rent-room/ios/purchases/context`、`verify`、`restore` 均为 POST，JSON 中必需 `signedAppTransaction`，verify 另需数字字符串 `transactionId`；拒绝额外的 account、token、packs 字段。不可把签名证明放在 URL、日志、崩溃上报或房源备份中。
+
+`app-store-server-library==3.1.0` 验证 Apple 证书链、bundle ID、App Apple ID 和签名环境。解码但未验签的 receiptType 只用于选取 Production/Sandbox 验证器，不能产生身份。服务按 `SHA256("rent-room-app-store-v1:" + bundle + ":" + environment + ":" + appTransactionID)` 标识购买者；Sandbox 与 Production 始终独立。同一 Apple 购买身份有持久的 appAccountToken。每笔订单由服务器查询 Apple、验签并检查商品、消耗型、单件数量、购买归属、AppTransactionID、appAccountToken 和环境。
+
+`rr_native_accounts` / `rr_native_purchases` 与微信会话和订单独立，复用持久 SQLite 文件。事务唯一键为环境+订单 ID，SQLite 事务保证并发幂等，旧签名不能恢复已退款容量。App 仅在服务端账本及本机容量缓存都保存后 finish；确认失败保留 unfinished 供重试。恢复同时查询服务器已保存的订单，因此 iOS 17 上已经 finish 的消耗品也可通过同一 Apple 购买身份找回。容量减少不删除本机房源；切换购买身份也不切换记录目录。
+
+部署前必须配置 `.env.example` 中新增的 `RENT_ROOM_STOREKIT_*` 和精确的 `RENT_ROOM_IOS_BUNDLE_ID`。App Store `.p8` 仅通过不入库的 Compose override 只读挂载到 `RENT_ROOM_STOREKIT_KEY_PATH`；保持 UID 10001 可读、其他用户不可读。现有 `RENT_ROOM_IOS_PAYMENTS_ENABLED` 仍是微信 iOS 开关，与原生 IAP 无关。`RENT_ROOM_STOREKIT_ENABLED=false` 停止新销售；配置仍完整时继续确认未完订单和恢复容量。缺少配置时返回 503，不能返回示例商品或虚假容量。
+
+原生服务通过 Caddy 内网反代访问，Compose 仅 expose、不发布端口，并允许此反代传递真实客户端 IP。不能将同一 Uvicorn 命令直接暴露公网；若改变部署拓扑，应改为具体受信代理地址。验签前按客户端 IP 限流，验签后按购买身份限流；并发验签有界，锁为固定数量，避免未认证请求无限分配身份锁。
+
+未启用后台自动联网或服务器主动推送到 App。退款在用户下次主动进入扩容/恢复时重新核验；离线时保留上次确认额度。无订阅、无 App 登录账户、无房源云同步。若历史已发布版本确有旧登录购买账本，需要另行提供其真实数据做迁移；当前 main 未包含此前未部署的 StoreKit 草稿账本，不能据草稿声称已有生产购买。
+
+验证：`PYTHONPATH=business_api /private/tmp/rent-room-account-free-py/bin/pytest -q business_api/tests/test_rent_room_purchases.py business_api/tests/test_rent_room_capacity.py business_api/tests/test_rent_room_capacity_policy.py business_api/tests/test_rent_room_apple_auth.py business_api/tests/test_rent_room_feedback.py`：第二轮 **137 passed**。涵盖重复并发确认、服务失败重试、重启恢复、退款/旧签名重放、账户/环境隔离、默认关闭、错误响应凭据脱敏及实际官方验签器拒绝伪造证明。首轮有 1 个新增凭据脱敏失败，修复为保留既有 Apple 登录错误处理后再注册购买错误处理；另一个既有 2 秒微信后台对账等待超时，在未改测试或对账实现的第二轮通过。日志保留在 `/private/tmp/rent-room-account-free-backend-tests-{01,02}.log`。
+
+这些是服务和模拟 Apple 响应的测试，尚未部署或进行真实 Apple 沙盒交易。交付前还需在配置好的沙盒中完成付款、取消、Ask to Buy、跨安装恢复和退款；完成后才可单独授权生产部署及 iOS 发布。

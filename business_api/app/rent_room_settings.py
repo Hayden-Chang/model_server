@@ -18,6 +18,23 @@ class RentRoomSettings(BaseSettings):
     db_path: str = ":memory:"
     ios_bundle_id: str = ""
     apple_login_enabled: bool = False
+    storekit_enabled: bool = False
+    storekit_product_id: str = ""
+    storekit_app_apple_id: int | None = Field(default=None, gt=0)
+    storekit_key_path: str = ""
+    storekit_key_id: str = ""
+    storekit_issuer_id: str = ""
+
+    @field_validator("storekit_app_apple_id", mode="before")
+    @classmethod
+    def empty_storekit_app_id(cls, value):
+        return None if value in (None, "", "0", 0) else value
+
+    @property
+    def storekit_configured(self) -> bool:
+        return bool(self.ios_bundle_id.strip() and self.storekit_product_id.strip() and self.storekit_app_apple_id
+                    and self.storekit_key_path and self.storekit_key_id and self.storekit_issuer_id)
+
 
     @field_validator("app_secret", "app_key", "token_secret", "push_token", "push_aes_key", mode="before")
     @classmethod
@@ -43,6 +60,8 @@ class RentRoomSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_payment_config(self):
+        if self.storekit_enabled and not self.storekit_configured:
+            raise ValueError("Native purchases require the exact bundle, product, Apple app ID and mounted App Store key")
         if self.apple_login_enabled and not self.apple_ready:
             raise ValueError("Apple login requires a session secret and the exact native bundle ID")
         if self.payments_enabled and not self.payment_ready:
