@@ -32,3 +32,16 @@
 5. 出现问题暂停客户端放量并保留兼容后端。存在 credits 订单后**不能回滚到不识别 entitlement_kind 的旧二进制**，旧代码会把点数订单误计为容量。回滚版本必须保留分类查询和钱包表，不能删表或把所有账号重新迁移。
 
 代码合并、部署、小程序体验版、提审、正式发布各自独立。本次未执行这些生产动作。
+
+## 本次验证与审查
+
+代码候选 `c5f778419db2c09bd862dd771aad00326c267811`。使用 Python 3.12 隔离环境和 FakeWeChat，共 87 个定向测试通过：
+
+- `test_rent_room_credits.py`：旧库升级、首次/重复迁移、两个数据库连接争用最后一点、持久化重启、预留/确认/取消/晚到请求、迟到旧订单、退款、超额迁移、速率限制及 Apple 身份隔离。
+- `test_rent_room_capacity_policy.py`：v1/v2/无版本旧协议和配置边界。
+- `test_rent_room_capacity.py` 中受订单分类、entitlement 响应和 SQLite 模式影响的订单/退款/身份/恢复用例；排除无关 provider 重试、签名算法、路由部署及配置测试。
+- `test_rent_room_apple_auth.py` 中旧微信行兼容、Apple session 的原容量协议和禁止微信购买；`test_rent_room_feedback.py` 的同库持久化幂等测试。
+
+完整命令、选择清单和日志在本机 `/private/tmp/credit-compat-evidence-20261031/`，持久副本在 rent_room 本次 compatibility-20261031 证据目录。86 项在代码冻结前通过，冻结时无生产代码变化；补充 Apple 钱包隔离用例在上述 SHA 通过。只有 Starlette 提示未来切换 httpx2 的弃用警告，没有测试失败。
+
+PR #99 创建后主 agent 单独复查了全部 5 个文件、SQL 事务、旧订单默认值、跨版本重试、余额公式和客户端契约，未发现剩余阻断性代码问题。GitHub 对该候选返回空 statuses 和 workflow_runs，不记为远端 CI 通过。尚未部署、执行生产支付或真实用户迁移。
