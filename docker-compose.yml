@@ -59,7 +59,8 @@ services:
   rent-room-api:
     build:
       context: ./business_api
-    command: [uvicorn, app.rent_room_main:app, --host, 0.0.0.0, --port, "8000"]
+    # Internal-only upstream: Caddy supplies the client address for pre-verification limits.
+    command: [uvicorn, app.rent_room_main:app, --host, 0.0.0.0, --port, "8000", --proxy-headers, "--forwarded-allow-ips=*"]
     restart: unless-stopped
     environment:
       RENT_ROOM_APP_ID: ${RENT_ROOM_APP_ID:-wxf43c7f280c98efca}
@@ -74,6 +75,12 @@ services:
       RENT_ROOM_FREE_CAPACITY: ${RENT_ROOM_FREE_CAPACITY:-1}
       RENT_ROOM_APPLE_LOGIN_ENABLED: ${RENT_ROOM_APPLE_LOGIN_ENABLED:-false}
       RENT_ROOM_IOS_BUNDLE_ID: ${RENT_ROOM_IOS_BUNDLE_ID:-}
+      RENT_ROOM_STOREKIT_ENABLED: ${RENT_ROOM_STOREKIT_ENABLED:-false}
+      RENT_ROOM_STOREKIT_PRODUCT_ID: ${RENT_ROOM_STOREKIT_PRODUCT_ID:-}
+      RENT_ROOM_STOREKIT_APP_APPLE_ID: ${RENT_ROOM_STOREKIT_APP_APPLE_ID:-0}
+      RENT_ROOM_STOREKIT_KEY_PATH: ${RENT_ROOM_STOREKIT_KEY_PATH:-}
+      RENT_ROOM_STOREKIT_KEY_ID: ${RENT_ROOM_STOREKIT_KEY_ID:-}
+      RENT_ROOM_STOREKIT_ISSUER_ID: ${RENT_ROOM_STOREKIT_ISSUER_ID:-}
       RENT_ROOM_DB_PATH: /var/lib/rent-room/capacity.sqlite3
     expose: ["8000"]
     read_only: true
