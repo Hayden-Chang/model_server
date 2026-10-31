@@ -50,7 +50,8 @@ class RentRoomStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(rr_orders)")}
         for name, definition in (("product_id", "TEXT NOT NULL DEFAULT 'house-capacity-10'"),
                                  ("price", "INTEGER NOT NULL DEFAULT 190"),
-                                 ("pack_size", "INTEGER NOT NULL DEFAULT 10")):
+                                 ("pack_size", "INTEGER NOT NULL DEFAULT 10"),
+                                 ("entitlement_kind", "TEXT NOT NULL DEFAULT 'capacity'")):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE rr_orders ADD COLUMN {name} {definition}")
         self.db.commit()
@@ -89,7 +90,7 @@ class RentRoomStore:
 
     def packs(self, account):
         with self.lock:
-            return self.db.execute("SELECT count(*) FROM rr_orders WHERE account=? AND state='paid'", (account,)).fetchone()[0]
+            return self.db.execute("SELECT count(*) FROM rr_orders WHERE account=? AND state='paid' AND entitlement_kind='capacity'", (account,)).fetchone()[0]
 
     def order(self, account, request_id):
         with self.lock:
@@ -99,7 +100,9 @@ class RentRoomStore:
         with self.lock:
             return self.db.execute("SELECT * FROM rr_orders WHERE id=?", (order_id,)).fetchone()
 
-    def create_order(self, session, request_id):
+    def create_order(self, session, request_id, *, kind="capacity"):
+        if kind not in ("capacity", "credits"):
+            raise ValueError("购买类型无效")
         with self.lock, self.db:
             self.db.execute("BEGIN IMMEDIATE")
             existing = self.order(session["account"], request_id)
@@ -109,9 +112,9 @@ class RentRoomStore:
                 session["account"], int(time.time()) - 300)).fetchone()[0]
             if recent >= 10:
                 raise ValueError("下单过于频繁，请稍后重试")
-            self.db.execute("INSERT INTO rr_orders(id,account,openid,request_id,created,product_id,price,pack_size) VALUES (?,?,?,?,?,?,?,?)", (
+            self.db.execute("INSERT INTO rr_orders(id,account,openid,request_id,created,product_id,price,pack_size,entitlement_kind) VALUES (?,?,?,?,?,?,?,?,?)", (
                 secrets.token_hex(16), session["account"], session["openid"], request_id, int(time.time()),
-                PRODUCT["id"], PRODUCT["price"], PRODUCT["size"]))
+                PRODUCT["id"], PRODUCT["price"], PRODUCT["size"], kind))
             return self.order(session["account"], request_id)
 
     def orders(self, account=None, *, limit=10):

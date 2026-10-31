@@ -16,6 +16,7 @@ from .rent_room_settings import RentRoomSettings
 from .rent_room_apple_auth import install_apple_auth
 from .rent_room_product import PRODUCT
 from .rent_room_store import RentRoomStore
+from .rent_room_credits import install_credit_routes
 from .rent_room_wechat import SecurePush, WeChatUnavailable, WeChatVirtualPay, compact
 
 
@@ -108,7 +109,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return session
 
     def capacity_policy(request):
-        if request.headers.get("x-rent-room-capacity-version") == "2":
+        if request.headers.get("x-rent-room-capacity-version") in ("2", "3"):
             return {"capacity": {"version": 2, "freeLimit": settings.free_capacity}}
         return {}
 
@@ -116,9 +117,11 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         packs = ledger.packs(account)
         # Legacy clients validate the historical two-free-slot response strictly.
         version = request.headers.get("x-rent-room-capacity-version")
-        free = settings.free_capacity if version == "2" else (1 if version == "1" else 2)
-        return {"packs": packs, "limit": free + 10 * packs, **capacity_policy(request)}
+        free = settings.free_capacity if version in ("2", "3") else (1 if version == "1" else 2)
+        return {"packs": packs, "limit": free + 10 * packs, **capacity_policy(request),
+                **({"credits": wallets.snapshot(account)} if version == "3" else {})}
 
+    wallets = install_credit_routes(app, ledger, current_session, settings)
     apple_identity = install_apple_auth(app, settings, ledger, current_session, entitlement, apple=apple)
 
     async def reconcile(order, *, acknowledge_delivery=True):
@@ -196,7 +199,8 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
     @app.get("/api/rent-room/catalog")
     async def catalog(request: Request):
         return {"available": settings.payment_ready, "iosAvailable": settings.payment_ready and settings.ios_payments_enabled,
-                "product": PRODUCT, **capacity_policy(request)}
+                "product": PRODUCT, **capacity_policy(request),
+                **({"creditVersion": 1} if request.headers.get("x-rent-room-capacity-version") == "3" else {})}
 
     @app.post("/api/rent-room/feedback", status_code=201)
     async def feedback(body: FeedbackRequest, request: Request):
@@ -255,7 +259,10 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
             raise unavailable()
         async with account_locks[session["account"]]:
             try:
-                order = ledger.create_order(session, body.requestId)
+                kind = "credits" if request.headers.get("x-rent-room-capacity-version") == "3" else "capacity"
+                if kind == "credits" and not wallets.snapshot(session["account"])["migrated"]:
+                    raise HTTPException(409, detail={"message": "请先确认原有房源点数"})
+                order = ledger.create_order(session, body.requestId, kind=kind)
             except ValueError as error:
                 raise HTTPException(429, detail={"message": str(error)}) from error
             response = {"orderId": order["id"], "status": order["state"], **entitlement(session["account"], request)}
