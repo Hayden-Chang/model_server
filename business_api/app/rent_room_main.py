@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .rent_room_payment_diagnostics import install_payment_diagnostics, payment_log, safe_text
 from .rent_room_settings import RentRoomSettings
 from .rent_room_apple_auth import install_apple_auth
 from .rent_room_product import PRODUCT
@@ -121,13 +122,23 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         return {"packs": packs, "limit": free + 10 * packs, **capacity_policy(request),
                 **({"credits": wallets.snapshot(account)} if version == "3" else {})}
 
+    install_payment_diagnostics(app, ledger, current_session)
     wallets = install_credit_routes(app, ledger, current_session, settings)
     apple_identity = install_apple_auth(app, settings, ledger, current_session, entitlement, apple=apple)
 
     async def reconcile(order, *, acknowledge_delivery=True):
+        try:
+            return await reconcile_order(order, acknowledge_delivery=acknowledge_delivery)
+        except WeChatUnavailable as error:
+            payment_log("reconcile_failed", order, reason=safe_text(str(error), secrets=(order["openid"],)))
+            raise
+
+    async def reconcile_order(order, *, acknowledge_delivery=True):
         if order["state"] == "refunded":
             return "refunded"
         result = await wechat.query(order)
+        payment_log("query_result", order, status=result.get("status") if type(result.get("status")) is int else None,
+                    orderType=result.get("order_type") if type(result.get("order_type")) is int else None)
         if (result.get("order_id") != order["id"] or type(result.get("order_type")) is not int
                 or result["order_type"] not in (0, 7)):
             raise WeChatUnavailable("微信订单信息不一致，请稍后重试")
@@ -163,7 +174,9 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
             raise WeChatUnavailable("微信订单状态暂时无法确认，请稍后重试")
         else:
             ledger.checked(order["id"])
-        return ledger.by_id(order["id"])["state"]
+        state = ledger.by_id(order["id"])["state"]
+        payment_log("reconciled", order, previousState=order["state"], state=state)
+        return state
 
     async def reconcile_due(account=None):
         checking = None
@@ -187,6 +200,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         while True:
             await asyncio.sleep(reconcile_interval)
             try:
+                ledger.prune_payment_events()
                 await reconcile_due()
             except Exception:
                 # Never log upstream exception text: it can contain credentials.
@@ -200,6 +214,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
     async def catalog(request: Request):
         return {"available": settings.payment_ready, "iosAvailable": settings.payment_ready and settings.ios_payments_enabled,
                 "product": PRODUCT, **capacity_policy(request),
+                **({"paymentDiagnostics": 1} if request.headers.get("x-rent-room-capacity-version") == "3" else {}),
                 **({"creditVersion": 1} if request.headers.get("x-rent-room-capacity-version") == "3" else {})}
 
     @app.post("/api/rent-room/feedback", status_code=201)
@@ -265,6 +280,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 order = ledger.create_order(session, body.requestId, kind=kind)
             except ValueError as error:
                 raise HTTPException(429, detail={"message": str(error)}) from error
+            payment_log("checkout", order, platform=body.platform, state=order["state"])
             response = {"orderId": order["id"], "status": order["state"], **entitlement(session["account"], request)}
             if order["state"] == "unpaid":
                 response["payment"] = wechat.payment(order, cipher.decrypt(session["session_key"].encode()).decode())
@@ -309,6 +325,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 if field in event and str(event[field]) != "0":
                     raise ValueError("Nonproduction notification")
         except Exception as error:
+            payment_log("notify_rejected", reason="invalid_envelope", errorType=type(error).__name__)
             raise HTTPException(403, detail="Invalid encrypted WeChat notification") from error
         kind = event.get("Event")
         if kind not in ("xpay_goods_deliver_notify", "xpay_refund_notify"):
@@ -316,8 +333,11 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
         trade_id = event.get("OutTradeNo") if kind == "xpay_goods_deliver_notify" else event.get("MchOrderId")
         order = ledger.by_id(trade_id or "")
         if not order:
+            payment_log("notify_rejected", reason="unknown_order")
             raise HTTPException(404)
+        payment_log("notify_received", order, kind=kind)
         if event.get("OpenId") != order["openid"]:
+            payment_log("notify_rejected", order, reason="identity_mismatch")
             raise HTTPException(409, detail="Notification identity does not match")
         if kind == "xpay_goods_deliver_notify" and str(event.get("Env")) != "0":
             raise HTTPException(403, detail="Missing production environment")
@@ -335,6 +355,7 @@ def create_app(settings=None, *, provider=None, store=None, reconcile_interval=6
                 state = await reconcile(order, acknowledge_delivery=False)
                 if state not in ("paid", "refunded"):
                     raise WeChatUnavailable("支付结果尚未确认，请稍后重试")
+        payment_log("notify_accepted", order, kind=kind, state=ledger.by_id(order["id"])["state"])
         plaintext = compact({"ErrCode": 0, "ErrMsg": "success"}).encode() if is_json else b"<xml><ErrCode>0</ErrCode><ErrMsg>success</ErrMsg></xml>"
         reply = push.encrypt(plaintext)
         if is_json:
