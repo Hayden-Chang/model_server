@@ -45,6 +45,11 @@ class RentRoomStore:
             CREATE TABLE IF NOT EXISTS rr_feedback (
                 request_id TEXT PRIMARY KEY, body TEXT NOT NULL, created INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rr_payment_events (
+                order_id TEXT NOT NULL, event_id TEXT NOT NULL, created INTEGER NOT NULL,
+                detail TEXT NOT NULL, PRIMARY KEY(order_id,event_id)
+            );
+            CREATE INDEX IF NOT EXISTS rr_payment_event_created ON rr_payment_events(created);
         """)
         # Rows from the previous catalog retain their original 190-fen contract.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(rr_orders)")}
@@ -58,6 +63,21 @@ class RentRoomStore:
 
     def close(self):
         self.db.close()
+
+    def prune_payment_events(self):
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM rr_payment_events WHERE created<?", (int(time.time()) - 30 * 86400,))
+
+    def save_payment_event(self, order_id, event_id, detail):
+        self.prune_payment_events()
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if self.db.execute("SELECT 1 FROM rr_payment_events WHERE order_id=? AND event_id=?", (order_id, event_id)).fetchone():
+                return False
+            if self.db.execute("SELECT count(*) FROM rr_payment_events WHERE order_id=?", (order_id,)).fetchone()[0] >= 60:
+                raise ValueError("Payment diagnostic limit reached")
+            self.db.execute("INSERT INTO rr_payment_events VALUES (?,?,?,?)", (order_id, event_id, int(time.time()), detail))
+            return True
 
     def save_feedback(self, request_id, body):
         with self.lock, self.db:

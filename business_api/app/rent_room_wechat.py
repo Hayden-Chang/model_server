@@ -3,7 +3,6 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 import secrets
 import struct
 import time
@@ -12,8 +11,7 @@ from xml.etree import ElementTree as ET
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-logger = logging.getLogger(__name__)
-
+from .rent_room_payment_diagnostics import payment_log, safe_text
 
 class WeChatUnavailable(Exception):
     pass
@@ -78,6 +76,7 @@ class WeChatVirtualPay:
 
     async def _post(self, path, order):
         body = compact({"openid": order["openid"], "env": 0, "order_id": order["id"]})
+        started = time.monotonic()
         try:
             token = await self._token()
             for attempt in range(2):
@@ -88,15 +87,20 @@ class WeChatVirtualPay:
                 data = response.json()
                 code = data.get("errcode", 0) if isinstance(data, dict) else None
                 if code in (40001, 40014, 42001) and attempt == 0:
-                    logger.warning("WeChat payment %s rejected token (%s); refreshing once", path, code)
+                    payment_log("upstream_token_retry", order, api=path, errCode=code, httpStatus=response.status_code)
                     token = await self._token(rejected=token)
                     continue
                 if code != 0:
-                    logger.warning("WeChat payment %s failed (%s)", path, code)
+                    payment_log("upstream_failed", order, api=path, errCode=code if type(code) is int else None,
+                                httpStatus=response.status_code, durationMs=int((time.monotonic()-started)*1000),
+                                errMsg=safe_text(data.get("errmsg", "") if isinstance(data, dict) else "invalid response",
+                                                 secrets=(order["openid"], token, self.settings.app_key.get_secret_value())))
                     raise WeChatUnavailable("微信订单暂时无法确认，请稍后重试")
                 return data
         except (httpx.HTTPError, ValueError, KeyError) as error:
-            logger.warning("WeChat payment %s failed (%s)", path, type(error).__name__)
+            payment_log("upstream_failed", order, api=path, errorType=type(error).__name__,
+                        httpStatus=error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None,
+                        durationMs=int((time.monotonic()-started)*1000))
             raise WeChatUnavailable("微信订单暂时无法确认，请稍后重试") from error
 
     async def query(self, order):
