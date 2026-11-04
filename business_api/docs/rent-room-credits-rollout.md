@@ -54,6 +54,8 @@ PR #99 创建后主 agent 单独复查了全部 5 个文件、SQL 事务、旧�
 
 客户端需用实际消费账本，不能以当前房源数代替；所有房源删除后仍有消费。房源内容不发送给服务端。纯游客身份来自本机持久批次，服务端不能独立验证未登录阶段的真实操作；此改动不添加设备指纹或自动登录。
 
-验证：`python -m pytest tests/test_guest_credit_inheritance.py tests/test_rent_room_credits.py tests/test_rent_room_capacity.py -q`，93 项通过。新增用例修复前返回 404，客户端对应行为修复前表现为已用 2 点登录后仍剩 2 点。另使用 `tests/guest_credit_api_fixture.py` 启动 loopback + 内存 SQLite，与 rent_room `tests/integration/guest-credit-api.mjs` 完成 5 个前后端合约场景；FakeWeChat 只替代上游微信身份，消费接口及数据库真实执行。
+v3 钱包快照增加 `freeRemaining`，按已冻结的免费赠送数减去历史占用、预留/已提交消费及游客实际抵扣计算，不包含购买点数。客户端据此限制退出后的游客额度，并为新游客批次保留已消耗基数，只上报新增消费；游客用 1 点 → 登录 1 → 退出 1 → 再新建 0 → 再登录 0，不会因换游客目录重置或重复扣点。预留取消恢复免费余额，购买点数不借给游客。
+
+验证：`python -m pytest tests/test_guest_credit_inheritance.py tests/test_rent_room_credits.py tests/test_rent_room_capacity.py -q`，93 项通过，包括免费余额与购买余额分离、预留和取消。新增用例修复前返回 404，客户端对应行为修复前表现为已用 2 点登录后仍剩 2 点。另使用 `tests/guest_credit_api_fixture.py` 启动 loopback + 内存 SQLite，与 rent_room `tests/integration/guest-credit-api.mjs` 完成 6 个前后端合约场景，包含退出后继续游客消费并再登录；FakeWeChat 只替代上游微信身份，消费接口及数据库真实执行。
 
 发布顺序仍为先部署兼容后端，再发布小程序。表内有继承记录后，不得回滚到忽略 `rr_guest_credit_claims` 的余额计算版本，否则余额会增加。备份应包含新表；禁止删表或批量重置钱包。本次仅代码与测试，不包含部署、真实微信登录或支付验收。

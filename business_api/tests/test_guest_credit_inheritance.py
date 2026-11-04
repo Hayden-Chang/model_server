@@ -19,6 +19,7 @@ def test_guest_spending_is_inherited_once_and_never_reset_by_login(settings, spe
         result = claim(client, headers, spent)
         assert result.status_code == 200
         assert result.json()['credits']['remaining'] == 2 - spent
+        assert result.json()['credits']['freeRemaining'] == 2 - spent
         assert claim(client, login(client), spent).json()['credits']['remaining'] == 2 - spent
         assert migration(client, headers, 0).json()['credits']['remaining'] == 2 - spent
 
@@ -32,8 +33,12 @@ def test_guest_claim_updates_monotonically_and_cannot_charge_paid_credits(settin
         session = ledger.db.execute('SELECT account FROM rr_credit_wallets').fetchone()
         order = ledger.create_order({'account': session['account'], 'openid': 'wx'}, 'paid-order', kind='credits')
         ledger.apply(order['id'], 'paid', 'wx-order')
-        operation(client, headers, 'reserve'); operation(client, headers, 'commit')
-        assert claim(client, headers, 1).json()['credits']['remaining'] == 10
+        assert migration(client, headers, 0).json()['credits']['freeRemaining'] == 2
+        reserved = operation(client, headers, 'reserve').json()['credits']
+        assert reserved['remaining'] == 11 and reserved['freeRemaining'] == 1
+        assert operation(client, headers, 'commit').json()['credits']['freeRemaining'] == 1
+        inherited = claim(client, headers, 1).json()['credits']
+        assert inherited['remaining'] == 10 and inherited['freeRemaining'] == 0
         assert claim(client, headers, 2).json()['credits']['remaining'] == 10
         assert claim(client, headers, 0).json()['credits']['remaining'] == 10
         assert claim(client, headers, 2, 'hmguest00000000002').json()['credits']['remaining'] == 10
@@ -46,7 +51,7 @@ def test_guest_claim_does_not_attach_to_another_account_and_waits_for_reservatio
         migration(client, a, 0); migration(client, b, 0)
         operation(client, a, 'reserve')
         assert claim(client, a, 2).status_code == 409
-        operation(client, a, 'cancel')
+        assert operation(client, a, 'cancel').json()['credits']['freeRemaining'] == 2
         assert claim(client, a, 2).json()['credits']['remaining'] == 0
         assert claim(client, b, 2).status_code == 409
         assert migration(client, b, 0).json()['credits']['remaining'] == 2

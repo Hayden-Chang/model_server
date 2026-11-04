@@ -57,6 +57,7 @@ class CreditWallets:
         spent = db.execute("SELECT count(*) FROM rr_credit_operations WHERE account=? AND state IN ('reserved','committed')", (account,)).fetchone()[0]
         guest_used = db.execute("SELECT coalesce(sum(debited),0) FROM rr_guest_credit_claims WHERE account=?", (account,)).fetchone()[0]
         return {"version": 1, "migrated": True,
+                "freeRemaining": max(0, wallet["free_grant"] - wallet["legacy_used"] - spent - guest_used),
                 "remaining": max(0, wallet["free_grant"] + paid - wallet["legacy_used"] - spent - guest_used)}
 
     def snapshot(self, account):
