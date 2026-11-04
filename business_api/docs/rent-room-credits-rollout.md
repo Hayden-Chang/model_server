@@ -45,3 +45,17 @@
 完整命令、选择清单和日志在本机 `/private/tmp/credit-compat-evidence-20261031/`，持久副本在 rent_room 本次 compatibility-20261031 证据目录。86 项在代码冻结前通过，冻结时无生产代码变化；补充 Apple 钱包隔离用例在上述 SHA 通过。只有 Starlette 提示未来切换 httpx2 的弃用警告，没有测试失败。
 
 PR #99 创建后主 agent 单独复查了全部 5 个文件、SQL 事务、旧订单默认值、跨版本重试、余额公式和客户端契约，未发现剩余阻断性代码问题。GitHub 对该候选返回空 statuses 和 workflow_runs，不记为远端 CI 通过。尚未部署、执行生产支付或真实用户迁移。
+
+## 游客消费继承修复（2026-11-04）
+
+新增 `POST /api/rent-room/credits/guest-claims {guestId,freeSpent}`，要求已初始化的钱包、微信 session 和 v3 header，返回 `credits` 与 `guestClaim:{guestId,freeSpent}`。新增 `rr_guest_credit_claims` 表，以游客批次为主键，持久记录归属账号、已确认累计消费及实际抵扣的免费点数。相同／更旧请求不重复扣点；同一批次不能转给另一个账号。
+
+每次只抵扣账号当前尚未使用的免费点数；先前消费完免费点数的账号不再被扣付费点数。存在新建预留时拒绝新增继承，待 commit/cancel 收尾后重试，以免取消预留重现免费额度。SQLite 写事务串行化继承、创建、并发重放和多连接操作。后续所有钱包余额计算都包含已继承消费，登录与重复 migration 不重新赠送。
+
+客户端需用实际消费账本，不能以当前房源数代替；所有房源删除后仍有消费。房源内容不发送给服务端。纯游客身份来自本机持久批次，服务端不能独立验证未登录阶段的真实操作；此改动不添加设备指纹或自动登录。
+
+v3 钱包快照增加 `freeRemaining`，按已冻结的免费赠送数减去历史占用、预留/已提交消费及游客实际抵扣计算，不包含购买点数。客户端据此限制退出后的游客额度，并为新游客批次保留已消耗基数，只上报新增消费；游客用 1 点 → 登录 1 → 退出 1 → 再新建 0 → 再登录 0，不会因换游客目录重置或重复扣点。预留取消恢复免费余额，购买点数不借给游客。
+
+验证：`python -m pytest tests/test_guest_credit_inheritance.py tests/test_rent_room_credits.py tests/test_rent_room_capacity.py -q`，93 项通过，包括免费余额与购买余额分离、预留和取消。新增用例修复前返回 404，客户端对应行为修复前表现为已用 2 点登录后仍剩 2 点。另使用 `tests/guest_credit_api_fixture.py` 启动 loopback + 内存 SQLite，与 rent_room `tests/integration/guest-credit-api.mjs` 完成 6 个前后端合约场景，包含退出后继续游客消费并再登录；FakeWeChat 只替代上游微信身份，消费接口及数据库真实执行。
+
+发布顺序仍为先部署兼容后端，再发布小程序。表内有继承记录后，不得回滚到忽略 `rr_guest_credit_claims` 的余额计算版本，否则余额会增加。备份应包含新表；禁止删表或批量重置钱包。本次仅代码与测试，不包含部署、真实微信登录或支付验收。

@@ -12,6 +12,12 @@ class MigrationRequest(BaseModel):
     active: int = Field(ge=0, le=1_000_000)
 
 
+class GuestClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    guestId: str = Field(pattern=r"^h[a-z0-9]{8,63}$")
+    freeSpent: int = Field(ge=0, le=1_000_000)
+
+
 class CreditOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requestId: str = Field(pattern=r"^[A-Za-z0-9_-]{16,64}$")
@@ -27,6 +33,12 @@ class CreditWallets:
                     account TEXT PRIMARY KEY, free_grant INTEGER NOT NULL,
                     legacy_used INTEGER NOT NULL, migrated INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS rr_guest_credit_claims (
+                    guest_id TEXT PRIMARY KEY, account TEXT NOT NULL,
+                    free_spent INTEGER NOT NULL, debited INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS rr_guest_credit_claims_account
+                    ON rr_guest_credit_claims(account);
                 CREATE TABLE IF NOT EXISTS rr_credit_operations (
                     account TEXT NOT NULL, request_id TEXT NOT NULL,
                     state TEXT NOT NULL CHECK(state IN ('reserved','committed','cancelled')),
@@ -43,8 +55,10 @@ class CreditWallets:
         # migration. Refunds remove their grant without deleting housing data.
         paid = db.execute("SELECT coalesce(sum(pack_size),0) FROM rr_orders WHERE account=? AND state='paid'", (account,)).fetchone()[0]
         spent = db.execute("SELECT count(*) FROM rr_credit_operations WHERE account=? AND state IN ('reserved','committed')", (account,)).fetchone()[0]
+        guest_used = db.execute("SELECT coalesce(sum(debited),0) FROM rr_guest_credit_claims WHERE account=?", (account,)).fetchone()[0]
         return {"version": 1, "migrated": True,
-                "remaining": max(0, wallet["free_grant"] + paid - wallet["legacy_used"] - spent)}
+                "freeRemaining": max(0, wallet["free_grant"] - wallet["legacy_used"] - spent - guest_used),
+                "remaining": max(0, wallet["free_grant"] + paid - wallet["legacy_used"] - spent - guest_used)}
 
     def snapshot(self, account):
         with self.ledger.lock, self.ledger.db:
@@ -58,6 +72,32 @@ class CreditWallets:
                 used = min(active, free + 10 * self.ledger.packs(account))
                 self.ledger.db.execute("INSERT INTO rr_credit_wallets VALUES (?,?,?,?)", (account, free, used, int(time.time())))
             return self._snapshot(account)
+
+    def inherit_guest(self, account, guest_id, free_spent):
+        db = self.ledger.db
+        with self.ledger.lock, db:
+            db.execute("BEGIN IMMEDIATE")
+            wallet = db.execute("SELECT * FROM rr_credit_wallets WHERE account=?", (account,)).fetchone()
+            if not wallet:
+                raise ValueError("请先确认原有房源点数")
+            old = db.execute("SELECT * FROM rr_guest_credit_claims WHERE guest_id=?", (guest_id,)).fetchone()
+            if old and old["account"] != account:
+                raise ValueError("这些游客点数已关联其他微信账号")
+            previous = old["free_spent"] if old else 0
+            debit = old["debited"] if old else 0
+            if free_spent > previous:
+                # Settle reservations first: cancellation must not resurrect
+                # free credits that should have been consumed by the guest.
+                if db.execute("SELECT 1 FROM rr_credit_operations WHERE account=? AND state='reserved'", (account,)).fetchone():
+                    raise ValueError("请先确认尚未完成的新建结果，再重试登录")
+                spent = db.execute("SELECT count(*) FROM rr_credit_operations WHERE account=? AND state='committed'", (account,)).fetchone()[0]
+                guest_used = db.execute("SELECT coalesce(sum(debited),0) FROM rr_guest_credit_claims WHERE account=?", (account,)).fetchone()[0]
+                free_remaining = max(0, wallet["free_grant"] - wallet["legacy_used"] - spent - guest_used)
+                debit += min(free_spent - previous, free_remaining)
+            inherited = max(previous, free_spent)
+            db.execute("INSERT INTO rr_guest_credit_claims VALUES (?,?,?,?) ON CONFLICT(guest_id) DO UPDATE SET free_spent=excluded.free_spent, debited=excluded.debited",
+                       (guest_id, account, inherited, debit))
+            return {"credits": self._snapshot(account), "guestClaim": {"guestId": guest_id, "freeSpent": inherited}}
 
     def operate(self, account, request_id, action):
         db = self.ledger.db
@@ -104,6 +144,14 @@ def install_credit_routes(app, ledger, current_session, settings):
     async def migrate(body: MigrationRequest, request: Request, session=Depends(current_session)):
         require_version(request, session)
         return {"credits": wallets.migrate(session["account"], body.active, settings.free_capacity)}
+
+    @app.post("/api/rent-room/credits/guest-claims")
+    async def inherit_guest(body: GuestClaimRequest, request: Request, session=Depends(current_session)):
+        require_version(request, session)
+        try:
+            return wallets.inherit_guest(session["account"], body.guestId, body.freeSpent)
+        except ValueError as error:
+            raise HTTPException(409, detail={"code": "GUEST_CREDIT_CONFLICT", "message": str(error)}) from error
 
     @app.post("/api/rent-room/credits/operations")
     async def operate(body: CreditOperation, request: Request, session=Depends(current_session)):
